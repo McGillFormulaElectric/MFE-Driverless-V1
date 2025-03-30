@@ -6,25 +6,34 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # find dependencies
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(vision_msgs)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(pcl_ros REQUIRED)
-find_package(pcl_msgs REQUIRED)
-find_package(pcl_conversions REQUIRED)
-find_package(tf2_eigen REQUIRED)
-find_package(pcl REQUIRED)
+find_package(ament_cmake_auto REQUIRED)
+ament_auto_find_build_dependencies()
 
 # eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
 
-ament_target_dependencies(rclcpp tf2_ros tf2 tf2_eigen sensor_msgs vision_msgs geometry_msgs pcl_ros pcl pcl_conversions)
-target_link_libraries(your_target ${PCL_LIBRARIES})
+ament_auto_generate_code()
+
+ament_auto_add_library(lidar_cone_detector
+  src/ground_plane_removal.cpp
+)
+
+ament_target_dependencies(lidar_cone_detector
+  tf2  
+  tf2_ros
+  sensor_msgs 
+  vision_msgs 
+  geometry_msgs 
+  pcl_ros 
+  pcl_conversions
+)
+# target_link_libraries(lidar_cone_detector ${PCL_LIBRARIES})
+
+install(TARGETS
+  lidar_cone_detector
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -38,7 +47,14 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-ament_package()
-
 ament_export_dependencies(eigen3_cmake_module)
 ament_export_dependencies(Eigen3)
+
+ament_auto_package()
+
+# tests
+if(AMENT_ENABLE_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(foo_gtest test/my_test.cpp)
+  target_link_libraries(foo_gtest ${rclcpp_LIBRARIES} ${rmw_connext_cpp_LIBRARIES} ${std_interfaces})
+endif()

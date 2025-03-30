@@ -9,12 +9,25 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- TODO: add dependencies -->
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>pcl_msgs</depend>
+
+  <depend>eigen</depend>
+  <depend>tf2</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_ros</depend>
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
-  <depend>pcl</depend>
-  <depend>eigen</depend>
-  <depend>pcl_msgs</depend>
+
+  <exec_depend>libpcl-common</exec_depend>
+  <exec_depend>libpcl-features</exec_depend>
+  <exec_depend>libpcl-filters</exec_depend>
+  <exec_depend>libpcl-io</exec_depend>
+  <exec_depend>libpcl-segmentation</exec_depend>
+  <exec_depend>libpcl-surface</exec_depend>
+  <exec_depend>libpcl-visualization</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

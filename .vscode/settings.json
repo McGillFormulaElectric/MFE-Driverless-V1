@@ -45,6 +45,7 @@
         "eigen3",
         "Eigen",
         "ints",
+        "libpcl",
         "noqa",
         "pcl",
         "pytest",

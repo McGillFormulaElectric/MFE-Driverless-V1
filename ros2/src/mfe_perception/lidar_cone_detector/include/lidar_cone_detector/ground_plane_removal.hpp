@@ -8,14 +8,16 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
 #include <Eigen/Dense>
-#include "pcl/io/pcd_io.h"
-#include "pcl/point_types.h"
-#include "pcl/filters/voxel_grid.h"
-#include "pcl/filters/statistical_outlier_removal.h"
-#include "pcl/segmentation/sac_segmentation.h"
-#include "pcl/filters/extract_indices.h"
-#include "pcl/visualization/pcl_visualizer.h"
+
 #include "pcl/common/angles.h"
+#include "pcl/point_types.h"
+#include "pcl/filters/extract_indices.h"
+#include "pcl/filters/statistical_outlier_removal.h"
+#include "pcl/filters/voxel_grid.h"
+#include "pcl/io/pcd_io.h"
+#include "pcl/segmentation/sac_segmentation.h"
+#include "pcl/visualization/pcl_visualizer.h"
+
 #include "pcl_conversions/pcl_conversions.h"
 
 namespace lidar_cone_detector {

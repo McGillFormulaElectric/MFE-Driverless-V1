@@ -18,8 +18,8 @@
 #builds
 **/bin/
 **/install/
+**/build/
 
 # folders
 /log
 /CMakeFiles
-/build
