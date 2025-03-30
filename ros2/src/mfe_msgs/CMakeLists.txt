@@ -19,12 +19,14 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
+
 find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # add more interfaces as they are being added
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Cone.msg"
+  "msg/ConeStamped.msg"
   "msg/Track.msg"
   "msg/ConeWithCovariance.msg"
   "msg/TrackWithCovariance.msg"
@@ -32,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ROSStateStamped.msg"
   "msg/IPGState.msg"
   "srv/Reset.srv"
+  DEPENDENCIES geometry_msgs std_msgs
 )
 
 if(BUILD_TESTING)

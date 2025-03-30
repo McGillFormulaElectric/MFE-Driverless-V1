@@ -43,6 +43,7 @@
         "devcontainer",
         "Eigen",
         "ints",
+        "libpcl",
         "noqa",
         "pytest",
         "rclcpp",
