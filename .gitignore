@@ -1,0 +1,25 @@
+# swap files
+**/*.swp
+
+# cached files
+**/__pycache__/
+
+# blender previous save files
+**/*.blend1
+
+#recorded videos
+*.mp4
+#training images
+*.png
+*.jpg
+*.bag
+*unity.lock
+
+#builds
+**/bin/
+**/install/
+
+# folders
+/log
+/CMakeFiles
+/build

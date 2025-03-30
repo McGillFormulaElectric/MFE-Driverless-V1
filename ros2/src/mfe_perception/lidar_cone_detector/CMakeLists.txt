@@ -23,7 +23,8 @@ find_package(pcl REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
 
-ament_target_dependencies(rclcpp tf2_ros tf2 tf2_eigen sensor_msgs vision_msgs geometry_msgs pcl_ros pcl)
+ament_target_dependencies(rclcpp tf2_ros tf2 tf2_eigen sensor_msgs vision_msgs geometry_msgs pcl_ros pcl pcl_conversions)
+target_link_libraries(your_target ${PCL_LIBRARIES})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
