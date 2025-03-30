@@ -43,6 +43,7 @@
         "devcontainer",
         "eigen",
         "eigen3",
+        "Eigen",
         "ints",
         "noqa",
         "pcl",
@@ -68,5 +69,8 @@
         ".vscode",
         ".vscode-insiders",
         ".devcontainer/devcontainer.json"
-    ]
+    ],
+    "files.associations": {
+        "dense": "cpp"
+    }
 }
