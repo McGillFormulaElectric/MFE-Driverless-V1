@@ -41,6 +41,7 @@
         "DCMAKE",
         "deque",
         "devcontainer",
+        "Eigen",
         "ints",
         "noqa",
         "pytest",
@@ -65,5 +66,8 @@
         ".vscode",
         ".vscode-insiders",
         ".devcontainer/devcontainer.json"
-    ]
+    ],
+    "files.associations": {
+        "dense": "cpp"
+    }
 }
