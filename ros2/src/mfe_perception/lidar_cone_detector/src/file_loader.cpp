@@ -7,16 +7,21 @@ namespace lidar_cone_detector {
 FileLoaderNode::FileLoaderNode(const rclcpp::NodeOptions &options)
 : Node("file_loader_node", options)
 {
+    using rclcpp::QoS;
+    using rclcpp::ReliabilityPolicy;
+
     this->initialize_params();
+
+    rclcpp::QoS qos_profile = QoS(rclcpp::KeepLast(10)).reliability(ReliabilityPolicy::BestEffort);
 
     this->point_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "lidar/pcl/raw", 
-        rclcpp::SensorDataQoS()
+        qos_profile
     );
 
-    RCLCPP_INFO(this->get_logger(), "Initialing FileLoader to load point cloud dataset...'");
+    RCLCPP_INFO(this->get_logger(), "Initializing FileLoader to load point cloud dataset...'");
 
-    auto timer_ = this->create_wall_timer(
+    this->timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&FileLoaderNode::stream_test_pointcloud, this)
     );

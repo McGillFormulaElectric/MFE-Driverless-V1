@@ -19,6 +19,8 @@ class FileLoaderNode : public rclcpp::Node {
         FileLoaderNode(const rclcpp::NodeOptions &options);
 
     private:
+        rclcpp::TimerBase::SharedPtr timer_;
+
         bool run_visualization;
         double timeout;
         double time_interval;
