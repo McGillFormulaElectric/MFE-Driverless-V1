@@ -44,6 +44,7 @@
         "eigen",
         "eigen3",
         "Eigen",
+        "gtest",
         "ints",
         "libpcl",
         "noqa",
@@ -72,7 +73,10 @@
         ".devcontainer/devcontainer.json"
     ],
     "files.associations": {
-        "dense": "cpp"
+        "dense": "cpp",
+        "deque": "cpp",
+        "string": "cpp",
+        "vector": "cpp"
     }
     /* TODO: make this pretty if you want
     "todo-tree.highlights.defaultHighlight": {

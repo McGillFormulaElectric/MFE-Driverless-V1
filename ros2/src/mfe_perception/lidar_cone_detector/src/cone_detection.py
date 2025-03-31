@@ -22,12 +22,13 @@ class LiDARConeNode(Node):
 
         # subscribe to the outputs of the ground removal script
         # should be the pointcloud with the ground removed
-        self.create_subscription(PointCloud2, "lidar/pcl/cones", self.callback, 10) # Queue size buffer placeholder
+        self.create_subscription(PointCloud2, "lidar/pcl/objects", self.callback, 10) # Queue size buffer placeholder
 
         # publishers - probably point cloud for debugging, then cones
         #self.cone_publisher = self.create_publisher(ConeDetectionStamped, "lidar/cone_detection", 1)
+        # TODO: sample point cloud for vis/debugging purposes
         #self.point_cloud_publisher = self.create_publisher(PointCloud2, "lidar/cone_points", 10)
-        self.cone_publusher = self.create_publisher(Cone, "lidar/pcl/coords", 10) # buffer placeholder
+        self.cone_publusher = self.create_publisher(Cone, "lidar/pcl/cones", 10) # buffer placeholder
 
     
     def init_params(self):
@@ -122,7 +123,7 @@ class LiDARConeNode(Node):
         point_norms = point_norms[mask]
         points = points[mask]
 
-        # FILTER: run cluster detection
+        # run cluster detection
         objects, object_centres = self.find_clusters(points)
 
         # FILTER: removes the non-cone clusters

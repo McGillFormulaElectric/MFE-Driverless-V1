@@ -31,7 +31,7 @@ namespace lidar_cone_detector {
     private:
         rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr point_cloud_sub;
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr point_cloud_ground_pub;
-        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr point_cloud_cones_pub;
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr point_cloud_objs_pub;
 
         void remove_ground_plane_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
         void visualize(const pcl::PointCloud<pcl::PointXYZ>::Ptr &pcd, const Eigen::Vector3f &vehicle_position);
