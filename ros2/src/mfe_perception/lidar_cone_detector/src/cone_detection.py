@@ -22,12 +22,11 @@ class LiDARConeNode(Node):
 
         # subscribe to the outputs of the ground removal script
         # should be the pointcloud with the ground removed
-        self.create_subscription(PointCloud2, "lidar/pcl/objects", self.callback, 10) # Queue size buffer placeholder
+        self.create_subscription(PointCloud2, "lidar/pcl/objects", self.callback, 10)
 
         # publishers - probably point cloud for debugging, then cones
-        #self.cone_publisher = self.create_publisher(ConeDetectionStamped, "lidar/cone_detection", 1)
         # TODO: sample point cloud for vis/debugging purposes
-        #self.point_cloud_publisher = self.create_publisher(PointCloud2, "lidar/cone_points", 10)
+        self.point_cloud_publisher = self.create_publisher(PointCloud2, "lidar/pcl/cone_cloud", 10)
         self.cone_publusher = self.create_publisher(Cone, "lidar/pcl/cones", 10) # buffer placeholder
 
     
@@ -98,13 +97,14 @@ class LiDARConeNode(Node):
         return cone_clusters, cone_locations
     
 
-    def callback(self, msg: PointCloud2):
+    def callback(self, msg):
         """
         Called when point cloud data is received.
         Runs clustering, finds the clusters that are cones, and returns the centre location
         """
         
         # Convert PointCloud2 to a numpy arr
+        # BUG: might get error here, not sure of ros2_numpy has this
         pc_array = rnp.pointcloud2_to_array(msg)
         
         # Extract (x, y, z) coordinates
@@ -139,8 +139,14 @@ class LiDARConeNode(Node):
         detected_cones: list = [self.create_cone_msg(cone[0], cone[1], cone[2]) for cone in cone_locations]
         detection_msg = Cone(header=msg.header, cones=detected_cones)
 
-        # publish message
+        # publish locs
         self.cone_publusher.publish(detection_msg)
+
+        # publish pc w/ cones only
+        cone_clusters = np.concatenate(cone_clusters)
+        # BUG: might get error here, not sure of ros2_numpy has this
+        new_point_cloud_msg = rnp.array_to_pointcloud2(msg, cone_clusters, points)
+        self.point_cloud_publisher.publish(new_point_cloud_msg)
 
         return
     
