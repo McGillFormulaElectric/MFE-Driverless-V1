@@ -142,35 +142,4 @@ void GroundPlaneRemovalNode::visualize(const pcl::PointCloud<pcl::PointXYZ>::Ptr
         viewer.spinOnce(100);
     }
 }   // void visualize
-
-/*
-    Loads a LiDAR point cloud from a binary file using the KITTI format.
-
-    (Deprecation warning) Currently not in use.
-
-    @param bin_file pointer to the binary file
-    @return point cloud as a std::vector of Eigen::Vector3f
-*/
-std::vector<Eigen::Vector3f> load_bin_pointcloud(const std::string &bin_file)
-{
-    std::ifstream file(bin_file, std::ios::binary);
-    if (!file.is_open())
-    {
-        std::cerr << "Error opening file: " << bin_file << std::endl;
-        return {};
-    }
-
-    std::vector<Eigen::Vector3f> points;
-    while (file)
-    {
-        Eigen::Vector4f point;
-        file.read(reinterpret_cast<char *>(&point), sizeof(Eigen::Vector4f));
-        if (file)
-        {
-            points.push_back(point.head<3>());
-        }
-    }
-    return points;
-}
-
 }

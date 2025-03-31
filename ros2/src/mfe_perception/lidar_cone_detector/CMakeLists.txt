@@ -17,6 +17,7 @@ ament_auto_generate_code()
 
 ament_auto_add_library(lidar_cone_detector
   src/ground_plane_removal.cpp
+  src/file_loader.cpp
 )
 
 ament_target_dependencies(lidar_cone_detector
