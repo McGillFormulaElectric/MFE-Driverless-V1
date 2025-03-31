@@ -4,7 +4,14 @@ import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
+from ament_index_python.packages import get_package_share_directory
+
 def generate_launch_description():
+    
+    dirname = os.path.join(
+        get_package_share_directory('lidar_cone_detector'),
+        'dataset/points'
+    )
 
     file_loader_node = Node(
         package='lidar_cone_detector',
@@ -15,10 +22,10 @@ def generate_launch_description():
             {"run_visualization", False},
             {"timeout", 100},
             {"time_interval", 100},
-            {'dirname': '/dataset/points'} # include the path to the chalmers dataset
+            {'dirname': dirname } # include the path to the chalmers dataset
         ]
     )
     
     return LaunchDescription([
-        file_loader_node,
+        file_loader_node
     ])
