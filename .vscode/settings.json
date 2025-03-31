@@ -74,4 +74,50 @@
     "files.associations": {
         "dense": "cpp"
     }
+    /* TODO: make this pretty if you want
+    "todo-tree.highlights.defaultHighlight": {
+        "icon": "alert",
+        "type": "text",
+        "foreground": "black",
+        "background": "none",
+        "opacity": 50,
+        "iconColour": "blue"
+    },
+    "todo-tree.highlights.customHighlight": {
+        "TODO": {
+            "type": "text",
+            "foreground": "white",
+            "iconColour": "blue",
+            "background": "#dd00d6",
+            "icon": "tasklist"
+        },
+        "FIXME": {
+            "type": "text",
+            "foreground": "white",
+            "iconColour": "yellow",
+            "background": "#dfdd00"
+        },
+        "COMPLETE": {
+            "type": "text",
+            "icon": "verified",
+            "foreground": "white",
+            "iconColour": "green",
+            "background": "green"
+        },
+        "BUG": {
+            "type": "text",
+            "icon": "bug",
+            "foreground": "white",
+            "iconColour": "red",
+            "background": "#dd0000"
+        }
+    },
+    "todo-tree.general.tags": [
+        "TODO",
+        "FIXME",
+        "COMPLETE",
+        "BUG",
+        "function"
+    ],
+    */
 }

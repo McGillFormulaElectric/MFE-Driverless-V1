@@ -17,8 +17,8 @@ GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &option
     point_cloud_ground_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "lidar/pcl/ground", rclcpp::SensorDataQoS()
     );
-    point_cloud_cones_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "lidar/pcl/cones", rclcpp::SensorDataQoS()
+    point_cloud_objs_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "lidar/pcl/objects", rclcpp::SensorDataQoS()
     );
 
     // params defined in header file
@@ -33,6 +33,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     // TODO: filter remove all points beyond a certain distance from the origin
 
     // Voxel downsampling
+    // TODO: passthrough instead of voxel downsample
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(pcd);
     sor.setLeafSize(0.1f, 0.1f, 0.1f); // sets box size in which will only contain 1 point
@@ -99,7 +100,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     cones_output.header = msg->header;
     ground_output.header = msg->header;
 
-    this->point_cloud_cones_pub->publish(cones_output);
+    this->point_cloud_objs_pub->publish(cones_output);
     point_cloud_ground_pub->publish(ground_output);
 
     // Perform visualization depending on if set in ROS params
