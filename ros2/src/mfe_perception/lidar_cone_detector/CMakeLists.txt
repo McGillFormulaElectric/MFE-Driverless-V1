@@ -15,30 +15,25 @@ find_package(Eigen3)
 
 ament_auto_generate_code()
 
-ament_auto_add_library(lidar_cone_detector
+ament_auto_add_executable(ground_plane_removal
   src/ground_plane_removal.cpp
+)
+
+ament_auto_add_executable(file_loader
   src/file_loader.cpp
 )
 
-ament_target_dependencies(lidar_cone_detector
-  tf2  
-  tf2_ros
-  sensor_msgs 
-  vision_msgs 
-  geometry_msgs 
-  pcl_ros 
-  pcl_conversions
-)
-# target_link_libraries(lidar_cone_detector ${PCL_LIBRARIES})
-
-install(TARGETS
-  lidar_cone_detector
-  DESTINATION lib/${PROJECT_NAME}
-)
+target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(TARGETS
+  ground_plane_removal
+  file_loader
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
