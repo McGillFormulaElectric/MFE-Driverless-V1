@@ -86,6 +86,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FileLoaderNode::load_bin_pointcloud(const st
     if (!file.is_open())
     {
         std::cerr << "Error opening file: " << bin_file << std::endl;
+        RCLCPP_ERROR(this->get_logger(), "Failed to load point cloud from file");
         return {};
     }
 
@@ -102,6 +103,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FileLoaderNode::load_bin_pointcloud(const st
             pcl_point.y = eigen_point[1];
             pcl_point.z = eigen_point[2];
             cloud->push_back(pcl_point);
+            RCLCPP_INFO(this->get_logger(), "Loaded point: %6.2f %6.2f %6.2f", pcl_point.x, pcl_point.y, pcl_point.z);
         }
     }
     return cloud;
