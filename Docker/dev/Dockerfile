@@ -48,5 +48,8 @@ WORKDIR /ros2_ws
 # Source the ROS 2 setup file
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/ros/.bashrc
 
+RUN pip3 install ros2-numpy
+RUN pip3 install -U scikit-learn
+
 # Default command (starts a bash shell)
 CMD ["bash"]
