@@ -45,6 +45,4 @@ namespace lidar_cone_detector {
         pcl::SACSegmentation<pcl::PointXYZ> seg;
         pcl::ExtractIndices<pcl::PointXYZ> extract;
     }; // ← semicolon here is mandatory
-
-    std::vector<Eigen::Vector3f> load_bin_pointcloud(const std::string &bin_file);
 }

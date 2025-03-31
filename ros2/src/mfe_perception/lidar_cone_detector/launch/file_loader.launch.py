@@ -4,21 +4,21 @@ import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
-import yaml
-
 def generate_launch_description():
-    
-    ground_plane_removal_node = Node(
+
+    file_loader_node = Node(
         package='lidar_cone_detector',
-        executable='ground_plane_removal',
+        executable='file_loader',
+        name='file_loader_node',
         output='screen',
-        emulate_tty=True,
         parameters=[
-            {"run_visualization": False},
+            {"run_visualization", False},
             {"timeout", 100},
             {"time_interval", 100},
-            {"dirname", "/dataset/points"}
+            {'dirname': '/dataset/points'} # include the path to the chalmers dataset
         ]
     )
     
-    return LaunchDescription([ground_plane_removal_node])
+    return LaunchDescription([
+        file_loader_node,
+    ])

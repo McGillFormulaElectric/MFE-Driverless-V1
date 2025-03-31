@@ -144,3 +144,11 @@ void GroundPlaneRemovalNode::visualize(const pcl::PointCloud<pcl::PointXYZ>::Ptr
     }
 }   // void visualize
 }
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<lidar_cone_detector::GroundPlaneRemovalNode>(rclcpp::NodeOptions()));
+    rclcpp::shutdown();
+    return 0;
+}
