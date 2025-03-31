@@ -14,7 +14,7 @@ def generate_launch_description():
     # Loads argument "load_file" to determine whether to load with file
     load_file_arg = DeclareLaunchArgument(
         'load_file',
-        default_value=False,
+        default_value='False',
         description='Whether to launch the file loader node'
     )
 

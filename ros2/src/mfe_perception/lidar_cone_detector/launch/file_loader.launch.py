@@ -19,10 +19,10 @@ def generate_launch_description():
         name='file_loader_node',
         output='screen',
         parameters=[
-            {"run_visualization", False},
-            {"timeout", 100},
-            {"time_interval", 100},
-            {'dirname': dirname } # include the path to the chalmers dataset
+            {"run_visualization": False},
+            {"timeout": 100.0},
+            {"time_interval": 100.0},
+            {'dirname': dirname }
         ]
     )
     

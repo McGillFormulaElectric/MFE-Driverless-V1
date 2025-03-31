@@ -33,8 +33,8 @@ FileLoaderNode::FileLoaderNode(const rclcpp::NodeOptions &options)
 void FileLoaderNode::initialize_params()
 {
     this->declare_parameter("run_visualization", false);
-    this->declare_parameter("timeout", 100);
-    this->declare_parameter("time_interval", 100);
+    this->declare_parameter("timeout", 100.0);
+    this->declare_parameter("time_interval", 100.00);
     this->declare_parameter("dirname", "/");
 
     this->run_visualization = this->get_parameter("run_visualization").as_bool();
