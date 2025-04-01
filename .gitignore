@@ -19,6 +19,7 @@
 **/bin/
 **/install/
 **/build/
+**/log/
 
 # folders
 /log

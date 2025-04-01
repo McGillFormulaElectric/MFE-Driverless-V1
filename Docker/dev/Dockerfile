@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-pcl-msgs \
     ros-humble-pcl-conversions \
     ros-humble-eigen3-cmake-module \
+    ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 #TODO: add sbg driver (compile from source)
