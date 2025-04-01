@@ -9,16 +9,21 @@ GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &option
     this->declare_parameter("run_visualization", false);
     this->get_parameter("run_visualization", this->run_visualization);
 
+    rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
+
+
     // Subscribes to the general point cloud and publishes ground data and the rest in two separate streams
     point_cloud_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "lidar/pcl/raw", rclcpp::SensorDataQoS(),
+        "pcl/raw", rclcpp::SensorDataQoS(),
         std::bind(&GroundPlaneRemovalNode::remove_ground_plane_callback, this, std::placeholders::_1)
     );
     point_cloud_ground_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "lidar/pcl/ground", rclcpp::SensorDataQoS()
+        "pcl/ground",
+        qos_profile
     );
     point_cloud_objs_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "lidar/pcl/objects", rclcpp::SensorDataQoS()
+        "pcl/objects",
+        qos_profile
     );
 
     // params defined in header file

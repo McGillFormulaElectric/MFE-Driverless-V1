@@ -14,23 +14,22 @@ def generate_launch_description():
     # Loads argument "load_file" to determine whether to load with file
     load_file_arg = DeclareLaunchArgument(
         'load_file',
-        default_value='False',
+        default_value='True',
         description='Whether to launch the file loader node'
     )
 
     load_file_value = LaunchConfiguration('load_file')
 
-    if (load_file_value):
-        # Launch the File Loader by using file_load.launch.py
-        file_loader_node_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(
-                    get_package_share_directory('lidar_cone_detector'),
-                    'launch',
-                    'file_loader.launch.py'
-                )
+    file_loader_node_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('lidar_cone_detector'),
+                'launch',
+                'file_loader.launch.py'
             )
-        )
+        ),
+        condition=IfCondition(load_file_value)  # Check the value at runtime
+    )
     
     # Launch RANSAC Node
     ground_plane_removal_node = Node(

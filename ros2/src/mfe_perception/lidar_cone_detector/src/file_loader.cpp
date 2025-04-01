@@ -12,7 +12,9 @@ FileLoaderNode::FileLoaderNode(const rclcpp::NodeOptions &options)
 
     this->initialize_params();
 
-    rclcpp::QoS qos_profile = QoS(rclcpp::KeepLast(10)).reliability(ReliabilityPolicy::BestEffort);
+    //rclcpp::QoS qos_profile = QoS(rclcpp::KeepLast(10)).reliability(ReliabilityPolicy::BestEffort);
+    rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
+
 
     this->point_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "lidar/pcl/raw", 
