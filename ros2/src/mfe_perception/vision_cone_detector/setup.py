@@ -4,6 +4,7 @@ from setuptools import setup
 
 package_name = "vision_cone_detector"
 
+
 setup(
     name=package_name,
     version='0.1.0',
@@ -17,6 +18,7 @@ setup(
         # Include all launch files.
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'resource'), ['resource/video.mp4']),
+        (os.path.join('share', package_name, 'resource'), ['resource/best.pt']),
     ],
     # This is important as well
     install_requires=['setuptools'],
@@ -39,7 +41,7 @@ setup(
     entry_points={
         'console_scripts': [
             'file_loader = vision_cone_detector.file_loader:main',
-            'cone_detector = vision_cone_detector.cone_detector:main'
+            'cone_detection = vision_cone_detector.cone_detection:main'
         ],
     },
 )

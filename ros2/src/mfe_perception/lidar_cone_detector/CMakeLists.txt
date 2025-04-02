@@ -28,6 +28,7 @@ target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
 install(DIRECTORY
   launch
+  dataset
   DESTINATION share/${PROJECT_NAME}
 )
 

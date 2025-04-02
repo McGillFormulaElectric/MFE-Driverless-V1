@@ -7,6 +7,9 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
+# needs pip install numpy==1.22.0 setuptools==59.5.0
+
+
 class FileLoaderNode(Node):
     def __init__(self):
         super().__init__('file_loader_node')
@@ -52,4 +55,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
