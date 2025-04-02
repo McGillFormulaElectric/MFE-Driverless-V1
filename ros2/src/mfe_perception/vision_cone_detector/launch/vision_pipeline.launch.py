@@ -35,7 +35,7 @@ def generate_launch_description():
     cone_detection_node = Node(
         package='vision_cone_detector',
         namespace='camera',
-        executable='cone_detection.py',
+        executable='cone_detection',
         output='screen',
         emulate_tty=True,
         parameters=[

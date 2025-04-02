@@ -10,12 +10,12 @@ def generate_launch_description():
     
     dirname = os.path.join(
         get_package_share_directory('vision_cone_detector'),
-        'dataset/video'
+        'resource/video.mp4'
     )
 
     file_loader_node = Node(
         package='vision_cone_detector',
-        executable='file_loader.py',
+        executable='file_loader',
         name='file_loader_node',
         output='screen',
         parameters=[

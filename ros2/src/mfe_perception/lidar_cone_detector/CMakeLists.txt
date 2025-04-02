@@ -7,6 +7,7 @@ endif()
 
 # find dependencies
 find_package(ament_cmake_auto REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 ament_auto_find_build_dependencies()
 
 # eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
