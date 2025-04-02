@@ -7,9 +7,6 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-# TODO: change this to yours
-PATH_TO_REPO = "/home/five/Documents/MFE/MFE25"
-
 class FileLoaderNode(Node):
     def __init__(self):
         super().__init__('file_loader_node')
@@ -20,8 +17,12 @@ class FileLoaderNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,     # reliable
         )
 
+        self.declare_parameter("video_path", "")
+        
+        self.video_path = self.get_parameter("video_path")
+
         self.image_publishing = self.create_publisher(Image, "camera/image/raw", qos_profile)
-        self.cap = cv2.VideoCapture(PATH_TO_REPO + "/MFE-Driverless-V1/ros2/src/mfe_perception/vision_cone_detector/resource/video1.mp4")
+        self.cap = cv2.VideoCapture(self.video_path)
         self.bridge = CvBridge()
 
         if self.cap.get(cv2.CAP_PROP_FPS) != 0 : fps = self.cap.get(cv2.CAP_PROP_FPS)

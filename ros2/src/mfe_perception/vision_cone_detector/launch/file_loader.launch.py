@@ -8,7 +8,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     
-    dirname = os.path.join(
+    video_path = os.path.join(
         get_package_share_directory('vision_cone_detector'),
         'resource/video.mp4'
     )
@@ -22,7 +22,7 @@ def generate_launch_description():
             {"run_visualization": False},
             {"timeout": 100.0},
             {"time_interval": 100.0},
-            {'dirname': dirname }
+            {'video_path': video_path }
         ]
     )
     

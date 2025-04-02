@@ -43,7 +43,6 @@ def generate_launch_description():
         ]
     )
 
-
     return LaunchDescription([
         load_file_arg,
         file_loader_node_launch
