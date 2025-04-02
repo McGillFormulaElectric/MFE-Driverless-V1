@@ -19,7 +19,7 @@ class FileLoaderNode(Node):
 
         self.declare_parameter("video_path", "")
         
-        self.video_path = self.get_parameter("video_path")
+        self.video_path = self.get_parameter("video_path").value
 
         self.image_publishing = self.create_publisher(Image, "camera/image/raw", qos_profile)
         self.cap = cv2.VideoCapture(self.video_path)

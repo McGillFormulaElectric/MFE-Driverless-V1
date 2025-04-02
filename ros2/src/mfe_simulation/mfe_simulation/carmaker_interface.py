@@ -2,6 +2,7 @@ import socket
 import logging
 import numpy as np
 
+from rclpy.node import Node
 
 class Quantity():
     FLOAT = 1.0
@@ -17,7 +18,6 @@ class Quantity():
             self.read_msg = self.name + "\r"
         else:
             self.read_msg = "expr {$Qu(" + self.name + ")}\r"
-
 
 class CarMaker():
     status_dic = {-1: "Preprocessing", -2: "Idle", -3: "Postprocessing", -4: "Model Check",
@@ -74,7 +74,6 @@ class CarMaker():
         # TODO Handle error
 
     def read(self):
-
         # By IPG recommendation, read one quantity at a time.
         for quantity in self.quantities:
             self.socket.send(quantity.read_msg.encode())
@@ -91,7 +90,7 @@ class CarMaker():
             elif type(quantity.type) == type(Quantity.INT):
                 quantity.data = int(rx_list[0][1:])
             else:
-                self.logger.error("Unknwon type")
+                self.logger.error("Unknown type")
 
     def DVA_write(self, quantity, value, duration=-1, mode="Abs"):
         """ set the value of a variable using DVAWrite <Name> <Value> <Duration> <Mode> ...
@@ -104,7 +103,7 @@ class CarMaker():
         duration : Float
             Duration in milliseconds
         mode : string
-            One of Abs, Off, Fac, AbsRamp, ...; default Abs(olute Value)
+            One of Abs, Off, Fac, AbsRamp, ...; default Absolute Value
         """
 
         msg = "DVAWrite " + quantity.name + " " + \
@@ -128,8 +127,8 @@ class CarMaker():
         """
         self.socket.send(msg.encode())
         return self.socket.recv(200)
-    
-class CameraRSDR: #Video data stream
+
+class VDS:
     def __init__(self, ip="localhost", port=2210, log_level=logging.INFO):
         self.logger = logging.getLogger("pycarmaker")
         self.logger.setLevel(log_level)
@@ -198,23 +197,9 @@ class CameraRSDR: #Video data stream
 
         return img
     
-class CameraRSDR: #Video data stream
+class CameraRSDR(VDS): #Video data stream
     def __init__(self, ip="localhost", port=2210, log_level=logging.INFO):
-        self.logger = logging.getLogger("pycarmaker")
-        self.logger.setLevel(log_level)
-        self.ip = ip
-        self.port = port
-        self.socket = None
-        self.cameras = []
-        self.connected = False
-
-    def connect(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((self.ip, self.port))
-        data = self.socket.recv(64)
-        if(data.decode().find("*IPGMovie") != -1):
-            self.logger.info("IPG Movie is Connected...")
-            self.connected = True
+        super()._init__(ip, port, log_level)
 
     def read(self):
         """
@@ -267,24 +252,9 @@ class CameraRSDR: #Video data stream
 
         return img
     
-    
-class LiDaRRSDR: # Point cloud data stream
+class LidarRSDR(VDS): # Point cloud data stream
     def __init__(self, ip="localhost", port=2210, log_level=logging.INFO):
-        self.logger = logging.getLogger("pycarmaker")
-        self.logger.setLevel(log_level)
-        self.ip = ip
-        self.port = port
-        self.socket = None
-        self.lidar = []
-        self.connected = False
-
-    def connect(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((self.ip, self.port))
-        data = self.socket.recv(64)
-        if(data.decode().find("*IPGMovie") != -1):
-            self.logger.info("IPG Movie is Connected...")
-            self.connected = True
+        super().__init__(ip, port, log_level)
 
     def read(self):
         """
