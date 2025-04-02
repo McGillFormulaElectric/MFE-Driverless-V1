@@ -7,6 +7,9 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
+# needs pip install numpy==1.22.0 setuptools==59.5.0
+
+
 class FileLoaderNode(Node):
     def __init__(self):
         super().__init__('file_loader_node')
@@ -19,7 +22,7 @@ class FileLoaderNode(Node):
 
         self.declare_parameter("video_path", "")
         
-        self.video_path = self.get_parameter("video_path")
+        self.video_path = self.get_parameter("video_path").value
 
         self.image_publishing = self.create_publisher(Image, "camera/image/raw", qos_profile)
         self.cap = cv2.VideoCapture(self.video_path)
@@ -52,4 +55,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

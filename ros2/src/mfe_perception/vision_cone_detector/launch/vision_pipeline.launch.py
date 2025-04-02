@@ -30,21 +30,28 @@ def generate_launch_description():
         ),
         condition=IfCondition(load_file_value)  # Check the value at runtime
     )
+
+    model_path = os.path.join(
+        get_package_share_directory('vision_cone_detector'),
+        'resource/best.pt'
+    )
     
     # Launch cone detection node
     cone_detection_node = Node(
         package='vision_cone_detector',
         namespace='camera',
         executable='cone_detection',
+        name='camera_cone_node',
         output='screen',
         emulate_tty=True,
         parameters=[
-            {"run_visualization": False}
+            {"run_visualization": False},
+            {'model_path': model_path }
         ]
     )
 
     return LaunchDescription([
         load_file_arg,
-        file_loader_node_launch
-        #cone_detection_node 
+        file_loader_node_launch,
+        cone_detection_node 
     ])
