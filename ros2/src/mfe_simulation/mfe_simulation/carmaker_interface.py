@@ -267,74 +267,6 @@ class CameraRSDR: #Video data stream
 
         return img
     
-    class CameraRSDR: #Video data stream
-    def __init__(self, ip="localhost", port=2210, log_level=logging.INFO):
-        self.logger = logging.getLogger("pycarmaker")
-        self.logger.setLevel(log_level)
-        self.ip = ip
-        self.port = port
-        self.socket = None
-        self.cameras = []
-        self.connected = False
-
-    def connect(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((self.ip, self.port))
-        data = self.socket.recv(64)
-        if(data.decode().find("*IPGMovie") != -1):
-            self.logger.info("IPG Movie is Connected...")
-            self.connected = True
-
-    def read(self):
-        """
-        Read the streamed images.
-
-        Returns
-        -------
-        img : numpy array
-            a numpy array representing the image
-
-        """
-        if not self.connected:
-            self.logger.error("Connect first by calling .connect()")
-            return
-        # Get Image header and fill data
-        data = self.socket.recv(64)
-        splitdata = data.decode().split(" ")
-        imgtype = splitdata[2]
-        img_size = splitdata[4]
-        data_len = int(splitdata[5])
-        imag_h = int(img_size.split('x')[1])
-        image_w = int(img_size.split('x')[0])
-        lastdata = b''
-        size = 0
-        while(size != data_len):
-            data = self.socket.recv(1024)
-            try:
-                strdata = data.decode()
-                if strdata[0] == '*' and strdata[1] == 'V':
-                    splitdata = data.decode().split(" ")
-                    imgtype = splitdata[2]
-                    img_size = splitdata[4]
-                    data_len = int(splitdata[5])
-                    imag_h = int(img_size.split('x')[1])
-                    image_w = int(img_size.split('x')[0])
-                    lastdata = b''
-                    size = 0
-                    continue
-            except:
-                pass
-            lastdata += data
-            size = np.frombuffer(lastdata, dtype=np.uint8).size
-        datalist = np.frombuffer(lastdata, dtype=np.uint8)
-        if(imgtype == "rgb"):
-            img = datalist.reshape((imag_h, image_w, 3))
-        elif(imgtype == "grey"):
-            img = datalist.reshape((imag_h, image_w))
-        else:
-            self.logger.error("rgb and gray are supported for now")
-
-        return img
     
 class LiDaRRSDR: # Point cloud data stream
     def __init__(self, ip="localhost", port=2210, log_level=logging.INFO):
@@ -343,7 +275,7 @@ class LiDaRRSDR: # Point cloud data stream
         self.ip = ip
         self.port = port
         self.socket = None
-        self.cameras = []
+        self.lidar = []
         self.connected = False
 
     def connect(self):
@@ -356,52 +288,49 @@ class LiDaRRSDR: # Point cloud data stream
 
     def read(self):
         """
-        Read the streamed images.
+        Read the streamed 3D point cloud data from CarMaker.
 
         Returns
         -------
-        img : numpy array
-            a numpy array representing the image
-
+        points : numpy.ndarray
+        Nx3 array of XYZ coordinates (float32)
         """
         if not self.connected:
             self.logger.error("Connect first by calling .connect()")
-            return
-        # Get Image header and fill data
-        data = self.socket.recv(64)
-        splitdata = data.decode().split(" ")
-        imgtype = splitdata[2]
-        img_size = splitdata[4]
-        data_len = int(splitdata[5])
-        imag_h = int(img_size.split('x')[1])
-        image_w = int(img_size.split('x')[0])
-        lastdata = b''
-        size = 0
-        while(size != data_len):
-            data = self.socket.recv(1024)
-            try:
-                strdata = data.decode()
-                if strdata[0] == '*' and strdata[1] == 'V':
-                    splitdata = data.decode().split(" ")
-                    imgtype = splitdata[2]
-                    img_size = splitdata[4]
-                    data_len = int(splitdata[5])
-                    imag_h = int(img_size.split('x')[1])
-                    image_w = int(img_size.split('x')[0])
-                    lastdata = b''
-                    size = 0
-                    continue
-            except:
-                pass
-            lastdata += data
-            size = np.frombuffer(lastdata, dtype=np.uint8).size
-        datalist = np.frombuffer(lastdata, dtype=np.uint8)
-        if(imgtype == "rgb"):
-            img = datalist.reshape((imag_h, image_w, 3))
-        elif(imgtype == "grey"):
-            img = datalist.reshape((imag_h, image_w))
-        else:
-            self.logger.error("rgb and gray are supported for now")
+            return None
 
-        return img
-    
+        try:
+            # Read the 64-byte header from the LiDAR stream
+            header = self.socket.recv(64)
+            splitdata = header.decode().split(" ")
+
+            if len(splitdata) < 6:
+                    self.logger.error(f"Unexpected header format: {header}")
+                    return None
+
+            datatype = splitdata[2]  # Should be something like "xyz"
+            data_len = int(splitdata[5])  # Total number of bytes expected
+
+            if datatype != "xyz":
+                self.logger.error(f"Unsupported LiDAR datatype: {datatype}")
+                return None
+
+            # Read the full point cloud binary payload
+            raw_data = b''
+            while len(raw_data) < data_len:
+                chunk = self.socket.recv(min(4096, data_len - len(raw_data)))
+                raw_data += chunk
+
+            # Convert binary data to float32 and reshape to Nx3 points
+            num_floats = data_len // 4  # float32 = 4 bytes
+            if num_floats % 3 != 0:
+                self.logger.error("Received data length is not divisible by 3 floats (x, y, z)")
+                return None
+
+            points = np.frombuffer(raw_data, dtype=np.float32).reshape((-1, 3))
+            return points
+
+        except Exception as e:
+            self.logger.error(f"Error while reading LiDAR data: {e}")
+        
+        return None
