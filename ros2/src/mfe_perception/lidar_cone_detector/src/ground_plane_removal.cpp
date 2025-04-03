@@ -37,14 +37,25 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
 
     // TODO: filter remove all points beyond a certain distance from the origin
 
-    // Voxel downsampling
-    // TODO: passthrough instead of voxel downsample
+    // Voxel downsampling    
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(pcd);
     sor.setLeafSize(0.1f, 0.1f, 0.1f); // sets box size in which will only contain 1 point
     // can change how many points are in each box with setMinimumPointsNumberPerVoxel
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*downsampled_pcd);
+
+    // Passthrough filter for downsampling? doesn't work great
+    /*
+    pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PassThrough<pcl::PointXYZ> pass;
+    pass.setInputCloud (pcd);
+    pass.setFilterFieldName ("z");
+    pass.setFilterLimits (-1.0, 0.2);
+    pass.setNegative (true);
+    pass.filter (*downsampled_pcd);
+    */
+    
 
     // Remove statistical outliers
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;
