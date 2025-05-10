@@ -4,6 +4,7 @@ FROM althack/ros2:humble-cuda-dev
 
 # Set up the environment
 ENV ROS_DISTRO=humble
+ENV ROS_INSTALL=/opt/ros/$ROS_DISTRO/setup.bash
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 

@@ -55,7 +55,6 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pass.setNegative (true);
     pass.filter (*downsampled_pcd);
     */
-    
 
     // Remove statistical outliers
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;

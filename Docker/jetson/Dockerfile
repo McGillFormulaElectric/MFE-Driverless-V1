@@ -2,6 +2,7 @@ FROM nvcr.io/nvidia/isaac/ros:x86_64-ros2_humble_79152baed139e9f4258734f3056c263
 
 # Set up the environment
 ENV ROS_DISTRO=humble
+ENV ROS_INSTALL=/opt/ros/$ROS_DISTRO/setup.bash
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
