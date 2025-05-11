@@ -1,0 +1,6 @@
+services:
+  fs-driverless-sim:
+    build: .
+    ports:
+      - "8765:8765"
+    network_mode: host
