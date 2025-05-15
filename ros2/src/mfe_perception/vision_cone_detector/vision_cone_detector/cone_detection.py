@@ -14,12 +14,9 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
 
-
 # installs numpy-2.2.4 setuptools-78.1.0
 # pip install --upgrade "numpy<2"
 # pip install numpy==2.1.1
-
-
 
 class CameraConeNode(Node):
 
