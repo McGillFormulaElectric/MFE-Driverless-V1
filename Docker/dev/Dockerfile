@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-pcl-msgs \
     ros-humble-pcl-conversions \
     ros-humble-eigen3-cmake-module \
+    ros-humble-robot-localization \
     ros-humble-cv-bridge \
     ros-humble-foxglove-bridge \
     && rm -rf /var/lib/apt/lists/*

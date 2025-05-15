@@ -1,0 +1,18 @@
+navsat_transform_node:
+  ros__parameters:
+    use_sim_time: true
+    magnetic_declination_radians: 0  # 0.7 For Montreal
+    # yaw_offset: 3.14159265  # IMU reads 0 facing magnetic north, not east
+    # yaw_offset: 0.0
+    yaw_offset: 1  # IMU reads 0 facing magnetic north, not east
+    debug: true
+    zero_altitude: true
+    publish_filtered_gps: false
+    use_odometry_yaw: true
+    wait_for_datum: false
+    use_local_cartesian: false
+    frequency: 5.1
+    delay: 0.0
+    transform_timeout: 0.01
+    broadcast_cartesian_transform: false
+    broadcast_cartesian_transform_as_parent_frame: false
