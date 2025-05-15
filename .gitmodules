@@ -1,3 +1,6 @@
 [submodule "ros2/src/fs_msgs"]
 	path = ros2/src/fs_msgs
 	url = https://github.com/FS-Driverless/fs_msgs.git
+[submodule "Formula-Student-Driverless-Simulator"]
+	path = Formula-Student-Driverless-Simulator
+	url = git@github.com:McGillFormulaElectric/Formula-Student-Driverless-Simulator.git
