@@ -1,29 +1,43 @@
 import os
 from glob import glob
+from setuptools import setup
 
-from setuptools import find_packages, setup
-
-package_name = 'mfe_state_estimation'
+package_name = "mfe_state_estimation"
 
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    # Packages to export
+    packages=[package_name],
+    # Files we want to install, specifically launch files
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
-        (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        # Include our package.xml file
+        (os.path.join('share', package_name), ['package.xml']),
+        # Include all launch files.
+        (os.path.join('share', package_name, 'launch'), glob('launch/*')),
+        # Include all config files.
+        (os.path.join('share', package_name, 'config'), glob(os.path.join('config/', '*.yaml'))),
     ],
-    install_requires=['setuptools'],
+    # This is important as well
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
-    maintainer='albert',
+    author='MFE',
+    author_email='albert@todo.todo',
+    maintainer='MFE',
     maintainer_email='albert@todo.todo',
-    description='TODO: Package description',
-    license='TODO: License declaration',
-    tests_require=['pytest'],
+    keywords=[],
+    classifiers=[
+        'Intended Audience :: todo',
+        'License :: GPLv3',
+        'Programming Language :: Python',
+        'Topic :: todo',
+    ],
+    description='todo',
+    license='GPLv3',
+    # Like the CMakeLists add_executable macro, you can add your python
+    # scripts here.
     entry_points={
         'console_scripts': [],
-    }
+    },
 )

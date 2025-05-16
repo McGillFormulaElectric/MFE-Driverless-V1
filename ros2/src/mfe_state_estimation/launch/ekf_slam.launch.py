@@ -11,33 +11,45 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     state_estimation_dir = get_package_share_directory("mfe_state_estimation")
-    use_sim_time = LaunchConfiguration("use_sim_time")
     
-    localization_params_file = os.path.join(state_estimation_dir, "config", "ekf.yaml")
-    localization_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="odom_filter_node",
-        output="both",
-        parameters=[localization_params_file],
-        remappings=[
-            ("cmd_vel", "control/nav_cmd_vel"),
-            ("/enable", "/odometry/enable"),
-            ("/set_pose", "/odometry/set_pose"),
-            ("/odometry/filtered", "imu/odometry")
-        ],
-    )
-    navsat_node = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare("mfe_state_estimation"),
-                "launch",
-                "gps_transform.launch.py"
-            ])
-        )
-    )
+    localization_params_file = os.path.join(state_estimation_dir, "config", "ekf_navsat.yaml")
+
+    # Keep this commented out unless we have secondary source of continuous odometry (e.g kinematics)
+    # local_localization_node = Node(
+    #     package="robot_localization",
+    #     executable="ekf_node",
+    #     name="ekf_filter_node_odom",
+    #     output="screen",
+    #     parameters=[localization_params_file],
+    #     remappings=[
+    #         ("/odometry/filtered", "/odometry/local")
+    #     ],
+    # )
+    global_localization_node = Node(
+            package='robot_localization', 
+            executable='ekf_node', 
+            name='ekf_filter_node_map',
+	        output='screen',
+            parameters=[localization_params_file],
+            remappings=[
+                ('/odometry/filtered', '/odometry/global')
+            ]
+    )          
+    navsat_node = Node(
+            package='robot_localization', 
+            executable='navsat_transform_node', 
+            name='navsat_transform_node',
+	        output='screen',
+            parameters=[localization_params_file],
+            remappings=[('/imu', '/fsds/imu'),
+                        ('/gps/fix', '/fsds/gps'), 
+                        ('/odometry/filtered', '/odometry/global'),
+                        ('/odometry/gps', '/odometry/gps'),
+                        ('/gps/filtered', '/gps/filtered')]          
+    )           
 
     return LaunchDescription([
-        localization_node,
+        # local_localization_node,
+        global_localization_node,
         navsat_node
     ])
