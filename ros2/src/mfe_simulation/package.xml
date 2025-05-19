@@ -16,6 +16,9 @@
   <depend>cv_bridge</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
+  
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
 
   <!-- Runtime dependencies -->
   <exec_depend>numpy</exec_depend>

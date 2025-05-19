@@ -112,8 +112,11 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::toROSMsg(*inlier_cloud, cones_output);
     pcl::toROSMsg(*outlier_cloud, ground_output);
 
-    cones_output.header = msg->header;
-    ground_output.header = msg->header;
+    // Set times and frame_ids
+    cones_output.header.frame_id = "track"; 
+    cones_output.header.stamp = this->get_clock()->now();
+    ground_output.header.frame_id = "track";
+    ground_output.header.stamp = this->get_clock()->now();
 
     this->point_cloud_objs_pub->publish(cones_output);
     point_cloud_ground_pub->publish(ground_output);

@@ -15,16 +15,17 @@ def generate_launch_description():
     localization_params_file = os.path.join(state_estimation_dir, "config", "ekf_navsat.yaml")
 
     # Keep this commented out unless we have secondary source of continuous odometry (e.g kinematics)
-    # local_localization_node = Node(
-    #     package="robot_localization",
-    #     executable="ekf_node",
-    #     name="ekf_filter_node_odom",
-    #     output="screen",
-    #     parameters=[localization_params_file],
-    #     remappings=[
-    #         ("/odometry/filtered", "/odometry/local")
-    #     ],
-    # )
+    local_localization_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node_odom",
+        output="screen",
+        parameters=[localization_params_file],
+        remappings=[
+            ("/odometry/filtered", "/odometry/local")
+        ],
+    )
+    
     global_localization_node = Node(
             package='robot_localization', 
             executable='ekf_node', 
@@ -41,15 +42,15 @@ def generate_launch_description():
             name='navsat_transform_node',
 	        output='screen',
             parameters=[localization_params_file],
-            remappings=[('/imu', '/fsds/imu'),
+            remappings=[('imu', '/fsds/imu'),
                         ('/gps/fix', '/fsds/gps'), 
                         ('/odometry/filtered', '/odometry/global'),
                         ('/odometry/gps', '/odometry/gps'),
-                        ('/gps/filtered', '/gps/filtered')]          
+                        ('/gps/filtered', '/gps/filtered')]              
     )           
 
     return LaunchDescription([
-        # local_localization_node,
+        local_localization_node,
         global_localization_node,
         navsat_node
     ])

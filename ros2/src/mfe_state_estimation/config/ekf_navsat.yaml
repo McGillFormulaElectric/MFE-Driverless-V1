@@ -1,10 +1,38 @@
 ### ekf config file ###
 # Template reference: https://github.com/cra-ros-pkg/robot_localization/blob/ros2/params/ekf.yaml
+ekf_filter_node_odom:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.1
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    debug: false
+
+    map_frame: utm                                   # Defaults to "map" if unspecified
+    odom_frame: odom                                 # Defaults to "odom" if unspecified
+    base_link_frame: fsds/FSCar                      # Defaults to "base_link" if unspecified
+    world_frame: odom                                # Defaults to the value of odom_frame if unspecified
+
+    imu0: fsds/imu
+    imu0_config: [false,  false,  false,
+                  true,   true,   false,
+                  false,  false,  false,
+                  true,   true,   true,
+                  true,   true,   true]
+                  
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: true
+
 ekf_filter_node_map:
     ros__parameters:
         frequency: 30.0
         sensor_timeout: 0.1
         two_d_mode: true
+        publish_tf: true
 
         transform_time_offset: 0.0
         transform_timeout: 0.0
@@ -12,11 +40,10 @@ ekf_filter_node_map:
         print_diagnostics: true
         debug: true
 
-        map_frame: map                                   # Defaults to "map" if unspecified
+        map_frame: utm                                   # Defaults to "map" if unspecified
         odom_frame: odom                                 # Defaults to "odom" if unspecified
         base_link_frame: fsds/FSCar                      # Defaults to "base_link" if unspecified
-        world_frame: odom                                # Defaults to the value of odom_frame if unspecified
-
+        world_frame: utm                                 # Defaults to the value of odom_frame if unspecified
         odom0: odometry/gps
 
         # x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
@@ -31,50 +58,29 @@ ekf_filter_node_map:
         odom0_pose_use_child_frame: true
 
         imu0: fsds/imu
-        imu0_config: [false, false, false,
-                      true,  true,  false,
-                      false, false, false,
-                      true,  true,  true,
-                      true,  true,  true]
+        imu0_config: [false,  false,  false,
+                      true,   true,   true,
+                      false,  false,  false,
+                      true,   true,   true,
+                      true,   true,   true]
         imu0_differential: false
-        imu0_relative: false
+        imu0_relative: true
         imu0_queue_size: 10
-        # imu0_pose_rejection_threshold: 5.0                 # Note the difference in parameter names
-        # imu0_twist_rejection_threshold: 5.0                #
-        # imu0_linear_acceleration_rejection_threshold: 5.0  #
         imu0_remove_gravitational_acceleration: true
 
         use_control: false
 
-        process_noise_covariance: [0.05,   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.05,   0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.06,   0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.03,   0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.03,   0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.06,   0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.025,   0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.025,   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.04,   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.01,   0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.01,   0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.02,   0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.03,   0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.03,   0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.03]
-        
-        initial_estimate_covariance: [1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9]
-
 navsat_transform_node:
   ros__parameters:
-    frequency: 30.0
-    delay: 0.5
-    magnetic_declination_radians: 0.0  # 0.7 For Montreal
+    frequency: 10.0
+    delay: 0.5  
+    magnetic_declination_radians: 0.0  # 13.7 For Montreal
     yaw_offset: 0.0  # IMU reads 0 facing magnetic north, not east
     debug: true
-    zero_altitude: true
-    publish_filtered_gps: false
-    use_odometry_yaw: false
+    zero_altitude: false
+    publish_filtered_gps: true 
+    use_odometry_yaw: true
+    # use_manual_datum: true
     wait_for_datum: false
     use_local_cartesian: false
-    broadcast_cartesian_transform: false
-    broadcast_cartesian_transform_as_parent_frame: false
+    broadcast_cartesian_transform: true

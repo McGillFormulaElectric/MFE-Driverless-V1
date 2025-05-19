@@ -16,6 +16,8 @@
 *unity.lock
 #model
 *.pt
+*.gv
+*.pdf
 
 
 #builds

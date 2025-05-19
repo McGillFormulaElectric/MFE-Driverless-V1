@@ -20,7 +20,7 @@ def generate_launch_description():
                 'file_loader.launch.py'
             )
         ),
-        condition=IfCondition(load_file_value)  # Check the value at runtime
+        # condition=IfCondition()  # Check the value at runtime
     )
     
     # Launch RANSAC Node
@@ -37,7 +37,6 @@ def generate_launch_description():
 
 
     return LaunchDescription([
-        load_file_arg,
         file_loader_node_launch,
         ground_plane_removal_node
     ])

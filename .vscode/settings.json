@@ -77,7 +77,8 @@
         "dense": "cpp",
         "deque": "cpp",
         "string": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "iostream": "cpp"
     },
     "cmake.ignoreCMakeListsMissing": true
     /* TODO: make this pretty if you want
