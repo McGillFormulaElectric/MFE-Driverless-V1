@@ -13,6 +13,7 @@ ENV CXX=clang++
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install all ROS 2 dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Install additional tools and dependencies
     build-essential \
@@ -45,6 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-cv-bridge \
     ros-humble-foxglove-bridge \
     && rm -rf /var/lib/apt/lists/*
+
+# Install all Scikit dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-sklearn \
+    python3-sklearn-lib \
+    python-sklearn-doc
 
 # Create a workspace directory
 RUN mkdir -p /ros2_ws/src

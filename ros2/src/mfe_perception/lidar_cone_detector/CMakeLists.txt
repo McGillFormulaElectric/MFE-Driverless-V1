@@ -8,11 +8,12 @@ endif()
 # find dependencies
 find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
-ament_auto_find_build_dependencies()
-
+find_package(rclpy REQUIRED)
 # eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
+
+ament_auto_find_build_dependencies()
 
 ament_auto_generate_code()
 
@@ -25,6 +26,13 @@ ament_auto_add_executable(file_loader
 )
 
 target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
+
+ament_python_install_package(${PROJECT_NAME})
+
+install(PROGRAMS
+  scripts/cone_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY
   launch

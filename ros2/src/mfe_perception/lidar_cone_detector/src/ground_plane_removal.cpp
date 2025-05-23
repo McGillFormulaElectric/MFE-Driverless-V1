@@ -40,7 +40,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     // Voxel downsampling    
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(pcd);
-    sor.setLeafSize(0.1f, 0.1f, 0.1f); // sets box size in which will only contain 1 point
+    sor.setLeafSize(0.05f, 0.05f, 0.05f); // sets box size in which will only contain 1 point
     // can change how many points are in each box with setMinimumPointsNumberPerVoxel
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*downsampled_pcd);
@@ -70,8 +70,8 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
     seg.setMethodType(pcl::SAC_RANSAC);
     seg.setAxis(Eigen::Vector3f(0, 0, 1)); // Forces a horizontal plane
-    seg.setMaxIterations(1000);
-    seg.setDistanceThreshold(0.05);
+    seg.setMaxIterations(100);
+    seg.setDistanceThreshold(0.03);
     seg.setInputCloud(filtered_pcd);
 
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
@@ -113,9 +113,9 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::toROSMsg(*outlier_cloud, ground_output);
 
     // Set times and frame_ids
-    cones_output.header.frame_id = "track"; 
+    cones_output.header.frame_id = "fsds/FSCar"; 
     cones_output.header.stamp = this->get_clock()->now();
-    ground_output.header.frame_id = "track";
+    ground_output.header.frame_id = "fsds/FSCar ";
     ground_output.header.stamp = this->get_clock()->now();
 
     this->point_cloud_objs_pub->publish(cones_output);

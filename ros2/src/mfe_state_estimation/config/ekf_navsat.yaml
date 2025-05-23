@@ -16,8 +16,8 @@ ekf_filter_node_odom:
     world_frame: odom                                # Defaults to the value of odom_frame if unspecified
 
     imu0: fsds/imu
-    imu0_config: [false,  false,  false,
-                  true,   true,   false,
+    imu0_config: [false,  false,  false, 
+                  true,   true,   false, 
                   false,  false,  false,
                   true,   true,   true,
                   true,   true,   true]
@@ -29,7 +29,7 @@ ekf_filter_node_odom:
 
 ekf_filter_node_map:
     ros__parameters:
-        frequency: 30.0
+        frequency: 100.0
         sensor_timeout: 0.1
         two_d_mode: true
         publish_tf: true
@@ -38,7 +38,7 @@ ekf_filter_node_map:
         transform_timeout: 0.0
 
         print_diagnostics: true
-        debug: true
+        debuxg: true
 
         map_frame: utm                                   # Defaults to "map" if unspecified
         odom_frame: odom                                 # Defaults to "odom" if unspecified
@@ -64,7 +64,7 @@ ekf_filter_node_map:
                       true,   true,   true,
                       true,   true,   true]
         imu0_differential: false
-        imu0_relative: true
+        imu0_relative: false
         imu0_queue_size: 10
         imu0_remove_gravitational_acceleration: true
 
@@ -72,7 +72,7 @@ ekf_filter_node_map:
 
 navsat_transform_node:
   ros__parameters:
-    frequency: 10.0
+    frequency: 100.0
     delay: 0.5  
     magnetic_declination_radians: 0.0  # 13.7 For Montreal
     yaw_offset: 0.0  # IMU reads 0 facing magnetic north, not east

@@ -36,6 +36,7 @@ def generate_launch_description():
                 ('/odometry/filtered', '/odometry/global')
             ]
     )          
+    
     navsat_node = Node(
             package='robot_localization', 
             executable='navsat_transform_node', 

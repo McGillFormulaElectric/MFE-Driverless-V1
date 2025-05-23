@@ -35,17 +35,35 @@ def generate_launch_description():
     ground_plane_removal_node = Node(
         package='lidar_cone_detector',
         namespace='lidar',
+        name='ground_plane_removal_lidar2',
         executable='ground_plane_removal',
         output='screen',
         emulate_tty=True,
         parameters=[
             {"run_visualization": False}
+        ],
+        remappings=[
+            ('pcl/raw', '/fsds/lidar/Lidar1')
         ]
     )
 
+    cone_detector_node = Node(
+        package='lidar_cone_detector',
+        namespace='lidar',
+        executable='cone_detector_node.py',
+        output='screen',
+        emulate_tty=True,
+        arguments=[
+            '--verbose'
+        ],
+        remappings=[
 
+        ]
+    )
+    
     return LaunchDescription([
         load_file_arg,
         file_loader_node_launch,
-        ground_plane_removal_node
+        ground_plane_removal_node,
+        cone_detector_node
     ])

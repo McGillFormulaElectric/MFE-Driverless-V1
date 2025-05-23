@@ -8,18 +8,23 @@
   <license>GPL-3.0-only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>vision_msgs</depend>
   <depend>pcl_msgs</depend>
 
+  <depend>rclcpp</depend>
   <depend>eigen</depend>
   <depend>tf2</depend>
   <depend>tf2_eigen</depend>
   <depend>tf2_ros</depend>
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
+
+  <depend>rclpy</depend>
+  <depend>python3-sklearn</depend>
 
   <exec_depend>libpcl-common</exec_depend>
   <exec_depend>libpcl-features</exec_depend>

@@ -1,22 +1,20 @@
+#!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 
 import numpy as np
-import array
-import time
 
 from geometry_msgs.msg import Point
-from mfe_msgs import Cone
+from mfe_msgs.msg import Cone, Track
 from sensor_msgs.msg import PointCloud2
 import ros2_numpy as rnp
 
 from sklearn.cluster import DBSCAN
 
-
 class LiDARConeNode(Node):
-
     def __init__(self):
-        super().__init__("lidar_cone_node")
+        super().__init__("cone_detector_node")
 
         self.init_params()
 
@@ -25,13 +23,19 @@ class LiDARConeNode(Node):
         self.create_subscription(PointCloud2, "lidar/pcl/objects", self.callback, 10)
 
         # publishers - probably point cloud for debugging, then cones
-        # TODO: sample point cloud for vis/debugging purposes
         self.point_cloud_publisher = self.create_publisher(PointCloud2, "lidar/pcl/cone_cloud", 10)
-        self.cone_publusher = self.create_publisher(Cone, "lidar/pcl/cones", 10) # buffer placeholder
+        self.cone_publusher = self.create_publisher(Track, "lidar/pcl/cones", 10) # buffer placeholder
 
     
     def init_params(self):
-        # init launch params in here
+        """
+        Initializes the parameters of the node using rclpy
+        """
+        self.declare_parameter("dbscan_cluster_min_samples", value=7)
+        self.cluster_min_samples = self.get_parameter("dbscan_cluster_min_samples").value
+
+        self.declare_parameter("dbscan_epsilon")
+        self.epsilon = self.get_parameter("dbscan_epsilon", value=0.5)
 
         return
     
@@ -41,9 +45,7 @@ class LiDARConeNode(Node):
         Creates a message of type Cone given a location
 
         """
-
         location: Point = Point(x, y, z)
-
         return Cone(location=location, color=Cone.UNKNOWN) # TODO: colour?
     
 
@@ -53,7 +55,8 @@ class LiDARConeNode(Node):
         """
 
         # apply DBSCAN clustering
-        clusters = DBSCAN(eps=0.8, min_samples=2).fit(points) # params to be changed based on cone specs
+        dbscan = DBSCAN(eps=self.epsilon, min_samples=self.cluster_min_samples)
+        clusters = dbscan.fit(points) # params to be changed based on cone specs
         labels = clusters.labels_
 
         # gets clusters
@@ -63,6 +66,8 @@ class LiDARConeNode(Node):
         objects = np.empty(unq_labels.size, dtype=object)
         object_centres = np.empty((unq_labels.size, 3))
 
+        self.get_logger().info(objects)
+
         # iterates over unique clusters,
         for idx, label in enumerate(unq_labels):
             objects[idx] = object_centres[np.where(labels == label)] # extract the points in that cluster
@@ -71,10 +76,15 @@ class LiDARConeNode(Node):
             object_centres[idx] = np.mean(
                 np.column_stack((objects[idx]["x"], objects[idx]["y"], objects[idx]["z"])), axis=0
             )
+        
 
         return object_centres, objects
     
+
     def filter_cones(self, objects, object_centres):
+        """
+        Filters the cones using data validation of measuring diameter
+        """
 
         mask = np.zeros(len(objects),dtype=bool)
 
@@ -149,12 +159,3 @@ class LiDARConeNode(Node):
         self.point_cloud_publisher.publish(new_point_cloud_msg)
 
         return
-    
-def main(args=None):
-    rclpy.init(args=args)
-
-    node = LiDARConeNode()
-
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
