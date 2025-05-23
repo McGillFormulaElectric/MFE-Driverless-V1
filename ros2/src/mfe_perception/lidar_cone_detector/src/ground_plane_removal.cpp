@@ -56,13 +56,13 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pass.filter (*downsampled_pcd);
     */
 
-    // Remove statistical outliers
-    pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;
-    sor_outlier.setInputCloud(downsampled_pcd);
-    sor_outlier.setMeanK(50);            // number of neighbours to analyze
-    sor_outlier.setStddevMulThresh(1.0); // threshold of std devs away from mean that will be marked as outlier
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_pcd(new pcl::PointCloud<pcl::PointXYZ>);
-    sor_outlier.filter(*filtered_pcd);
+    // // Remove statistical outliers
+    // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;
+    // sor_outlier.setInputCloud(downsampled_pcd);
+    // sor_outlier.setMeanK(50);            // number of neighbours to analyze
+    // sor_outlier.setStddevMulThresh(1.0); // threshold of std devs away from mean that will be marked as outlier
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_pcd(new pcl::PointCloud<pcl::PointXYZ>);
+    // sor_outlier.filter(*filtered_pcd);
 
     // Plane segmentation (RANSAC)
     pcl::SACSegmentation<pcl::PointXYZ> seg;
@@ -72,7 +72,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     seg.setAxis(Eigen::Vector3f(0, 0, 1)); // Forces a horizontal plane
     seg.setMaxIterations(100);
     seg.setDistanceThreshold(0.03);
-    seg.setInputCloud(filtered_pcd);
+    seg.setInputCloud(downsampled_pcd);
 
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
@@ -98,7 +98,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::PointCloud<pcl::PointXYZ>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-    extract.setInputCloud(filtered_pcd);
+    extract.setInputCloud(downsampled_pcd);
     extract.setIndices(inliers);
     extract.setNegative(false);
     extract.filter(*outlier_cloud);
@@ -115,7 +115,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     // Set times and frame_ids
     cones_output.header.frame_id = "fsds/FSCar"; 
     cones_output.header.stamp = this->get_clock()->now();
-    ground_output.header.frame_id = "fsds/FSCar ";
+    ground_output.header.frame_id = "fsds/FSCar";
     ground_output.header.stamp = this->get_clock()->now();
 
     this->point_cloud_objs_pub->publish(cones_output);
