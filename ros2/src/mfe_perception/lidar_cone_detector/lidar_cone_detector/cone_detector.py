@@ -5,6 +5,7 @@ from rclpy.node import Node
 
 import numpy as np
 
+from std_msgs.msg import Header
 from geometry_msgs.msg import Point
 from mfe_msgs.msg import Cone, Track
 from sensor_msgs.msg import PointCloud2
@@ -14,39 +15,42 @@ from sklearn.cluster import DBSCAN
 
 class LiDARConeNode(Node):
     def __init__(self):
+
         super().__init__("cone_detector_node")
 
         self.init_params()
 
         # subscribe to the outputs of the ground removal script
         # should be the pointcloud with the ground removed
-        self.create_subscription(PointCloud2, "lidar/pcl/objects", self.callback, 10)
+        self.create_subscription(PointCloud2, "pcl/objects", self.callback, 10)
 
         # publishers - probably point cloud for debugging, then cones
-        self.point_cloud_publisher = self.create_publisher(PointCloud2, "lidar/pcl/cone_cloud", 10)
-        self.cone_publusher = self.create_publisher(Track, "lidar/pcl/cones", 10) # buffer placeholder
-
+        self.point_cloud_publisher = self.create_publisher(PointCloud2, "pcl/cone_cloud", 10)
+        self.track_publisher = self.create_publisher(Track, "pcl/track", 10) # buffer placeholder
     
     def init_params(self):
         """
         Initializes the parameters of the node using rclpy
         """
-        self.declare_parameter("dbscan_cluster_min_samples", value=7)
+        self.declare_parameter("dbscan_cluster_min_samples", value=3)
         self.cluster_min_samples = self.get_parameter("dbscan_cluster_min_samples").value
 
-        self.declare_parameter("dbscan_epsilon")
-        self.epsilon = self.get_parameter("dbscan_epsilon", value=0.5)
+        self.declare_parameter("dbscan_epsilon", value=0.5)
+        self.epsilon = self.get_parameter("dbscan_epsilon").value
 
         return
     
     
-    def create_cone_msg(self, x, y, z):
+    def create_cone_msg(self, x: float, y: float, z: float, cone_color: int):
         """
         Creates a message of type Cone given a location
 
         """
+        if (cone_color not in [0, 1, 2, 3, 4]):
+            raise Exception("MessageCreationException")
+        
         location: Point = Point(x, y, z)
-        return Cone(location=location, color=Cone.UNKNOWN) # TODO: colour?
+        return Cone(location=location, color=cone_color)
     
 
     def find_clusters(self, points):
@@ -55,28 +59,31 @@ class LiDARConeNode(Node):
         """
 
         # apply DBSCAN clustering
-        dbscan = DBSCAN(eps=self.epsilon, min_samples=self.cluster_min_samples)
+        # dbscan = DBSCAN(
+        #   eps=self.epsilon, 
+        #   min_samples=self.cluster_min_samples, 
+        #   metric="euclidean", 
+        #   n_jobs=2
+        # )
+        dbscan = DBSCAN(eps=0.5, min_samples=2, metric="euclidean", n_jobs=2)
         clusters = dbscan.fit(points) # params to be changed based on cone specs
         labels = clusters.labels_
+        self.get_logger().debug(f"Labels: {labels}")
 
-        # gets clusters
+        # gets clusters by only getting unique labels
         unq_labels = np.unique(labels)
+        unq_cluster_labels = unq_labels[unq_labels != -1]
+        self.get_logger().info(f"Unique Labels: {unq_cluster_labels}")
 
         # creates arrays for objects and their centres
         objects = np.empty(unq_labels.size, dtype=object)
         object_centres = np.empty((unq_labels.size, 3))
 
-        self.get_logger().info(objects)
-
-        # iterates over unique clusters,
+        # iterate over each cluster and calculate mean 
         for idx, label in enumerate(unq_labels):
-            objects[idx] = object_centres[np.where(labels == label)] # extract the points in that cluster
-            
-            # compute the centre
-            object_centres[idx] = np.mean(
-                np.column_stack((objects[idx]["x"], objects[idx]["y"], objects[idx]["z"])), axis=0
-            )
-        
+            objects[idx] = points[labels == label] # extract the points in that cluster
+            object_centres[idx] = np.mean(objects[idx], axis=0)
+            self.get_logger().info(f"Cluster {label} centre: {object_centres[idx]}")
 
         return object_centres, objects
     
@@ -88,7 +95,7 @@ class LiDARConeNode(Node):
 
         mask = np.zeros(len(objects),dtype=bool)
 
-        for i in range(objects):
+        for i in range(len(objects)):
             if objects[i].size > 15:
                 continue
             
@@ -107,55 +114,65 @@ class LiDARConeNode(Node):
         return cone_clusters, cone_locations
     
 
-    def callback(self, msg):
+    def callback(self, msg: PointCloud2):
         """
         Called when point cloud data is received.
         Runs clustering, finds the clusters that are cones, and returns the centre location
-        """
-        
+        """        
         # Convert PointCloud2 to a numpy arr
         # BUG: might get error here, not sure of ros2_numpy has this
-        pc_array = rnp.pointcloud2_to_array(msg)
-        
-        # Extract (x, y, z) coordinates
-        points = np.vstack((pc_array['x'], pc_array['y'], pc_array['z'])).T
+        points = rnp.numpify(msg)['xyz']
 
-        # FILTER: remove null values
-        points = points[~np.isnan(points).any(axis=1)]
-        
+        # # Extract (x, y, z) coordinates
+        # points = np.vstack((pc_array['x'], pc_array['y'], pc_array['z'])).T
+
+        # Remove incompatible values using mask
+        points = (points[~np.isnan(points).any(axis=1)])
+        points_t = points.T
+
         if len(points) == 0:
             self.get_logger().warn("No valid points received")
             return
 
         # FILTER: Remove points that are outside of lidar range or min range
-        point_norms = np.linalg.norm([points["x"], points["y"], points["z"]], axis=0) # calc dist
-        mask = (point_norms < 30) & (point_norms > 1)  # max=30, min=1 dists from lidar
-        point_norms = point_norms[mask]
-        points = points[mask]
+        # point_norms = np.linalg.norm([points[0], points[1], points[2]], axis=0) # calc dist'
+        # print(point_norms)
+        # mask = (point_norms < 30) & (point_norms > 1)  # max=30, min=1 dists from lidar
+        # point_norms = point_norms[mask]
+        # points = points[mask]
 
         # run cluster detection
         objects, object_centres = self.find_clusters(points)
 
-        # FILTER: removes the non-cone clusters
-        cone_clusters, cone_locations = self.filter_cones(objects, object_centres)
+        # # FILTER: removes the non-cone clusters
+        # cone_clusters, cone_locations = self.filter_cones(objects, object_centres)
 
-        if len(cone_locations) == 0:
-            return
+        # if len(cone_locations) == 0:
+        #     return
 
-        # TODO: bring back points
+        # TODO: Draw cylinders from the raw PointCloud and bring extra points back
 
-        # convert cone locs into correct message
-        # TODO: Stamped msg ver???
-        detected_cones: list = [self.create_cone_msg(cone[0], cone[1], cone[2]) for cone in cone_locations]
-        detection_msg = Cone(header=msg.header, cones=detected_cones)
+        # Create cone message types and chain them into an array 
+        # detected_cones: list = [self.create_cone_msg(cone[0], cone[1], cone[2]) for cone in cone_locations]
 
+        track_msg = Track()
+        
+        track = []
+        for centre in object_centres:
+            cone_msg_header = Header()
+            cone_msg_header.stamp = self.get_clock().now().to_msg()
+            cone_msg_header.frame_id = msg.header.frame_id
+            cone_msg = Cone(header=cone_msg_header, cones=rnp.msgify())
+            track.append(cone_msg)
+
+        track_msg.track = track
+            
         # publish locs
-        self.cone_publusher.publish(detection_msg)
+        self.track_publisher.publish(track_msg)
 
         # publish pc w/ cones only
-        cone_clusters = np.concatenate(cone_clusters)
-        # BUG: might get error here, not sure of ros2_numpy has this
-        new_point_cloud_msg = rnp.array_to_pointcloud2(msg, cone_clusters, points)
-        self.point_cloud_publisher.publish(new_point_cloud_msg)
+        # cone_clusters = np.concatenate(cone_clusters)
+        # new_point_cloud_msg = rnp.msgify(msg, cone_clusters, points)
+        # self.point_cloud_publisher.publish(new_point_cloud_msg)
 
         return

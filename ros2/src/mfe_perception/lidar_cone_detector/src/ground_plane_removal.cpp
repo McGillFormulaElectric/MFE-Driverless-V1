@@ -81,14 +81,14 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
 
     // Logging coefficient data
     if (coefficients->values.size() >= 4) {
-        RCLCPP_INFO(
-            this->get_logger(),
-            "RANSAC plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
-            coefficients->values[0],
-            coefficients->values[1],
-            coefficients->values[2],
-            coefficients->values[3]
-        );  // macro for logger
+        // RCLCPP_INFO(
+        //     this->get_logger(),
+        //     "RANSAC plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
+        //     coefficients->values[0],
+        //     coefficients->values[1],
+        //     coefficients->values[2],
+        //     coefficients->values[3]
+        // );  // macro for logger
     } else {
         RCLCPP_WARN(this->get_logger(), "Not enough coefficients returned by the segmenter.");
     }

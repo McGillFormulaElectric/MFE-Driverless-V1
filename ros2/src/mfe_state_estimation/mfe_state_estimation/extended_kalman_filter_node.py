@@ -5,6 +5,8 @@ from rclpy import Node
 
 from tf2_py import euler_
 
+from filters.extended_kalman_filter import ExtendedKalmanFilter
+
 from sensor_msgs.msg import Imu, NavSatFix
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
@@ -53,8 +55,10 @@ class ExtendedKalmanFilterNode(Node):
         )
 
         # self.odom_pub_ = self.create_publisher(
-
+        #   
         # )
+
+        self.ekf = 
 
         self.get_logger().info(
             "Initialized EKF Node for the following topics: %s %s -> %s", 

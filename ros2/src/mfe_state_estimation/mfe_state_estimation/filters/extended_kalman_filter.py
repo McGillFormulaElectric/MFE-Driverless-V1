@@ -25,7 +25,7 @@ class ExtendedKalmanFilter:
 			np.ndarray (initial_covariance): The starting covariance matrix for the state vector
 			np.ndarray  (motion_model): A list of three matrices in array form of the kinematic 
 			motion model.
-			np.ndarray (observation_model)L 
+			np.ndarray (observation_model)
 			Optional<List>, Optional<List> (**kwargs): Process noise (noise of the motion model), 
 			Observation Noise (noise of the measurement)
 

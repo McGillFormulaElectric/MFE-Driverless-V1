@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
-from ultralytics import YOLO
-
-
+import threading
 import cv2
 import torch
 import pandas as pd
 import numpy as np
 
+import rclpy
+from rclpy.node import Node
+from ultralytics import YOLO
+
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
+
+from frame_generator import FrameGenerator
 
 # installs numpy-2.2.4 setuptools-78.1.0
 # pip install --upgrade "numpy<2"
@@ -31,7 +33,11 @@ class CameraConeNode(Node):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"  
         self.model = YOLO(self.model_path).to(self.device)  # load model onto the device
 
-        # TODO tweak confidence threshold
+        # TODO abstract into a cleaner format
+        self.conf = 0.5
+        self.iou = 0.3
+
+        # TODO tweak confidence threshold + abstract into YAML
         self.model.conf = 0.5 
 
         # subscribes to raw camera data
@@ -43,7 +49,8 @@ class CameraConeNode(Node):
         
         self.bridge = CvBridge() # allows conversion between open cv types and ros types
 
-        return
+        self.object_tracking_t = threading.Thread(target=self.object_tracking, daemon=True)
+        self.object_tracking_t.start()
 
     def object_detection(self, frame):
         """
@@ -62,8 +69,33 @@ class CameraConeNode(Node):
         detections["width"] = detections["x_max"] - detections["x_min"]
         detections["height"] = detections["y_max"] - detections["y_min"]
 
+        # TODO Add loop breaking if shutdown is activated (through a method)
         return detections
     
+    def object_tracking(self, frame):
+        """
+        Performs object tracking using YOLOv8 tracking mode
+        Args:
+
+        TODO Finish documentation here.
+
+        """
+        self.frame_generator = FrameGenerator()
+
+        results = self.model.track(
+            source=self.frame_generator,
+            tracker="bytetrack.yaml",
+            persist=True,
+            stream=True,
+            conf=self.conf,
+            iou=self.iou,
+            verbose=True
+        )
+        detections = pd.DataFrame(results[0].boxes.data.tolist(), 
+                          columns=['x_min', 'y_min', 'x_max', 'y_max', 'confidence', 'class'])
+
+        # TODO Add loop breaking if shutdown is activated (through a method)
+        return detections
 
     def render_detection(self, frame, detections):
         """
@@ -116,10 +148,10 @@ class CameraConeNode(Node):
     
 def main(args=None):
     rclpy.init(args=args)
-
     node = CameraConeNode()
 
     rclpy.spin(node)
+
     node.destroy_node()
     rclpy.shutdown()
 
