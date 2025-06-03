@@ -40,13 +40,16 @@ def generate_launch_description():
     cone_detection_node = Node(
         package='vision_cone_detector',
         namespace='camera',
-        executable='cone_detection',
-        name='camera_cone_node',
+        executable='cone_detection_node',
+        name='cone_detection_node',
         output='screen',
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            {'model_path': model_path }
+            {"mode_path": model_path }
+        ],
+        remappings=[
+            ("image/raw", "/fsds/image")
         ]
     )
 
