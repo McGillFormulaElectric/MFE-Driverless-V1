@@ -1,18 +1,8 @@
 
 # Use the official ROS 2 Humble image as the base image
-FROM althack/ros2:humble-cuda-dev
+FROM althack/ros2:humble-dev
 
-ARG USERNAME=USERNAME
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-
-# Delete user if it exists in container (e.g Ubuntu Noble: ubuntu)
-RUN if id -u $USER_UID ; then userdel `id -un $USER_UID` ; fi
-
-# Create the user
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME 
-
+# Install prerequisite packages for other packages to build
 RUN sudo apt clean
 RUN sudo apt install -y curl gnupg lsb-release
 
@@ -30,8 +20,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Upgrade and add universe before installing system
 RUN sudo apt upgrade
 
-RUN apt install software-properties-common && \
-    add-apt-repository universe
+RUN apt-get update && apt-get install -y software-properties-common && \
+    add-apt-repository universe \ 
+    && rm -rf /var/lib/apt/lists/*
 
 # Install all ROS 2 dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -69,7 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install all Scikit dependencies
-RUN apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-sklearn \
     python3-sklearn-lib \
     python-sklearn-doc \
@@ -90,8 +81,6 @@ WORKDIR /ros2_ws
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/ros/.bashrc
 
 ENV DISPLAY=:0
-ENV SHELL=/bin/bash
 
-# Default command (opens foxglove websocket)
-USER $USERNAME
+# Default command
 CMD ["/bin/bash"]
