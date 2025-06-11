@@ -16,44 +16,14 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
 
-# installs numpy-2.2.4 setuptools-78.1.0
-# pip install --upgrade "numpy<2"
-# pip install numpy==2.1.1
-
-class ConeDetectionNode(Node):
+class DepthDetectionNode(Node):
 
     def __init__(self):
-        super().__init__("camera_cone_node")
+        super().__init__("depth_detection_node")
 
-        # Declare and get model path parameter
-        self.declare_parameter("model_path", "yolov8n.pt")  # default to yolov8n.pt it none found
-        self.model_path = self.get_parameter("model_path").value
+        self.cone_depth_publisher
 
-        self.get_logger().info(f"Using YOLO Model: { self.model_path }")
-
-        # Load YOLO model with custom weights
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"  
-        self.model = YOLO(self.model_path).to(self.device)  # load model onto the device
-
-        # Obtain ROS parameters for YOLO mode
-        self.declare_parameter("yolo_conf", value=0.5)
-        self.declare_parameter("yolo_iou", value=0.3)
-        self.conf = self.get_parameter("yolo_conf").value
-        self.iou = self.get_parameter("yolo_iou").value
-
-        # Constructs queue for frame generation
-        self.frame_queue = queue.Queue(maxsize=10)
-
-        # Instantiate ROS callbacks for adding image to stream generation
-        self.create_subscription(Image, "image/raw", self.callback, 10)
-        self.create_subscription(Image, "image/depth", self.depth_callback, 5)
-        self.cone_image_publisher = self.create_publisher(Image, "image/cones", 5)
-        self.bridge = CvBridge()
-
-        # Start tracker thread
-        self.object_tracking_t = threading.Thread(target=self.object_predicting, daemon=True)
-        self.object_tracking_t.start()
-
+        
     def callback(self, msg: Image) -> None:
         """
         ROS2 subscription callback. Convert the ROS Image to OpenCV (numpy) and enqueue it.
@@ -187,7 +157,7 @@ class ConeDetectionNode(Node):
         
 def main(args=None):
     rclpy.init(args=args)
-    node = ConeDetectionNode()
+    node = DepthDetectionNode
 
     rclpy.spin(node)
 

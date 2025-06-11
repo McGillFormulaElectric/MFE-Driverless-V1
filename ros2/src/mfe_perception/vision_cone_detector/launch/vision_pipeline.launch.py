@@ -46,10 +46,10 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            {"mode_path": model_path }
+            {"model_path": model_path }
         ],
         remappings=[
-            ("image/raw", "/fsds/image")
+            ("image/raw", "/fsds/cameracam1/image_color")
         ]
     )
 

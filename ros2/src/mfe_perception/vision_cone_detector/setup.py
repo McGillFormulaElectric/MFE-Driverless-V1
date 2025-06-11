@@ -18,7 +18,7 @@ setup(
         # Include all launch files.
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'resource'), ['resource/video.mp4']),
-        # (os.path.join('share', package_name, 'resource'), ['resource/best.pt']),
+        (os.path.join('share', package_name, 'resource'), ['resource/best.pt']),
     ],
     # This is important as well
     install_requires=['setuptools'],

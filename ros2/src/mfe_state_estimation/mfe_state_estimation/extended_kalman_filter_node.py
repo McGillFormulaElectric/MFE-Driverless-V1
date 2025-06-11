@@ -58,8 +58,6 @@ class ExtendedKalmanFilterNode(Node):
         #   
         # )
 
-        self.ekf = 
-
         self.get_logger().info(
             "Initialized EKF Node for the following topics: %s %s -> %s", 
             self.imu_topic_name,
