@@ -7,20 +7,20 @@
 # blender previous save files
 **/*.blend1
 
-#recorded videos
+# recorded videos
 *.mp4
-#training images
+# training images
 *.png
 *.jpg
 *.bag
 *unity.lock
-#model
+# model
 *.pt
 *.gv
 *.pdf
 
 
-#builds
+# builds
 **/bin/
 **/install/
 **/build/
@@ -29,3 +29,5 @@
 # folders
 /log
 /CMakeFiles
+
+# rosbags and database instances
