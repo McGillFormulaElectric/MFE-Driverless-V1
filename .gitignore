@@ -29,5 +29,5 @@
 # folders
 /log
 /CMakeFiles
-
+**/resource
 # rosbags and database instances

@@ -14,7 +14,7 @@ GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &option
 
     // Subscribes to the general point cloud and publishes ground data and the rest in two separate streams
     point_cloud_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "pcl/raw", rclcpp::SensorDataQoS(),
+        "pcl/acc_cloud", rclcpp::SensorDataQoS(),
         std::bind(&GroundPlaneRemovalNode::remove_ground_plane_callback, this, std::placeholders::_1)
     );
     point_cloud_ground_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(

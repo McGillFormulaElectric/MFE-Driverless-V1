@@ -24,8 +24,15 @@ def generate_launch_description():
         description="Whether to load lidar topics from a simulation"
     )
 
+    use_amz_arg = DeclareLaunchArgument(
+        'use_amz', 
+        default_value='False',
+        description="Whether to load lidar topics from AMZ Bag"
+    )
+
     load_file_value = LaunchConfiguration('load_file')
     use_sim_value = LaunchConfiguration('use_sim')
+    use_amz_value = LaunchConfiguration('use_amz')
 
     file_loader_node_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -38,20 +45,23 @@ def generate_launch_description():
         condition=IfCondition(load_file_value)  # Check the value at runtime
     )
 
-    ground_plane_removal_node_sim = Node(
+    lidar_preprocessor_node_amz = Node(
         package='lidar_cone_detector',
         namespace='lidar',
-        name='ground_plane_removal_node',
-        executable='ground_plane_removal',
-        output='screen',
-        emulate_tty=True,
-        parameters=[
-            {"run_visualization": False}
-        ],
+        name='lidar_preprocessor',
+        executable='lidar_preprocessor',
         remappings=[
-            ('pcl/raw', '/fsds/lidar/Lidar1')
+            ('pcl/raw', '/velodyne_points')
         ],
-        condition=IfCondition(use_sim_value)
+        condition=IfCondition(use_amz_value)
+    )
+
+    lidar_preprocessor_node = Node(
+        package='lidar_cone_detector',
+        namespace='lidar',
+        name='lidar_preprocessor',
+        executable='lidar_preprocessor',
+        condition=UnlessCondition(use_amz_value)
     )
 
     ground_plane_removal_node = Node(
@@ -82,8 +92,10 @@ def generate_launch_description():
     return LaunchDescription([
         load_file_arg,
         use_sim_arg,
+        use_amz_arg,
         file_loader_node_launch,
-        ground_plane_removal_node_sim,
-        ground_plane_removal_node,
-        cone_detector_node
+        lidar_preprocessor_node_amz,
+        lidar_preprocessor_node,
+        # ground_plane_removal_node,
+        # cone_detector_node
     ])

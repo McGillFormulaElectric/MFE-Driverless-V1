@@ -13,7 +13,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 
 # Install Realsense Drivers
-find_package(librealsense2 REQUIRED)
+# find_package(librealsense2 REQUIRED)
 
 # Organize all message dependencies into a single variable
 
