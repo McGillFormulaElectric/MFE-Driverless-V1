@@ -26,6 +26,7 @@ CallbackReturn VelodyneLidar::on_configure()
     RCLCPP_ERROR(this->get_logger(), "Failed to open UDP socket: %s", e.what());
     return 1;
   }
+    RCLCPP_INFO(get_logger(), "UDP socket successfully opened.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -34,10 +35,7 @@ CallbackReturn VelodyneLidar::on_activate()
 {
   publisher_->on_activate();
   running_ = true;
-  io_thread_ = std::thread([this]() {
-    start_udp_listener();
-    io_context_->run();
-  });
+  RCLCPP_INFO(get_logger(), "Velodyne Activated.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -45,14 +43,12 @@ CallbackReturn VelodyneLidar::on_activate()
 CallbackReturn VelodyneLidar::on_cleanup()
 {
   running_ = false;
-  io_context_->stop();
-  if (io_thread_.joinable()) {
-    io_thread_.join();
-  }
-
   socket_.reset();
   io_context_.reset();
   publisher_.reset();
+
+    RCLCPP_INFO(get_logger(), "UDP socket successfully opened");
+
   return CallbackReturn::SUCCESS;
 }
 
