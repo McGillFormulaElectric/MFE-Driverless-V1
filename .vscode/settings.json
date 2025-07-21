@@ -150,7 +150,11 @@
         "cinttypes": "cpp",
         "typeindex": "cpp",
         "typeinfo": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "charconv": "cpp",
+        "regex": "cpp",
+        "span": "cpp",
+        "format": "cpp"
     },
     "cmake.ignoreCMakeListsMissing": true
     /* TODO: make this pretty if you want
