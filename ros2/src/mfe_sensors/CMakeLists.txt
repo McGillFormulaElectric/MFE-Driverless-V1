@@ -15,15 +15,16 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(fmt REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+
+add_executable(sim_lidar_node src/sim_lidar_node.cpp)
 
 add_library(${PROJECT_NAME} SHARED
-  src/camera_driver_node.cpp
-  src/lidar_driver_node.cpp
-  src/base_driver_node.cpp
-  src/realsense_camera_component.cpp
-  src/sim_camera_component.cpp
-  src/velodyne_lidar_component.cpp
-  src/sim_lidar_component.cpp
+  src/camera_interface.cpp
+  src/lidar_interface.cpp
+  src/sensor_node.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -32,14 +33,27 @@ target_include_directories(${PROJECT_NAME}
     "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>" 
 )
 
+target_link_libraries(sim_lidar_node
+  PUBLIC
+    fmt::fmt
+    ${PROJECT_NAME}        # this propagates the include dirs from your library
+)
+
+ament_target_dependencies(sim_lidar_node
+  PUBLIC
+    rclcpp
+    fmt
+    rclcpp_lifecycle
+    sensor_msgs
+)
+
 ament_target_dependencies(${PROJECT_NAME}
   PUBLIC
     rclcpp
+    fmt
+    rclcpp_lifecycle
+    sensor_msgs
 )
-
-ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME})
-ament_export_dependencies(rclcpp)
 
 install(
   TARGETS     ${PROJECT_NAME}
@@ -49,10 +63,26 @@ install(
   RUNTIME     DESTINATION bin  
 )
 
+install(TARGETS sim_lidar_node DESTINATION lib/${PROJECT_NAME})
+
+install(
+  DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+
+install(
+  DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 install(
   DIRECTORY include/
-  destination include/${PROJECT_NAME}
+  DESTINATION include/${PROJECT_NAME}
 )
+
+ament_export_include_directories(include)
+ament_export_libraries(${PROJECT_NAME})
+ament_export_dependencies(rclcpp)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

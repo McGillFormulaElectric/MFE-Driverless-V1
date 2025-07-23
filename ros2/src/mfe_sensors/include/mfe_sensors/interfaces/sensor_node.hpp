@@ -1,4 +1,5 @@
-
+#ifndef SENSOR_NODE
+#define SENSOR_NODE
 #include <string> 
 #include <memory>
 
@@ -9,8 +10,11 @@
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
 
+#include "rclcpp/qos.hpp"
+
 #include "std_msgs/msg/string.hpp"
 
+using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 namespace mfe_sensors {
 
 class SensorNode: public rclcpp_lifecycle::LifecycleNode
@@ -20,31 +24,37 @@ public:
     rclcpp_lifecycle::LifecycleNode(
         sensor_node_name,
         rclcpp::NodeOptions().use_intra_process_comms(intra_process_comms)
-    ) { 
+    ),
+    qos_{rclcpp::SensorDataQoS()}
+    { 
         this->sensor_name = sensor_node_name;
         this->lifecycle_pub_ = this->create_publisher<std_msgs::msg::String>(
             fmt::format("{}", sensor_node_name), 10
         );
+
     }
 
     virtual ~SensorNode() = default;
 
     // Define Lifecycle methods
-    virtual rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_configure(
+    virtual CallbackReturn on_configure(
         const rclcpp_lifecycle::State &
-    );
+    ) = 0;
 
-    virtual rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_activate(
+    virtual CallbackReturn on_activate(
         const rclcpp_lifecycle::State &
-    );
+    ) = 0;
 
-    virtual rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_deactivate(
+    virtual CallbackReturn on_deactivate(
         const rclcpp_lifecycle::State &
-    );
+    ) = 0;
 
-    virtual rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_cleanup(
+    virtual CallbackReturn on_cleanup(
         const rclcpp_lifecycle::State &
-    );
+    ) = 0;
+
+protected:
+    const rclcpp::QoS qos_;
  
 private:
     std::string sensor_name;
@@ -52,3 +62,4 @@ private:
 };
 
 }
+#endif 

@@ -1,6 +1,14 @@
+<<<<<<< HEAD
 #include "mfe_sensors/interfaces/sensor_node.hpp"
 #include "mfe_sensors/interfaces/lidar_interface.hpp"
 #include "mfe_sensors/drivers/base_driver_node.hpp"
+=======
+#include "mfe_sensors/interfaces/lidar_interface.hpp"
+
+namespace mfe_sensors {
+
+LidarInterface::~LidarInterface() = default;
+>>>>>>> 3fc9d500b36d5a3fd2c0165a7dbf7af94276480c
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>

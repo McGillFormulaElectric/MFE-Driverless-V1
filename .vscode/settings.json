@@ -151,7 +151,14 @@
         "typeindex": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
+<<<<<<< HEAD
         "locale": "cpp"
+=======
+        "charconv": "cpp",
+        "regex": "cpp",
+        "span": "cpp",
+        "format": "cpp"
+>>>>>>> 3fc9d500b36d5a3fd2c0165a7dbf7af94276480c
     },
     "cmake.ignoreCMakeListsMissing": true
     /* TODO: make this pretty if you want
