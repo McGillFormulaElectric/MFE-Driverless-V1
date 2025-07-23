@@ -25,14 +25,10 @@ public:
         sensor_node_name,
         rclcpp::NodeOptions().use_intra_process_comms(intra_process_comms)
     ),
-    qos_{rclcpp::SensorDataQoS()}
-    { 
-        this->sensor_name = sensor_node_name;
-        this->lifecycle_pub_ = this->create_publisher<std_msgs::msg::String>(
-            fmt::format("{}", sensor_node_name), 10
-        );
-
-    }
+    sensor_name{std::move(sensor_node_name)},
+    qos_{rclcpp::SensorDataQoS()},
+    lifecycle_pub_{this->create_publisher<std_msgs::msg::String>(sensor_name, qos_)}
+    { }
 
     virtual ~SensorNode() = default;
 
@@ -54,10 +50,10 @@ public:
     ) = 0;
 
 protected:
-    const rclcpp::QoS qos_;
- 
-private:
     std::string sensor_name;
+    const rclcpp::QoS qos_;
+
+private:
     std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>> lifecycle_pub_;
 };
 

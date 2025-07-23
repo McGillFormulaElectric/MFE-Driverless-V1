@@ -19,10 +19,12 @@ public:
 
     virtual ~CameraInterface() = default;
 
+    std::unique_ptr<sensor_msgs::msg::Image> curr_img; 
+
 private:
+
     virtual void capture_and_publish() = 0;
 
-    std::unique_ptr<sensor_msgs::msg::Image> curr_img; 
 };
 
 }
