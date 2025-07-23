@@ -4,3 +4,6 @@
 [submodule "src/urinay"]
 	path = src/urinay
 	url = https://github.com/origovi/urinay
+[submodule "ros2/src/mfe_path_planning/modules"]
+	path = ros2/src/mfe_path_planning/modules
+	url = https://github.com/origovi/urinay
