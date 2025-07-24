@@ -28,7 +28,6 @@ private:
             this->qos_,
             std::bind(&SimLidarNode::preprocess, this, std::placeholders::_1) 
         );
-
         RCLCPP_INFO(get_logger(), "Configured successfully.");
         return CallbackReturn::SUCCESS;
     }

@@ -55,6 +55,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-robot-localization \
     ros-humble-cv-bridge \
     ros-humble-foxglove-bridge \
+    ros-humble-navigation2 \
+    ros-humble-nav2_bringup \
+    ros-humble-slam-toolbox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get clean

@@ -9,6 +9,7 @@
 #include "fmt/core.h"
 
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
 
 namespace mfe_sensors {
 

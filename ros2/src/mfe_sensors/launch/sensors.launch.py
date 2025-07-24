@@ -1,8 +1,10 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import UnlessCondition, IfCondition
 from launch_ros.actions import LifecycleNode, Node
+from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_sim = LaunchConfiguration('use_simulation')
@@ -33,6 +35,17 @@ def generate_launch_description():
             'node_names': sim_sensor_nodes # list of nodes to manage
         }]
     ) 
+
+    launch_pc_to_ls = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([ 
+                FindPackageShare('mfe_sensors'),
+                'launch',
+                'pointcloud_to_laserscan.launch.py'
+            ])
+        ]),
+        condition=IfCondition(use_sim),
+    ) 
     
     real_sensor_nodes = []
     lifecycle_mgr_real = Node(
@@ -53,5 +66,6 @@ def generate_launch_description():
         declare_use_sim,
         sim_lidar_node,
         lifecycle_mgr_sim,
-        lifecycle_mgr_real
+        lifecycle_mgr_real,
+        launch_pc_to_ls
     ])
