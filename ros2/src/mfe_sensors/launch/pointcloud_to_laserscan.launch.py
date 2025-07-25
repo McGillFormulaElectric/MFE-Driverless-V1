@@ -11,22 +11,21 @@ def generate_launch_description():
             namespace='',
             executable='pointcloud_to_laserscan_node',
             remappings=[
-                ('cloud_in', '/fsds/lidar/Lidar1'),
+                ('cloud_in', '/sim_lidar_node/data'),
                 ('scan', '/lidar/laserscan')
             ],
             parameters=[{
-                'target_frame':       'fsds/FSCar',
-                'transform_tolerance': 0.1,
-                'min_height':         -1.3,    # ignore points below this (m)
-                'max_height':         1.0,    # ignore points above this (m)
+                'target_frame':       'fsds/Lidar1',
+                'transform_tolerance': 0.05,
+                'min_height':         -1.3,    # ignore points below this (m) (has to be negative)
+                'max_height':         0.0,    # ignore points above this (m) (has to be negative)
                 'angle_min':         -3.14,   # start angle of the scan [rad]
                 'angle_max':          3.14,   # end angle of the scan [rad]
-                'angle_increment':    0.004363, # resolution of the scan [rad]
-                'scan_time':          0.1,  # expected time between scans [s]
-                'range_min':          0.5,    # minimum valid range [m]
-                'range_max':         30.0,     # maximum valid range [m]
-                'use_inf':           True,
-                'inf_epsilon':        1.0
-            }]
+                'scan_time':          0.07,  # expected time between scans [s]
+                'range_min':          1.0,    # minimum valid range [m]
+                'range_max':          30.0,    # maximum valid range [m]
+                'use_inf':           True
+            }],
+            arguments=['--ros-args', '--log-level', 'DEBUG']
         )
     ])

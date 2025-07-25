@@ -66,8 +66,6 @@ private:
     }
 
     void preprocess(const sensor_msgs::msg::PointCloud2::SharedPtr msg) override {
-        RCLCPP_INFO(get_logger(), "Receiving PointCloud2...");
-
         sensor_msgs::msg::PointCloud2 pc = *msg;
         this->pc_pub_->publish(pc);
     }
