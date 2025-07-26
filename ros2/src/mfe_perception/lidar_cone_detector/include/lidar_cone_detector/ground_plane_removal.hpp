@@ -27,7 +27,7 @@ namespace lidar_cone_detector {
     public:
         GroundPlaneRemovalNode(const rclcpp::NodeOptions &options);
 
-        bool run_visualization;
+        std::string lidar_frame;
 
     private:
         rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr point_cloud_sub;

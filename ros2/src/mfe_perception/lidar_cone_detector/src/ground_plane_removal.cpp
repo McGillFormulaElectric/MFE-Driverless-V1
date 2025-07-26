@@ -5,16 +5,14 @@ namespace lidar_cone_detector {
 GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &options)
 : Node("ground_plane_removal_node", options)
 {
-
-    this->declare_parameter("run_visualization", false);
-    this->get_parameter("run_visualization", this->run_visualization);
+    this->declare_parameter("lidar_frame", "base_link");
+    this->lidar_frame = this->get_parameter("lidar_frame").as_string();
 
     rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
 
-
     // Subscribes to the general point cloud and publishes ground data and the rest in two separate streams
     point_cloud_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "pcl/acc_cloud", rclcpp::SensorDataQoS(),
+        "pcl/input", rclcpp::SensorDataQoS(),
         std::bind(&GroundPlaneRemovalNode::remove_ground_plane_callback, this, std::placeholders::_1)
     );
     point_cloud_ground_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -45,7 +43,8 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*downsampled_pcd);
 
-    // Passthrough filter for downsampling? doesn't work great
+    // Passthrough filter for downsampling
+    // TODO: Delegate to preprocessing as first-step for improved performance
     /*
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd (new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PassThrough<pcl::PointXYZ> pass;
@@ -56,7 +55,7 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pass.filter (*downsampled_pcd);
     */
 
-    // // Remove statistical outliers
+    // Remove statistical outliers
     // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;
     // sor_outlier.setInputCloud(downsampled_pcd);
     // sor_outlier.setMeanK(50);            // number of neighbours to analyze
@@ -81,14 +80,14 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
 
     // Logging coefficient data
     if (coefficients->values.size() >= 4) {
-        // RCLCPP_INFO(
-        //     this->get_logger(),
-        //     "RANSAC plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
-        //     coefficients->values[0],
-        //     coefficients->values[1],
-        //     coefficients->values[2],
-        //     coefficients->values[3]
-        // );  // macro for logger
+        RCLCPP_DEBUG(
+            this->get_logger(),
+            "RANSAC plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
+            coefficients->values[0],
+            coefficients->values[1],
+            coefficients->values[2],
+            coefficients->values[3]
+        );  // macro for logger
     } else {
         RCLCPP_WARN(this->get_logger(), "Not enough coefficients returned by the segmenter.");
     }
@@ -113,26 +112,17 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::toROSMsg(*outlier_cloud, ground_output);
 
     // Set times and frame_ids
-    cones_output.header.frame_id = "fsds/FSCar"; 
+    cones_output.header.frame_id = this->lidar_frame; 
     cones_output.header.stamp = this->get_clock()->now();
-    ground_output.header.frame_id = "fsds/FSCar";
+    ground_output.header.frame_id = this->lidar_frame;
     ground_output.header.stamp = this->get_clock()->now();
 
     this->point_cloud_objs_pub->publish(cones_output);
     point_cloud_ground_pub->publish(ground_output);
 
-    // Perform visualization depending on if set in ROS params
-    // WARNING: this does not work yet
-    if (this->run_visualization)
-    {
-        // Visualize the point cloud using PCL visualization
-        // Eigen::Vector3f vehicle_position(data["data"][i]["odom"]["x"].asFloat(),
-        // data["data"][i]["odom"]["y"].asFloat(),
-        // data["data"][i]["odom"]["z"].asFloat());
-        // this->visualize(inlier_cloud, vehicle_position);
-    }
 }   // void remove_ground_plane_callback
 
+// DEPRECATED WARNING: CURRENT SOFTWARE STACK INCOMPATIBLE WITH RVIZ2
 /*
     Performs visualization of the RANSAC algorithm using RViz2. 
 

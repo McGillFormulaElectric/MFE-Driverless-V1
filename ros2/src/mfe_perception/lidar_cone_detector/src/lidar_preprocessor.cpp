@@ -36,6 +36,7 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     sensor_msgs::msg::PointCloud2 out_cloud;
     pcl::toROSMsg(*concat_cloud, out_cloud);
+
     // TODO: Change frame_id to appropriate world frame
     out_cloud.header.frame_id = "map";
     out_cloud.header.stamp = scan->header.stamp;

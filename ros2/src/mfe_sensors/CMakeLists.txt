@@ -18,7 +18,6 @@ find_package(rclcpp REQUIRED)
 find_package(fmt REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
-find_package(pointcloud_to_laserscan REQUIRED)
 
 add_executable(sim_lidar_node src/sim_lidar_node.cpp)
 
@@ -46,7 +45,6 @@ ament_target_dependencies(sim_lidar_node
     fmt
     rclcpp_lifecycle
     sensor_msgs
-    pointcloud_to_laserscan
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -55,7 +53,6 @@ ament_target_dependencies(${PROJECT_NAME}
     fmt
     rclcpp_lifecycle
     sensor_msgs
-    pointcloud_to_laserscan
 )
 
 install(

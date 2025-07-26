@@ -2,7 +2,6 @@ FROM althack/ros2:humble-dev
 
 # Install prerequisite packages for other packages to build
 RUN sudo apt clean
-RUN sudo apt install -y curl gnupg lsb-release
 
 # Set up the environment
 ENV ROS_DISTRO=humble
@@ -58,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-navigation2 \
     ros-humble-nav2_bringup \
     ros-humble-slam-toolbox \
+    ros-humble-pointcloud-to-laserscan \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get clean

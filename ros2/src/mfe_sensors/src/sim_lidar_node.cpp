@@ -16,7 +16,7 @@ private:
         RCLCPP_INFO(get_logger(), "Configuring...");
         this->curr_pc = std::make_unique<sensor_msgs::msg::PointCloud2>();
 
-        this->declare_parameter<std::string>("sensor_topic_name", "/fsds/lidar/Lidar1");
+        this->declare_parameter<std::string>("sensor_topic_name", "/sim/lidar");
         this->sensor_topic_name = this->get_parameter("sensor_topic_name").as_string();
 
         this->pc_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -28,6 +28,7 @@ private:
             this->qos_,
             std::bind(&SimLidarNode::preprocess, this, std::placeholders::_1) 
         );
+
         RCLCPP_INFO(get_logger(), "Configured successfully.");
         return CallbackReturn::SUCCESS;
     }

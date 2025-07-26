@@ -16,8 +16,12 @@ def generate_launch_description():
     sim_lidar_node = LifecycleNode(
         package='mfe_sensors', executable='sim_lidar_node',
         name='sim_lidar_node',
-        namespace='',
+        namespace='mfe_sensors',
         output='screen',
+        remappings=[
+            ('/sim/lidar', '/fsds/lidar/Lidar1'),
+            ('sim_lidar_node/data', 'lidar/data')
+        ],
         condition=IfCondition(use_sim),
     )
 
@@ -26,7 +30,7 @@ def generate_launch_description():
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
         name='lifecycle_manager_sensors',
-        namespace='',
+        namespace='mfe_sensors',
         output='screen',
         condition=IfCondition(use_sim),
         parameters=[{
@@ -35,24 +39,13 @@ def generate_launch_description():
             'node_names': sim_sensor_nodes # list of nodes to manage
         }]
     ) 
-
-    launch_pc_to_ls = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([ 
-                FindPackageShare('mfe_sensors'),
-                'launch',
-                'pointcloud_to_laserscan.launch.py'
-            ])
-        ]),
-        condition=IfCondition(use_sim),
-    ) 
     
     real_sensor_nodes = []
     lifecycle_mgr_real = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
         name='lifecycle_manager_sensors',
-        namespace='',
+        namespace='mfe_sensors',
         output='screen',
         condition=UnlessCondition(use_sim),
         parameters=[{
@@ -66,6 +59,5 @@ def generate_launch_description():
         declare_use_sim,
         sim_lidar_node,
         lifecycle_mgr_sim,
-        lifecycle_mgr_real,
-        launch_pc_to_ls
+        lifecycle_mgr_real
     ])

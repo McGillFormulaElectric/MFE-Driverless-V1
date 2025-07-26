@@ -4,15 +4,18 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
+    # TODO: Create LaunchConfiguration based on if using sim or not
+    # TODO: Create LaunchConfiguration based on current customizable target_frame
+
     return LaunchDescription([
         Node(
             package='pointcloud_to_laserscan',
             name='pointcloud_to_laserscan',
-            namespace='',
+            namespace='lidar',
             executable='pointcloud_to_laserscan_node',
             remappings=[
-                ('cloud_in', '/sim_lidar_node/data'),
-                ('scan', '/lidar/laserscan')
+                ('cloud_in', 'pcl/objects'),
+                ('scan', 'pcl/laserscan')
             ],
             parameters=[{
                 'target_frame':       'fsds/Lidar1',
@@ -25,7 +28,6 @@ def generate_launch_description():
                 'range_min':          1.0,    # minimum valid range [m]
                 'range_max':          30.0,    # maximum valid range [m]
                 'use_inf':           True
-            }],
-            arguments=['--ros-args', '--log-level', 'DEBUG']
+            }]
         )
     ])

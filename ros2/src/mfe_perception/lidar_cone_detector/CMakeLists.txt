@@ -12,6 +12,7 @@ find_package(rclpy REQUIRED)
 # eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
+find_package(pointcloud_to_laserscan REQUIRED)
 
 ament_auto_find_build_dependencies()
 
