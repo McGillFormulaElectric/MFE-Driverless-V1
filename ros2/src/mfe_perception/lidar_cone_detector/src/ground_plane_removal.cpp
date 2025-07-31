@@ -35,8 +35,6 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::PointCloud<pcl::PointXYZ>::Ptr pcd(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *pcd);
 
-    // TODO: filter remove all points beyond a certain distance from the origin
-
     // Voxel downsampling    
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(pcd);
@@ -45,65 +43,80 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*downsampled_pcd);
 
-    // Passthrough filter for downsampling? doesn't work great
-    /*
-    pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd (new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PassThrough<pcl::PointXYZ> pass;
-    pass.setInputCloud (pcd);
-    pass.setFilterFieldName ("z");
-    pass.setFilterLimits (-1.0, 0.2);
-    pass.setNegative (true);
-    pass.filter (*downsampled_pcd);
-    */
+    // Flatten PCL to work with CUDA
+    int pointCount = downsampled_pcd->points.size();
 
-    // // Remove statistical outliers
-    // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_outlier;
-    // sor_outlier.setInputCloud(downsampled_pcd);
-    // sor_outlier.setMeanK(50);            // number of neighbours to analyze
-    // sor_outlier.setStddevMulThresh(1.0); // threshold of std devs away from mean that will be marked as outlier
-    // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_pcd(new pcl::PointCloud<pcl::PointXYZ>);
-    // sor_outlier.filter(*filtered_pcd);
-
-    // Plane segmentation (RANSAC)
-    pcl::SACSegmentation<pcl::PointXYZ> seg;
-    seg.setOptimizeCoefficients(true);
-    seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
-    seg.setMethodType(pcl::SAC_RANSAC);
-    seg.setAxis(Eigen::Vector3f(0, 0, 1)); // Forces a horizontal plane
-    seg.setMaxIterations(100);
-    seg.setDistanceThreshold(0.03);
-    seg.setInputCloud(downsampled_pcd);
-
-    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
-    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-    
-    seg.segment(*inliers, *coefficients);
-
-    // Logging coefficient data
-    if (coefficients->values.size() >= 4) {
-        // RCLCPP_INFO(
-        //     this->get_logger(),
-        //     "RANSAC plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
-        //     coefficients->values[0],
-        //     coefficients->values[1],
-        //     coefficients->values[2],
-        //     coefficients->values[3]
-        // );  // macro for logger
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Not enough coefficients returned by the segmenter.");
+    if (pointCount == 0){
+        rclcpp_warn(this->get_logger(), "No points to parse");
+        return;
     }
+
+    float* flattenedPCL = new float[pointCount * 3];
+    int* indexArray = new int[pointCount];
+
+    for (int i; i < pointCount; i++){
+        flattenedPCL[i*3 + 0] = downsampled_pcd->points[i].x;
+        flattenedPCL[i*3 + 1] = downsampled_pcd->points[i].y;
+        flattenedPCL[i*3 + 2] = downsampled_pcd->points[i].z;
+        index[i] = 0;
+    }
+
+
+    // CUDA Segmentation setup
+    cudaStream_t stream = 0; // Use default stream
+    cudaSegmentation cudaSeg(SACMODEL_PLANE, SAC_RANSAC, stream);
+
+    float modelCoefficients[4];
+
+    segParam_t setP;
+    setP.distanceThreshold = 0.01;
+    setP.maxIterations = 50;
+    setP.probability = 0.99;
+    setP.optimizeCoefficients = true;
+    cudaSeg.set(setP);
+    cudaSeg.segment(flattenedPCL, pointCount, indexArray, modelCoefficients);
+
+    // logging coefficient data
+    if (modelCoefficients.size() >= 4) {
+        rclcpp_info(
+            this->get_logger(),
+            "ransac plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
+            modelCoefficients[0],
+            modelCoefficients[1],
+            modelCoefficients[2],
+            modelCoefficients[3]
+       );  // macro for logger
+    } else {
+        rclcpp_warn(this->get_logger(), "not enough coefficients returned by the segmenter.");
+    }
+
+
 
     // Extract inliers and outliers
     pcl::ExtractIndices<pcl::PointXYZ> extract;
     pcl::PointCloud<pcl::PointXYZ>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-    extract.setInputCloud(downsampled_pcd);
-    extract.setIndices(inliers);
-    extract.setNegative(false);
-    extract.filter(*outlier_cloud);
-    extract.setNegative(true);
-    extract.filter(*inlier_cloud);
+    for (int i = 0; i < pointCount; i++){
+        if (index[i] == 1){
+            // This is when points are part of the ground
+            outlier_cloud->points.push_back(downsampled_pcd[i]);
+        } else {
+            // Not part of ground plane
+            inlier_cloud->points.push_back(downsampled_pcd[i]);
+        }
+    }
+
+
+    // inlier point parameter
+    inlier_cloud->width = inlier_cloud->points.size();
+    inlier_cloud->height = 1;
+    inlier_cloud->is_dense = false;
+    // outlier point parameter
+    outlier_cloud->width = outlier_cloud->points.size();
+    outlier_cloud->height = 1;
+    outlier_cloud->is_dense = false;
+
 
     // Output processed data and publish to topics
     sensor_msgs::msg::PointCloud2 cones_output;
@@ -120,6 +133,10 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
 
     this->point_cloud_objs_pub->publish(cones_output);
     point_cloud_ground_pub->publish(ground_output);
+
+
+    delete[] indexArray;
+    delete[] flattenedPCL; 
 
     // Perform visualization depending on if set in ROS params
     // WARNING: this does not work yet
