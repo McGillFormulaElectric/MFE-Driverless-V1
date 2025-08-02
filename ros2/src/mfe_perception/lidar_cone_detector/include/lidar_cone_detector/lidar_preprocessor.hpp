@@ -15,13 +15,14 @@ namespace lidar_cone_detector {
     LidarPreprocessor(const rclcpp::NodeOptions &options);
 
     private:
+    double last_theta;
     void scanCallback(const sensor_msgs::msg::PointCloud2::SharedPtr scan);
 
     pcl::VoxelGrid<pcl::PointXYZ> vg_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr scans_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr acc_pub_;
-    std::deque<pcl::PointCloud<pcl::PointXYZ>::Ptr> clouds_;
-    const size_t window_scans_{180};   // 720×0.25° = 180 sweep for a 0.25° lidar
+
+    std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> full_scan_;
     };
 }
 

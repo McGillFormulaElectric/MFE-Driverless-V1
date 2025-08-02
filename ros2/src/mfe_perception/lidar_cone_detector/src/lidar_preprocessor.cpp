@@ -14,6 +14,8 @@ LidarPreprocessor::LidarPreprocessor(const rclcpp::NodeOptions &options)
         "pcl/acc_cloud", qos_profile);
 
     vg_.setLeafSize(0.02f, 0.02f, 0.02f);
+
+    this->last_theta = 0;
 }
 
 void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::SharedPtr scan) {   
@@ -22,25 +24,29 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
     pcl::fromROSMsg(*scan, *pcl_cloud);
 
     // Add to sliding window
-    clouds_.push_back(pcl_cloud);
-    if (clouds_.size() > window_scans_) clouds_.pop_front();
+    for (auto &p: *pcl_cloud) {
+        // Obtain the azimuth of the scan
+        double theta = std::atan2(p.x, p.y) * 180.0 / M_PI;
 
-    // Concatenate
-    pcl::PointCloud<pcl::PointXYZ>::Ptr concat_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    for (auto &cloud : clouds_) *concat_cloud += *cloud;
+        if (theta < last_theta) {
+            // Down-sample for performance concerns on Jetson Nano
+            vg_.setInputCloud(full_scan_);
+            pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>);
+            vg_.filter(*filtered);
 
-     // Down-sample
-    vg_.setInputCloud(concat_cloud);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>);
-    vg_.filter(*filtered);
+            // Convert back to ROS msg type
+            sensor_msgs::msg::PointCloud2 out_cloud;
+            pcl::toROSMsg(*filtered, out_cloud);
 
-    sensor_msgs::msg::PointCloud2 out_cloud;
-    pcl::toROSMsg(*concat_cloud, out_cloud);
+            full_scan_->clear();    // clear the buffer
 
-    // TODO: Change frame_id to appropriate world frame
-    out_cloud.header.frame_id = "map";
-    out_cloud.header.stamp = scan->header.stamp;
-    acc_pub_->publish(out_cloud);
+            out_cloud.header.frame_id = "map";
+            out_cloud.header.stamp = scan->header.stamp;
+            acc_pub_->publish(out_cloud);
+        }
+
+        last_theta = theta;
+    }
 }
 
 };  /* lidar_cone_detector */

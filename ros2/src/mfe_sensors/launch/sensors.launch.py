@@ -8,10 +8,6 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_sim = LaunchConfiguration('use_simulation')
-    declare_use_sim = DeclareLaunchArgument(
-        'use_simulation', 
-        default_value="true"
-    )
 
     sim_lidar_node = LifecycleNode(
         package='mfe_sensors', executable='sim_lidar_node',
@@ -54,6 +50,11 @@ def generate_launch_description():
             'node_names': real_sensor_nodes # list of nodes to manage
         }]
     ) 
+
+    declare_use_sim = DeclareLaunchArgument(
+        'use_simulation', 
+        default_value="true"
+    )
 
     return LaunchDescription([
         declare_use_sim,

@@ -11,13 +11,6 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # Loads argument "load_file" to determine whether to load with file
-    load_file_arg = DeclareLaunchArgument(
-        'load_file',
-        default_value='True',
-        description='Whether to launch the file loader node'
-    )
-
     load_file_value = LaunchConfiguration('load_file')
 
     file_loader_node_launch = IncludeLaunchDescription(
@@ -51,6 +44,12 @@ def generate_launch_description():
         remappings=[
             ("image/raw", "/fsds/cameracam1/image_color")
         ]
+    )
+
+    load_file_arg = DeclareLaunchArgument(
+        'load_file',
+        default_value='True',
+        description='Whether to launch the file loader node'
     )
 
     return LaunchDescription([

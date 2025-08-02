@@ -13,18 +13,6 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
 
-    load_file_arg = DeclareLaunchArgument(
-        'load_file',
-        default_value='False',
-        description='Whether to launch the file loader node'
-    )
-
-    sliding_window_arg = DeclareLaunchArgument(
-        'sliding_window_acc', 
-        default_value='False',
-        description="Whether to load lidar topics from AMZ Bag"
-    )
-
     load_file_value = LaunchConfiguration('load_file')
     sliding_window_value = LaunchConfiguration('sliding_window_acc')
 
@@ -94,6 +82,18 @@ def generate_launch_description():
             ])
         ])
     ) 
+
+    load_file_arg = DeclareLaunchArgument(
+        'load_file',
+        default_value='False',
+        description='Whether to launch the file loader node'
+    )
+
+    sliding_window_arg = DeclareLaunchArgument(
+        'sliding_window_acc', 
+        default_value='False',
+        description="Whether to load lidar topics from AMZ Bag"
+    )
 
     return LaunchDescription([
         load_file_arg,
