@@ -1,5 +1,9 @@
 #include <lidar_cone_detector/ground_plane_removal.hpp>
 
+// CUDA-PCL includes
+#include <cuda_runtime.h>
+#include <cudaSegmentation.h>
+
 namespace lidar_cone_detector {
     
 GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &options)
@@ -50,17 +54,22 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
         rclcpp_warn(this->get_logger(), "No points to parse");
         return;
     }
+    std::vector<float> flattenedPCL(pointCount * 3);
+    std::vector<int> indexArray(pointCount, 0);
 
-    float* flattenedPCL = new float[pointCount * 3];
-    int* indexArray = new int[pointCount];
+    float* d_cloud;
+    int* d_index;
+    cudaMalloc(&d_cloud, sizeof(float) * pointCount * 3);
+    cudaMalloc(&d_index, sizeof(int) * pointCount);
 
-    for (int i; i < pointCount; i++){
+    for (int i = 0; i < pointCount; i++){
         flattenedPCL[i*3 + 0] = downsampled_pcd->points[i].x;
         flattenedPCL[i*3 + 1] = downsampled_pcd->points[i].y;
         flattenedPCL[i*3 + 2] = downsampled_pcd->points[i].z;
-        index[i] = 0;
     }
 
+    cudaMemcpy(d_cloud, flattenedPCL.data(), sizeof(float) * pointCount * 3, cudaMemcpyHostToDevice);
+    cudaMemset(d_index, 0, sizeof(int) * pointCount);
 
     // CUDA Segmentation setup
     cudaStream_t stream = 0; // Use default stream
@@ -74,10 +83,14 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     setP.probability = 0.99;
     setP.optimizeCoefficients = true;
     cudaSeg.set(setP);
-    cudaSeg.segment(flattenedPCL, pointCount, indexArray, modelCoefficients);
+    cudaSeg.segment(d_cloud, pointCount, d_index, modelCoefficients);
+
+    cudaMemcpy(indexArray.data(), d_index, sizeof(int) * pointCount, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_cloud);
+    cudaFree(d_index);
 
     // logging coefficient data
-    if (modelCoefficients.size() >= 4) {
         rclcpp_info(
             this->get_logger(),
             "ransac plane coefficients: [a=%f, b=%f, c=%f, d=%f]",
@@ -86,24 +99,19 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
             modelCoefficients[2],
             modelCoefficients[3]
        );  // macro for logger
-    } else {
-        rclcpp_warn(this->get_logger(), "not enough coefficients returned by the segmenter.");
-    }
-
 
 
     // Extract inliers and outliers
-    pcl::ExtractIndices<pcl::PointXYZ> extract;
     pcl::PointCloud<pcl::PointXYZ>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
     for (int i = 0; i < pointCount; i++){
-        if (index[i] == 1){
+        if (indexArray[i] == 1){
             // This is when points are part of the ground
-            outlier_cloud->points.push_back(downsampled_pcd[i]);
+            outlier_cloud->points.push_back(downsampled_pcd->points[i]);
         } else {
             // Not part of ground plane
-            inlier_cloud->points.push_back(downsampled_pcd[i]);
+            inlier_cloud->points.push_back(downsampled_pcd->points[i]);
         }
     }
 
@@ -134,9 +142,6 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     this->point_cloud_objs_pub->publish(cones_output);
     point_cloud_ground_pub->publish(ground_output);
 
-
-    delete[] indexArray;
-    delete[] flattenedPCL; 
 
     // Perform visualization depending on if set in ROS params
     // WARNING: this does not work yet

@@ -12,6 +12,8 @@ find_package(rclpy REQUIRED)
 # eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
+find_package(PCL REQUIRED)
+find_package(CUDA REQUIRED)
 
 ament_auto_find_build_dependencies()
 
@@ -33,7 +35,21 @@ ament_auto_add_executable(file_loader
   src/file_loader.cpp
 )
 
-target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
+target_include_directories(ground_plane_removal PRIVATE
+  ${PCL_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
+
+target_link_libraries(ground_plane_removal
+  ${PCL_LIBRARIES}
+  ${CUDA_LIBRARIES}   # usually cudart
+)
+
+set_target_properties(ground_plane_removal PROPERTIES
+  CXX_STANDARD 17
+  CUDA_STANDARD 14
+)
 
 ament_python_install_package(${PROJECT_NAME})
 
