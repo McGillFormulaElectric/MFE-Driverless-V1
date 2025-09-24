@@ -55,11 +55,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-cv-bridge \
     ros-humble-foxglove-bridge \
     ros-humble-navigation2 \
-    ros-humble-nav2_bringup \
+    ros-humble-nav2-bringup \
     ros-humble-slam-toolbox \
     ros-humble-pointcloud-to-laserscan \
-    && rm -rf /var/lib/apt/lists/*
-
+    ros-humble-rviz2 \
+    && rm -rf /var/lib/apt/lists/*    
 RUN apt-get clean
 
 RUN pip3 -V
@@ -70,10 +70,14 @@ RUN pip3 install -U \
     scikit-learn \ 
     ultralytics    
 
+# Switch to non-root user
+USER $USERNAME
+WORKDIR /home/$USERNAME
+
 # Source the ROS 2 setup file
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/ros/.bashrc
 
 ENV DISPLAY=:0
 
-# Default command
+# --- Default shell ---
 CMD ["/bin/bash"]

@@ -55,7 +55,7 @@ class CarMaker():
         # previous subscribed
         msg = ""
         for q in self.quantities:
-            if msg is "":
+            if msg == "":
                 msg = q.name
             else:
                 msg += " " + q.name

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8s)
+cmake_minimum_required(VERSION 3.8)
 project(mfe_simulation)
 
 # Default to C99
@@ -20,22 +20,13 @@ find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(sensor_msg REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 ament_auto_find_build_dependencies()
 
-ament_auto_add_executable(mfe_simulation_bin
-  mfe_simulation/carmake_node.py
-)
-
-ament_auto_add_library(mfe_simulation_lib
-  mfe_simulation/carmaker_interface.py
-)
-
 # Install Python executable scripts
-install(TARGETS
-  mfe_simulation_bin
-  mfe_simulation_lib
+install(PROGRAMS
+  mfe_simulation/carmaker_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -65,4 +56,4 @@ endif()
 
 # install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
-ament_auto_package()
+# ament_auto_package() # Add back if needed for C++ components
