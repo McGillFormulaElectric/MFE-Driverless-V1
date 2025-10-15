@@ -10,6 +10,7 @@ ROS_INSTALL=/opt/ros/$ROS_DISTRO/setup.bash
 declare -A options=(
   ["1"]="vision_cone_detector vision_pipeline.launch.py"
   ["2"]="lidar_cone_detector lidar_pipeline.launch.py"
+  ["3"]="mfe_eufs_sim mfe_eufs_sim.launch.py"
   # add or remove entries as needed...
 )
 # —————————————————
@@ -63,7 +64,16 @@ set +u
 source "$WS_ROOT/install/setup.bash"
 set -u
 
-# 5) Show launch menu
+# 5) Ask if sample data should be streamed
+echo -e "\n=== Stream Sample Data ==="
+read -rp "Stream sample data? [Y/N]: " stream_choice
+if [[ "$stream_choice" =~ ^[Yy]$ ]]; then
+  load_file_arg="load_file:=True"
+else
+  load_file_arg="load_file:=False"
+fi
+
+# 6) Show launch menu
 echo -e "\n=== Select a launch file to run ==="
 for key in "${!options[@]}"; do
   pkg_and_file=(${options[$key]})
@@ -72,11 +82,11 @@ done
 
 read -rp "Enter launch choice: " choice
 
-# 6) Launch
+# 7) Launch
 if [[ -n "${options[$choice]:-}" ]]; then
   pkg_and_file=(${options[$choice]})
-  echo -e "\nLaunching ➜ ros2 launch ${pkg_and_file[0]} ${pkg_and_file[1]}\n"
-  ros2 launch "${pkg_and_file[0]}" "${pkg_and_file[1]}"
+  echo -e "\nLaunching ➜ ros2 launch ${pkg_and_file[0]} ${pkg_and_file[1]} ${load_file_arg}\n"
+  ros2 launch "${pkg_and_file[0]}" "${pkg_and_file[1]}" "${load_file_arg}"
 else
   echo "Invalid choice: '$choice'" >&2
   exit 1
