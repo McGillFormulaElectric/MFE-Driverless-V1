@@ -88,17 +88,6 @@ class LiDARConeNode(Node):
             return [], np.empty((0, 3))
 
         # apply DBSCAN clustering
-        # dbscan = DBSCAN(
-        #   eps=self.epsilon, 
-        #   min_samples=self.cluster_min_samples, 
-        #   metric="euclidean", 
-        #   n_jobs=2
-        # )
-        # dbscan = DBSCAN(eps=0.5, min_samples=2, metric="euclidean", n_jobs=2)
-        # clusters = dbscan.fit(points) # params to be changed based on cone specs
-        # labels = clusters.labels_
-        # self.get_logger().debug(f"Labels: {labels}")
-
         db = DBSCAN(eps=float(self.epsilon), min_samples=int(self.cluster_min_samples),
                     metric="euclidean", n_jobs=2).fit(pts)
         labels = db.labels_
@@ -247,6 +236,7 @@ class LiDARConeNode(Node):
 
             # Publish each cone individually, create Track message
             for centre in cone_locations:
+                # TODO: determine cone color/type
                 cone_msg = self.create_cone_msg(float(centre[0]), float(centre[1]), float(centre[2]), 0)
 
                 # if Cone type needs header/frame, add that here (depends on message definition)
