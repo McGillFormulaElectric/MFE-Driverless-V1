@@ -39,11 +39,21 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            {"model_path": model_path }
+            {"model_path": model_path },
+            {"depth_callback": LaunchConfiguration('depth_callback')}
         ],
-        remappings=[
-            ("image/raw", "/fsds/cameracam1/image_color")
-        ]
+        # OLD: remappings=[
+        #     ("image/raw", "/fsds/cameracam1/image_color")
+        # ]
+    )
+
+    #TEMP Static TF Broadcaster for Camera to Map Frame (rviz visualization)
+    static_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_tf_pub',
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'map', 'camera'],
+        output='screen'
     )
 
     load_file_arg = DeclareLaunchArgument(
@@ -52,8 +62,16 @@ def generate_launch_description():
         description='Whether to launch the file loader node'
     )
 
+    depth_callback_arg = DeclareLaunchArgument(
+        'depth_callback',
+        default_value='False',
+        description='Whether to launch the depth callback in the cone detection node - is depth a subscribable topic?'
+    )
+
     return LaunchDescription([
         load_file_arg,
+        depth_callback_arg,
         file_loader_node_launch,
-        cone_detection_node 
+        cone_detection_node,
+        static_tf_node
     ])
