@@ -8,6 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.actions import TimerAction
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -34,15 +35,15 @@ def generate_launch_description():
         name='lidar_preprocessor',
         executable='lidar_preprocessor',
         parameters=[
-            {'lidar_frame': 'fsds/Lidar1'}
+            # {'lidar_frame': 'lidar_base'} # basic lidar frame
         ],
-        remappings=[
-            ('pcl/raw', '/mfe_sensors/lidar/data')
-        ],
+        # remappings=[
+        # Old remapping: ('pcl/raw', '/mfe_sensors/lidar/data')
+        # ],
         condition=IfCondition(sliding_window_value)
     )
 
-    # RANSAC Ground Plane Removal after downsampling
+    # RANSAC Ground Plane Removal after downsampling in preprocessor 
     ground_plane_removal_node = Node(
         package='lidar_cone_detector',
         namespace='lidar',
@@ -52,11 +53,9 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            {'lidar_frame': 'fsds/Lidar1'}
+            # {'lidar_frame': 'lidar_base'}, # basic lidar frame
         ],
-        remappings=[
-            ('pcl/input', '/mfe_sensors/lidar/data') # Remap to pcl/acc_cloud if using sliding win.
-        ]
+        # Old remapping: ('pcl/input', '/mfe_sensors/lidar/data'), # Remap to pcl/acc_cloud if using sliding win.
     )
 
     # DBSCAN Unsupervised Point Clustering for Cone Detection
@@ -64,13 +63,14 @@ def generate_launch_description():
         package='lidar_cone_detector',
         namespace='lidar',
         name='cone_detector_node',
-        executable='cone_detector_node.py',
+        executable='cone_detector_node',
         output='screen',
         emulate_tty=True,
         arguments=[
             '--verbose'
         ]
     )
+
 
     # Convert to LaserScan for use in 2D Ceres Solver slam_toolbox (Graph-SLAM based)
     launch_pc_to_ls = IncludeLaunchDescription(
@@ -82,6 +82,16 @@ def generate_launch_description():
             ])
         ])
     ) 
+
+    # OLD Static TF Broadcaster for Lidar to Map Frame (rviz visualization)
+    # static_tf_node = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     name='lidar_tf_pub',
+    #     arguments=['0', '0', '0', '0', '0', '0', '1', 'map', 'velodyne'],
+    #     output='screen'
+    # )
+
 
     load_file_arg = DeclareLaunchArgument(
         'load_file',
@@ -101,6 +111,6 @@ def generate_launch_description():
         file_loader_node,
         sliding_window_preprocessor_node, 
         ground_plane_removal_node,
-        # cone_detector_node,
-        launch_pc_to_ls
+        cone_detector_node,
+        launch_pc_to_ls,
     ])

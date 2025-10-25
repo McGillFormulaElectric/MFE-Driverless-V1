@@ -28,7 +28,7 @@ class EufsSimBridge(Node):
 
         # # publishers for MFE Driverless perception
         self.camera_pub = self.create_publisher(Image, '/camera/image/raw', qos_reliable)
-        self.lidar_pub = self.create_publisher(PointCloud2, '/lidar/points/raw', qos_reliable)
+        self.lidar_pub = self.create_publisher(PointCloud2, '/lidar/pcl/raw', qos_reliable)
 
     def camera_callback(self, msg):
         self.camera_pub.publish(msg)

@@ -41,6 +41,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/cone_detector_node.py
   DESTINATION lib/${PROJECT_NAME}
+  RENAME cone_detector_node
 )
 
 install(DIRECTORY

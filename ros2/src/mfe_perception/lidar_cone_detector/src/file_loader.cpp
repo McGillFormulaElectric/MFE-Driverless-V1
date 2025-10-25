@@ -9,15 +9,15 @@ FileLoaderNode::FileLoaderNode(const rclcpp::NodeOptions &options)
 {
     using rclcpp::QoS;
     using rclcpp::ReliabilityPolicy;
+    using rclcpp::SensorDataQoS;
 
     this->initialize_params();
 
-    //rclcpp::QoS qos_profile = QoS(rclcpp::KeepLast(10)).reliability(ReliabilityPolicy::BestEffort);
-    rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
-
-
+    // sensor data QoS to match real input streams
+    rclcpp::QoS qos_profile = rclcpp::SensorDataQoS().keep_last(10).reliable();
+ 
     this->point_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "lidar/pcl/raw", 
+        "lidar/pcl/input", 
         qos_profile
     );
 
@@ -110,7 +110,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FileLoaderNode::load_bin_pointcloud(const st
             pcl_point.y = eigen_point[1];
             pcl_point.z = eigen_point[2];
             cloud->push_back(pcl_point);
-            RCLCPP_INFO(this->get_logger(), "Loaded point: %6.2f %6.2f %6.2f", pcl_point.x, pcl_point.y, pcl_point.z);
+            // RCLCPP_INFO(this->get_logger(), "Loaded point: %6.2f %6.2f %6.2f", pcl_point.x, pcl_point.y, pcl_point.z);
         }
     }
     return cloud;

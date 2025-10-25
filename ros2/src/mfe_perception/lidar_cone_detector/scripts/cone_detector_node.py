@@ -9,8 +9,6 @@ def main(args=None):
 
     node = LiDARConeNode()
 
-    rclpy.spin(node)  # Block until Ctrl+C
-
     try:
         rclpy.spin(node)  # Block until Ctrl+C
     except KeyboardInterrupt:
