@@ -40,20 +40,12 @@ def generate_launch_description():
         parameters=[
             {"run_visualization": False},
             {"model_path": model_path },
-            {"depth_callback": LaunchConfiguration('depth_callback')}
+            {"depth_callback": LaunchConfiguration('depth_callback')},
+            {'camera_frame': 'camera_base'}, # basic camera frame
         ],
         # OLD: remappings=[
         #     ("image/raw", "/fsds/cameracam1/image_color")
         # ]
-    )
-
-    #TEMP Static TF Broadcaster for Camera to Map Frame (rviz visualization)
-    static_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_tf_pub',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'map', 'camera'],
-        output='screen'
     )
 
     load_file_arg = DeclareLaunchArgument(
@@ -73,5 +65,4 @@ def generate_launch_description():
         depth_callback_arg,
         file_loader_node_launch,
         cone_detection_node,
-        static_tf_node
     ])

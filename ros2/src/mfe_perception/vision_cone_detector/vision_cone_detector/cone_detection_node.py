@@ -32,6 +32,11 @@ class ConeDetectionNode(Node):
             durability=DurabilityPolicy.VOLATILE
         )
 
+        self.declare_parameter('depth_callback', False)
+        self.declare_parameter('camera_frame', 'camera_base')
+
+        self.camera_frame = self.get_parameter("camera_frame").value
+
         # Declare and get model path parameter
         self.declare_parameter("model_path", "yolov8n.pt")  # default to yolov8n.pt it none found
         self.model_path = self.get_parameter("model_path").value
@@ -51,10 +56,8 @@ class ConeDetectionNode(Node):
         # Constructs queue for frame generation
         self.frame_queue = queue.Queue(maxsize=10)
 
-        self.declare_parameter("depth_callback", False)
-
         # subscribers
-        self.create_subscription(Image, "image/raw", self.callback, qos_profile)
+        self.create_subscription(Image, "image/input", self.callback, qos_profile)
 
         if self.get_parameter("depth_callback").value:
             self.create_subscription(Image, "image/depth", self.depth_callback, qos_profile) # exists if depth camera provides it 
@@ -285,14 +288,14 @@ class ConeDetectionNode(Node):
         if len(centres) > 0:
             pts_centres = np.array(centres, dtype=np.float32)
             cols_centres = np.array(centre_colors, dtype=np.uint8)
-            centres_msg = self.make_pointcloud2(pts_centres, cols_centres, frame_id='camera')
+            centres_msg = self.make_pointcloud2(pts_centres, cols_centres)
             self.centres_point_publisher.publish(centres_msg)
         else:
             # publish empty centres cloud
             empty = PointCloud2()
             empty.header = Header()
             empty.header.stamp = self.get_clock().now().to_msg()
-            empty.header.frame_id = 'camera'
+            empty.header.frame_id = self.camera_frame
             empty.width = 0
             empty.height = 1
             empty.is_dense = False
@@ -312,7 +315,7 @@ class ConeDetectionNode(Node):
                 cmsg = Cone()
                 # header
                 cmsg.header.stamp = now
-                cmsg.header.frame_id = 'camera'
+                cmsg.header.frame_id = self.camera_frame
                 # location uses geometry_msgs/Point
                 loc = Point()
                 loc.x = float(cx)
@@ -348,8 +351,8 @@ class ConeDetectionNode(Node):
             self.get_logger().error(f"Failed to build/publish Track msg: {e}")
 
         return
-    
-    def make_pointcloud2(self, points: np.ndarray, colors: np.ndarray, frame_id: str = 'camera') -> PointCloud2:
+
+    def make_pointcloud2(self, points: np.ndarray, colors: np.ndarray) -> PointCloud2:
         """
         Build a sensor_msgs/PointCloud2 from numpy arrays.
         points: Nx3 float32 (x, y, z) - here x,y are pixel coordinates, z is depth in meters (or nan)
@@ -359,7 +362,7 @@ class ConeDetectionNode(Node):
             empty = PointCloud2()
             empty.header = Header()
             empty.header.stamp = self.get_clock().now().to_msg()
-            empty.header.frame_id = frame_id
+            empty.header.frame_id = self.camera_frame
             empty.width = 0
             empty.height = 1
             empty.is_dense = False
@@ -397,7 +400,7 @@ class ConeDetectionNode(Node):
 
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = frame_id
+        header.frame_id = self.camera_frame
 
         fields = [
             PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),

@@ -31,12 +31,15 @@ class EufsSimBridge(Node):
         self.lidar_pub = self.create_publisher(PointCloud2, '/lidar/pcl/input', qos_reliable)
 
     def camera_callback(self, msg):
-        self.camera_pub.publish(msg)
+        i_msg = msg
+        i_msg.header.frame_id = msg.header.frame_id
+
+        self.camera_pub.publish(i_msg)
 
     def lidar_callback(self, msg):
         pc_msg = msg
         pc_msg.header.frame_id = msg.header.frame_id
-        
+
         self.lidar_pub.publish(pc_msg)
 
 def main(args=None):
