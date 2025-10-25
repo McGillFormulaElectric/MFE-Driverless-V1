@@ -8,7 +8,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.actions import TimerAction
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -53,7 +52,7 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            # {'lidar_frame': 'lidar_base'}, # basic lidar frame
+            {'lidar_frame': 'lidar_base'}, # basic lidar frame
         ],
         # Old remapping: ('pcl/input', '/mfe_sensors/lidar/data'), # Remap to pcl/acc_cloud if using sliding win.
     )
@@ -71,7 +70,6 @@ def generate_launch_description():
         ]
     )
 
-
     # Convert to LaserScan for use in 2D Ceres Solver slam_toolbox (Graph-SLAM based)
     launch_pc_to_ls = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -83,15 +81,24 @@ def generate_launch_description():
         ])
     ) 
 
-    # OLD Static TF Broadcaster for Lidar to Map Frame (rviz visualization)
-    # static_tf_node = Node(
-    #     package='tf2_ros',
-    #     executable='static_transform_publisher',
-    #     name='lidar_tf_pub',
-    #     arguments=['0', '0', '0', '0', '0', '0', '1', 'map', 'velodyne'],
-    #     output='screen'
-    # )
+    # transform detected cones to universal frame
+    cone_transformer_node = Node(
+        package='lidar_cone_detector',
+        namespace='lidar',
+        name='cone_transformer_node',
+        executable='cone_transformer_node',
+        output='screen',
+        parameters=[
+            {'target_frame': 'universal'}, # temp target frame
+        ]
+    )
 
+    lidar_tf_broadcaster_node = Node(
+        package='lidar_cone_detector',
+        namespace='lidar',
+        name='lidar_tf_broadcaster_node',
+        executable='lidar_tf_broadcaster'
+    )
 
     load_file_arg = DeclareLaunchArgument(
         'load_file',
@@ -112,5 +119,7 @@ def generate_launch_description():
         sliding_window_preprocessor_node, 
         ground_plane_removal_node,
         cone_detector_node,
-        launch_pc_to_ls,
+        # cone_transformer_node, # FOR SOME REASON THIS LOADS THE FILE. NO IDEA
+        # lidar_tf_broadcaster_node,
+        # launch_pc_to_ls,
     ])

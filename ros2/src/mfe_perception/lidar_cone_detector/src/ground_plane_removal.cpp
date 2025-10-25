@@ -5,7 +5,7 @@ namespace lidar_cone_detector {
 GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &options)
 : Node("ground_plane_removal_node", options)
 {
-    this->declare_parameter("lidar_frame", "base_link");
+    // this->declare_parameter("lidar_frame", "map");
     this->lidar_frame = this->get_parameter("lidar_frame").as_string();
 
     rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
