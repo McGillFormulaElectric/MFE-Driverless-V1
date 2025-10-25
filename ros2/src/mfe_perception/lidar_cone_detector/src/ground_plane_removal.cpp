@@ -100,25 +100,23 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     extract.setInputCloud(downsampled_pcd);
     extract.setIndices(inliers);
     extract.setNegative(false);
-    extract.filter(*outlier_cloud);
-    extract.setNegative(true);
-    extract.filter(*inlier_cloud);
+    extract.filter(*inlier_cloud); // inliers: ground plane
+    extract.setNegative(true); 
+    extract.filter(*outlier_cloud); // outliers: everything else
 
     // Output processed data and publish to topics
     sensor_msgs::msg::PointCloud2 cones_output;
     sensor_msgs::msg::PointCloud2 ground_output;
 
-    pcl::toROSMsg(*inlier_cloud, cones_output);
-    pcl::toROSMsg(*outlier_cloud, ground_output);
+    pcl::toROSMsg(*outlier_cloud, cones_output);
+    pcl::toROSMsg(*inlier_cloud, ground_output);
 
-    // Set times and frame_ids
-    cones_output.header.frame_id = this->lidar_frame; 
-    cones_output.header.stamp = this->get_clock()->now();
-    ground_output.header.frame_id = this->lidar_frame;
-    ground_output.header.stamp = this->get_clock()->now();
+    // Set times and frame_ids, same as incoming msg
+    cones_output.header = msg->header;
+    ground_output.header = msg->header;
 
     this->point_cloud_objs_pub->publish(cones_output);
-    point_cloud_ground_pub->publish(ground_output);
+    this->point_cloud_ground_pub->publish(ground_output);
 
 }   // void remove_ground_plane_callback
 
