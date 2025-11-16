@@ -1,4 +1,4 @@
-#include <lidar_cone_detector/ground_plane_removal.hpp>
+#include "../include/lidar_cone_detector/ground_plane_removal.hpp"
 
 namespace lidar_cone_detector {
     

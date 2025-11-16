@@ -23,10 +23,11 @@ class LiDARConeNode(Node):
 
         self.get_logger().info("Cone detector node initialized and spinning...")
 
+        # set up quality of service profile
         qos_profile = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE
+            depth=10, # keep last 10 messages
+            reliability=ReliabilityPolicy.RELIABLE, # ensure all messages are received, retry if lost
+            durability=DurabilityPolicy.VOLATILE # do not store and redistribute messages for late-joining subscribers
         )
 
         # subscribe to the outputs of the ground removal script
