@@ -15,6 +15,8 @@ LidarPreprocessor::LidarPreprocessor(const rclcpp::NodeOptions &options)
 
     vg_.setLeafSize(0.02f, 0.02f, 0.02f);
 
+  full_scan_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
     this->last_theta = 0;
 }
 
@@ -25,6 +27,7 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     // Add to sliding window
     for (auto &p: *pcl_cloud) {
+        full_scan_->points.push_back(p);
         // Obtain the azimuth of the scan
         double theta = std::atan2(p.x, p.y) * 180.0 / M_PI;
 
@@ -39,7 +42,8 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
             pcl::toROSMsg(*filtered, out_cloud);
 
             full_scan_->clear();    // clear the buffer
-
+            full_scan_->width = 0;
+            full_scan_->height = 0;
             out_cloud.header.frame_id = "map";
             out_cloud.header.stamp = scan->header.stamp;
             acc_pub_->publish(out_cloud);

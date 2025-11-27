@@ -62,7 +62,7 @@ def generate_launch_description():
         package='lidar_cone_detector',
         namespace='lidar',
         name='cone_detector_node',
-        executable='cone_detector_node',
+        executable='detected_cones',
         output='screen',
         emulate_tty=True,
         arguments=[

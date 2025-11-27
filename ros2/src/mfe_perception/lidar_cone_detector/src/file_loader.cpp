@@ -69,7 +69,7 @@ void FileLoaderNode::stream_test_pointcloud() {
     sensor_msgs::msg::PointCloud2 msg;
     pcl::toROSMsg(*point_cloud, msg);
 
-    msg.header.frame_id = "map";
+    msg.header.frame_id = "lidar_base";
     msg.header.stamp = this->now();
 
     this->point_cloud_pub->publish(msg);

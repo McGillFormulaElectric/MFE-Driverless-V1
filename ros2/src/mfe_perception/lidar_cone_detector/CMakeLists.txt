@@ -34,15 +34,18 @@ ament_auto_add_executable(file_loader
   src/file_loader.cpp
 )
 
+ament_auto_add_executable(detected_cones
+  src/cone_detector.cpp
+)
 target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
 ament_python_install_package(${PROJECT_NAME})
 
-install(PROGRAMS
-  scripts/cone_detector_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME cone_detector_node
-)
+# install(PROGRAMS
+#   scripts/cone_detector_node.py
+#   DESTINATION lib/${PROJECT_NAME}
+#   RENAME cone_detector_node
+# )
 
 install(DIRECTORY
   launch

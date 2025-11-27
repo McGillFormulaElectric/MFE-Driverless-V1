@@ -220,8 +220,8 @@ class LiDARConeNode(Node):
 
             # FILTER: removes the non-cone clusters
             # OPTIONAL: further filter clusters to cones
-            # cone_clusters, cone_locations = self.filter_cones(objects, object_centres)
-            cone_clusters, cone_locations = objects, object_centres # no filtering for now for dev, parameters must be tuned
+            cone_clusters, cone_locations = self.filter_cones(objects, object_centres)
+            # cone_clusters, cone_locations = objects, object_centres # no filtering for now for dev, parameters must be tuned
 
             if cone_locations.size != 0:
                 centres_msg = self.make_pointcloud2_from_xyz(np.asarray(cone_locations), msg.header.frame_id, msg.header.stamp)
