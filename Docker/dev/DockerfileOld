@@ -1,19 +1,8 @@
-FROM althack/ros2:humble-dev AS base-amd64
-ENV PLATFORM_TYPE="desktop"
+FROM althack/ros2:humble-dev
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    nvidia-cuda-toolkit \
-    python3-torch \
-    && rm -rf /var/lib/apt/lists/*
-
-FROM dustynv/ros:humble-pytorch-l4t-r35.2.1 AS base-arm64
-ENV PLATFORM_TYPE="jetson"
-
-
+# Install prerequisite packages for other packages to build
 RUN sudo apt clean
 
-ARG TARGETARCH
-FROM base-${TARGETARCH} AS final
 # Set up the environment
 ENV ROS_DISTRO=humble
 ENV ROS_INSTALL=/opt/ros/$ROS_DISTRO/setup.bash
@@ -69,8 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-nav2-bringup \
     ros-humble-slam-toolbox \
     ros-humble-pointcloud-to-laserscan \
-    && rm -rf /var/lib/apt/lists/*
-
+    ros-humble-rviz2 \
+    && rm -rf /var/lib/apt/lists/*    
 RUN apt-get clean
 
 RUN pip3 -V
@@ -81,12 +70,14 @@ RUN pip3 install -U \
     scikit-learn \ 
     ultralytics    
 
-WORKDIR /ros2_ws
+# Switch to non-root user
+USER $USERNAME
+WORKDIR /home/$USERNAME
 
 # Source the ROS 2 setup file
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/ros/.bashrc
 
 ENV DISPLAY=:0
 
-# Default command
+# --- Default shell ---
 CMD ["/bin/bash"]
