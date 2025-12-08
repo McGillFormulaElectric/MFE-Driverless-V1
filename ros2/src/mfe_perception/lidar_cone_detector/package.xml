@@ -4,12 +4,14 @@
   <name>lidar_cone_detector</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="albert@todo.todo">albert</maintainer>
+  <maintainer email="neil.joegeorge@mail.mcgil.ca">Neil Joe George</maintainer>
   <license>GPL-3.0-only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
+  <build_depend>eigen3_cmake_module</build_depend>
+  
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>vision_msgs</depend>
@@ -23,17 +25,14 @@
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
   <depend>pointcloud_to_laserscan</depend>
+  <depend>cuPCL</depend>
 
   <depend>rclpy</depend>
   <depend>python3-sklearn</depend>
+  <depend>python3-numpy</depend>
 
-  <exec_depend>libpcl-common</exec_depend>
-  <exec_depend>libpcl-features</exec_depend>
-  <exec_depend>libpcl-filters</exec_depend>
-  <exec_depend>libpcl-io</exec_depend>
-  <exec_depend>libpcl-segmentation</exec_depend>
-  <exec_depend>libpcl-surface</exec_depend>
-  <exec_depend>libpcl-visualization</exec_depend>
+  <build_depend>libpcl-all-dev</build_depend>
+  <exec_depend>libpcl-all</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
