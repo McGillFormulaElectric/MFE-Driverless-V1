@@ -1,0 +1,32 @@
+version: "3.9"
+services:
+  tailscaled:
+    build: 
+        context: ..
+        dockerfile: dev/Dockerfile
+    volumes:
+      - ./lib:/var/lib
+      - /dev/net/tun:/dev/net/tun
+      - ./shared:/root/shared
+    hostname: driverless1
+    privileged: true
+    environment:
+      - DOCKERKEY_PERM
+      - TS_ROUTES=10.0.0.0/8
+      - TS_USERSPACE=0
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_HOSTNAME=driverless1
+    cap_add: 
+      - NET_ADMIN
+      - NET_RAW
+    command:
+      - bash
+      - -c
+      - |
+        tailscaled &
+        tailscale up --authkey $${DOCKERKEY_PERM} &&
+        source /opt/ros/humble/setup.bash &&
+        # We use double quotes "..." here so $(hostname) actually runs
+        ros2 topic pub /chatter std_msgs/msg/String "{data: \"Host: $(hostname)\"}"
+    restart: unless-stopped
+
