@@ -17,19 +17,23 @@ ConeDetectorNode::ConeDetectorNode(const rclcpp::NodeOptions& options)
 : rclcpp::Node("cone_detector_node", options) {
   // Declare/get params
   this->declare_parameter<double>("dbscan_epsilon", 0.5);
-  this->declare_parameter<int>("dbscan_cluster_min_samples", 3);
+  this->declare_parameter<int>("dbscan_cluster_min_samples", 8);
   this->get_parameter("dbscan_epsilon", eps_);
   this->get_parameter("dbscan_cluster_min_samples", min_pts_);
 
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+  auto qos_cloud = rclcpp::SensorDataQoS(); // best-effort, small depth
 
   sub_cloud_   = this->create_subscription<PointCloud2>(
-    "pcl/objects", qos, std::bind(&ConeDetectorNode::onCloud, this, std::placeholders::_1));
+    "pcl/objects", qos_cloud,
+    std::bind(&ConeDetectorNode::onCloud, this, std::placeholders::_1));
 
-  pub_clusters_ = this->create_publisher<PointCloud2>("pcl/objects2", qos);
-  pub_centres_  = this->create_publisher<PointCloud2>("pcl/cone_centres", qos);
-  pub_cone_     = this->create_publisher<mfe_msgs::msg::Cone>("pcl/cones", qos);
-  pub_track_    = this->create_publisher<mfe_msgs::msg::Track>("pcl/track", qos);
+  pub_clusters_ = this->create_publisher<PointCloud2>("pcl/objects2", qos_cloud); // clustered points of cones
+  pub_centres_  = this->create_publisher<PointCloud2>("pcl/cone_centres", qos_cloud);
+
+  // Keep cones/track as RELIABLE if another node consumes them; for RViz-only, SensorDataQoS is fine too.
+
+  pub_cone_     = this->create_publisher<mfe_msgs::msg::Cone>("pcl/cones", qos_cloud);
+  pub_track_    = this->create_publisher<mfe_msgs::msg::Track>("pcl/track", qos_cloud);
 
   RCLCPP_INFO(this->get_logger(), "cone_detector_node up");
 }
@@ -40,6 +44,9 @@ void ConeDetectorNode::onCloud(const PointCloud2::SharedPtr msg) {
   pcl::fromROSMsg(*msg, cloud);
   std::vector<int> idx; pcl::removeNaNFromPointCloud(cloud, cloud, idx);
   if (cloud.empty()) return;
+  
+  //debug
+  RCLCPP_INFO(this->get_logger(), "Received cloud with %zu points", cloud.size());
 
   // cluster
   std::vector<std::vector<int>> clusters;
@@ -66,9 +73,8 @@ void ConeDetectorNode::onCloud(const PointCloud2::SharedPtr msg) {
   }
   pub_track_->publish(track);
 
-  // debug clouds
-  if (!all_pts.empty()) { PointCloud2 out; pcl::toROSMsg(all_pts, out); out.header = msg->header; pub_clusters_->publish(out); }
-  if (!centres.empty()) { PointCloud2 out; pcl::toROSMsg(centres, out); out.header = msg->header; pub_centres_->publish(out); }
+  publishDebugClouds(all_pts, centres, msg->header);
+
 }
 
 void ConeDetectorNode::clusterPoints_DBSCAN(
@@ -111,14 +117,17 @@ void ConeDetectorNode::publishDebugClouds(
     const pcl::PointCloud<pcl::PointXYZ>& all_cluster_pts,
     const pcl::PointCloud<pcl::PointXYZ>& centres,
     const std_msgs::msg::Header& header) {
-  if (!all_cluster_pts.empty()) {
+  // if (!all_cluster_pts.empty()) {
     PointCloud2 out; pcl::toROSMsg(all_cluster_pts, out); out.header = header;
     pub_clusters_->publish(out);
-  }
-  if (!centres.empty()) {
+  // }
+  // if (!centres.empty()) {
     PointCloud2 out; pcl::toROSMsg(centres, out); out.header = header;
     pub_centres_->publish(out);
-  }
+  // }
+  // // Debug output
+  // RCLCPP_INFO(this->get_logger(), "Published %zu cluster points and %zu centres",
+  //             all_cluster_pts.size(), centres.size());
 }
 
 } // namespace lidar_cone_detector

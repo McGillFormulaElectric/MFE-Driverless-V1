@@ -74,7 +74,7 @@ void FileLoaderNode::stream_test_pointcloud() {
 
     this->point_cloud_pub->publish(msg);
 
-    RCLCPP_INFO(this->get_logger(), "Published point cloud from file: %s", file_path.c_str());
+    // RCLCPP_INFO(this->get_logger(), "Published point cloud from file: %s", file_path.c_str());
 
     current_file_index_ = (current_file_index_ + 1) % binary_files_.size();
 }

@@ -21,7 +21,7 @@ GroundPlaneRemovalNode::GroundPlaneRemovalNode(const rclcpp::NodeOptions &option
     );
     point_cloud_objs_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "pcl/objects",
-        qos_profile
+        rclcpp::SensorDataQoS() // Match to subscription
     );
 
     // params defined in header file
@@ -33,12 +33,25 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     pcl::PointCloud<pcl::PointXYZ>::Ptr pcd(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *pcd);
 
-    // TODO: filter remove all points beyond a certain distance from the origin
+
+    std::vector<int> idx;
+    pcl::removeNaNFromPointCloud(*pcd, *pcd, idx);
+
+    // ROI crop 
+    pcl::PassThrough<pcl::PointXYZ> pass;
+    pass.setInputCloud(pcd);
+
+    pass.setFilterFieldName("x"); pass.setFilterLimits(0.0f, 60.0f); pass.filter(*pcd);
+    pass.setFilterFieldName("y"); pass.setFilterLimits(-20.0f, 20.0f); pass.filter(*pcd);
+    pass.setFilterFieldName("z"); pass.setFilterLimits(-2.0f, 3.0f);  pass.filter(*pcd);
+    // // TODO: filter remove all points beyond a certain distance from the origin
 
     // Voxel downsampling    
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(pcd);
-    sor.setLeafSize(0.05f, 0.05f, 0.05f); // sets box size in which will only contain 1 point
+    float leaf = 0.08f; // tune downwards later
+
+    sor.setLeafSize(leaf, leaf, leaf); // sets box size in which will only contain 1 point
     // can change how many points are in each box with setMinimumPointsNumberPerVoxel
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_pcd(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*downsampled_pcd);
@@ -68,7 +81,8 @@ void GroundPlaneRemovalNode::remove_ground_plane_callback(const sensor_msgs::msg
     seg.setOptimizeCoefficients(true);
     seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
     seg.setMethodType(pcl::SAC_RANSAC);
-    seg.setAxis(Eigen::Vector3f(0, 0, 1)); // Forces a horizontal plane
+    seg.setAxis(Eigen::Vector3f(0.f, 0.f, 1.f));      // prefer planes ~parallel to XY
+    seg.setEpsAngle(pcl::deg2rad(10.0f));             // allow ±10° tilt (tune)
     seg.setMaxIterations(100);
     seg.setDistanceThreshold(0.03);
     seg.setInputCloud(downsampled_pcd);
