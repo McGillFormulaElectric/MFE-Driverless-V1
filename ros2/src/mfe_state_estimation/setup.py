@@ -8,7 +8,7 @@ setup(
     name=package_name,
     version='0.0.0',
     # Packages to export
-    packages=[package_name],
+    packages=[package_name, package_name + '.filters'],
     # Files we want to install, specifically launch files
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -38,6 +38,8 @@ setup(
     # Like the CMakeLists add_executable macro, you can add your python
     # scripts here.
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'extended_kalman_filter_node = mfe_state_estimation.extended_kalman_filter_node:main',
+        ],
     },
 )

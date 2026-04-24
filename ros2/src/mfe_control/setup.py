@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'mfe_path_planning'
+package_name = 'mfe_control'
 
 setup(
     name=package_name,
@@ -15,13 +15,12 @@ setup(
     zip_safe=True,
     maintainer='ros',
     maintainer_email='fsae@mail.mcgill.ca',
-    description='McGill Formula Electric Driverless Path Planning Software Package',
+    description='McGill Formula Electric Driverless Control Software Package',
     license='GPL-3.0-only',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'boundary_extractor = mfe_path_planning.boundary_extractor:main',
-            'path_planner_node = mfe_path_planning.path_planner_node:main',
+            'pure_pursuit_node = mfe_control.pure_pursuit_node:main',
         ],
     },
 )

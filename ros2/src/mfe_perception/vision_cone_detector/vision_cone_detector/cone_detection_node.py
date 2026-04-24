@@ -8,11 +8,13 @@ import queue
 
 from typing import Generator
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from ultralytics import YOLO
 
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -24,7 +26,7 @@ from mfe_msgs.msg import Cone, Track
 class ConeDetectionNode(Node):
 
     def __init__(self):
-        super().__init__("camera_cone_node")
+        super().__init__("cone_detection_node")
 
         qos_profile = QoSProfile(
             depth=10,
@@ -38,7 +40,7 @@ class ConeDetectionNode(Node):
         self.camera_frame = self.get_parameter("camera_frame").value
 
         # Declare and get model path parameter
-        self.declare_parameter("model_path", "yolov8n.pt")  # default to yolov8n.pt it none found
+        self.declare_parameter("model_path", "yolo11n.pt")  # default to yolo11n.pt if none found
         self.model_path = self.get_parameter("model_path").value
 
         self.get_logger().info(f"Using YOLO Model: { self.model_path }")
@@ -56,11 +58,20 @@ class ConeDetectionNode(Node):
         # Constructs queue for frame generation
         self.frame_queue = queue.Queue(maxsize=10)
 
+        # Camera intrinsics (populated from CameraInfo topic)
+        self.fx = None
+        self.fy = None
+        self.cx_c = None
+        self.cy_c = None
+        self.camera_info_received = False
+
         # subscribers
         self.create_subscription(Image, "image/input", self.callback, qos_profile)
 
         if self.get_parameter("depth_callback").value:
-            self.create_subscription(Image, "image/depth", self.depth_callback, qos_profile) # exists if depth camera provides it 
+            self.create_subscription(Image, "image/depth", self.depth_callback, qos_profile) # exists if depth camera provides it
+
+        self.create_subscription(CameraInfo, "camera/camera_info", self.camera_info_callback, qos_profile)
 
         # publisher
         self.cone_image_publisher = self.create_publisher(Image, "image/cones_image", qos_profile) 
@@ -116,10 +127,9 @@ class ConeDetectionNode(Node):
             self.get_logger().error("Failed to convert depth image")
             return
 
-        # If depth is uint16 (common for depth sensors), convert to meters if required.
+        # If depth is uint16 (common for depth sensors, e.g. D435i 16UC1), convert mm -> meters.
         if depth.dtype == np.uint16:
-            # no intrinsic scaling info available here, keep raw integers
-            depth = depth.astype(np.float32)
+            depth = depth.astype(np.float32) / 1000.0  # mm -> meters
         elif depth.dtype == np.float32:
             depth = depth
         else:
@@ -127,7 +137,24 @@ class ConeDetectionNode(Node):
 
         self.latest_depth = depth
         return
-    
+
+    def camera_info_callback(self, msg: CameraInfo) -> None:
+        """
+        ROS2 subscription callback for camera intrinsics.
+        Stores focal lengths and principal point from the camera matrix K
+        (row-major: [fx, 0, cx, 0, fy, cy, 0, 0, 1]).
+        Only reads the first message received — intrinsics are assumed static.
+        """
+        if not self.camera_info_received:
+            self.fx = msg.k[0]
+            self.fy = msg.k[4]
+            self.cx_c = msg.k[2]
+            self.cy_c = msg.k[5]
+            self.camera_info_received = True
+            self.get_logger().info(
+                f"Camera intrinsics received: fx={self.fx:.2f}, fy={self.fy:.2f}, "
+                f"cx={self.cx_c:.2f}, cy={self.cy_c:.2f}"
+            )
 
     def frame_generator(self) -> Generator[np.ndarray, None, None]:
         """
@@ -251,7 +278,14 @@ class ConeDetectionNode(Node):
                     except Exception:
                         z = float('nan')
 
-                centres.append((float(cx), float(cy), z))
+                # Pinhole back-projection: pixel (cx,cy) + depth z (meters) -> 3D camera frame (meters)
+                if self.camera_info_received and depth_frame is not None and not math.isnan(z) and z > 0.0:
+                    X = (cx - self.cx_c) * z / self.fx
+                    Y = (cy - self.cy_c) * z / self.fy
+                    Z = z
+                else:
+                    X, Y, Z = float('nan'), float('nan'), float('nan')
+                centres.append((X, Y, Z))
                 centre_colors.append(mean_rgb)
                 area = float((x2 - x1) * (y2 - y1))
                 centre_areas.append(area)
@@ -311,16 +345,16 @@ class ConeDetectionNode(Node):
             track_msg = Track()
             cones_list = []
             now = self.get_clock().now().to_msg()
-            for (cx, cy, cz), rgb, area in zip(centres, centre_colors, centre_areas):
+            for (cx_3d, cy_3d, cz_3d), rgb, area in zip(centres, centre_colors, centre_areas):
                 cmsg = Cone()
                 # header
                 cmsg.header.stamp = now
                 cmsg.header.frame_id = self.camera_frame
-                # location uses geometry_msgs/Point
+                # location uses geometry_msgs/Point (3D metric coords in camera frame)
                 loc = Point()
-                loc.x = float(cx)
-                loc.y = float(cy)
-                loc.z = float(cz) if not np.isnan(cz) else 0.0
+                loc.x = float(cx_3d) if not math.isnan(cx_3d) else 0.0
+                loc.y = float(cy_3d) if not math.isnan(cy_3d) else 0.0
+                loc.z = float(cz_3d) if not math.isnan(cz_3d) else 0.0
                 cmsg.location = loc
 
                 # simple colour heuristic
@@ -355,7 +389,7 @@ class ConeDetectionNode(Node):
     def make_pointcloud2(self, points: np.ndarray, colors: np.ndarray) -> PointCloud2:
         """
         Build a sensor_msgs/PointCloud2 from numpy arrays.
-        points: Nx3 float32 (x, y, z) - here x,y are pixel coordinates, z is depth in meters (or nan)
+        # points: Nx3 float32 (X, Y, Z) in camera frame, meters
         colors: Nx3 uint8 (R,G,B)
         """
         if points.shape[0] == 0:

@@ -1,21 +1,17 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>mfe_eufs_sim</name>
+  <name>mfe_control</name>
   <version>0.0.0</version>
-  <description>Bridge between EUFS simulator and the MFE Driverless stack.</description>
-  <maintainer email="laurenspee@gmail.com">ros</maintainer>
-  <license>TODO: License declaration</license>
+  <description>McGill Formula Electric Driverless Control Software Package</description>
+  <maintainer email="fsae@mail.mcgill.ca">ros</maintainer>
+  <license>GPL-3.0-only</license>
 
   <depend>rclpy</depend>
-  <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
-  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>eufs_msgs</depend>
-  <depend>mfe_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>fs_msgs</depend>
-  <depend>ackermann_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

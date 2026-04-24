@@ -7,3 +7,6 @@
 [submodule "ros2/src/mfe_path_planning/modules"]
 	path = ros2/src/mfe_path_planning/modules
 	url = https://github.com/origovi/urinay
+[submodule "ros2/src/mfe_perception/lidar_cone_detector/lib/cuda-pcl"]
+	path = ros2/src/mfe_perception/lidar_cone_detector/lib/cuda-pcl
+	url = https://github.com/NVIDIA-AI-IOT/cuda-pcl.git
