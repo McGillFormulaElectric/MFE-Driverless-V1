@@ -71,6 +71,9 @@ def generate_launch_description():
             'model_path': '',
             'depth_callback': False,
         }],
+        remappings=[
+            ('image/input', '/camera/image_raw'),
+        ],
     )
 
     # --------------------------------------------------------------------------

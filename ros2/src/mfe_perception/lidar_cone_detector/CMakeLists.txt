@@ -39,6 +39,22 @@ ament_auto_add_executable(detected_cones
 )
 target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
+# ---- lidar_perception_node (new unified perception pipeline) ----
+ament_auto_add_executable(lidar_perception_node
+  src/lidar_perception_node.cpp
+)
+target_link_libraries(lidar_perception_node ${PCL_LIBRARIES})
+
+# GPU path: compile with PLATFORM_JETSON and link CUDA/cuda-pcl
+if(DEFINED PLATFORM_JETSON)
+  target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_JETSON)
+  find_package(CUDA QUIET)
+  if(CUDA_FOUND)
+    target_include_directories(lidar_perception_node PRIVATE ${CUDA_INCLUDE_DIRS})
+    target_link_libraries(lidar_perception_node ${CUDA_LIBRARIES})
+  endif()
+endif()
+
 ament_python_install_package(${PROJECT_NAME})
 
 # install(PROGRAMS
@@ -57,6 +73,7 @@ install(TARGETS
   lidar_preprocessor
   ground_plane_removal
   file_loader
+  lidar_perception_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

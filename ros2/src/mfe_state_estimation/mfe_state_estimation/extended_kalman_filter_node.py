@@ -24,7 +24,7 @@ class ExtendedKalmanFilterNode(Node):
         self.gps_freq = self.get_parameter("gps_frequency").get_parameter_value().integer_value
 
         # Configure necessary topics names to subscribe to
-        self.declare_parameter("imu_topic", value="/imu")
+        self.declare_parameter("imu_topic", value="/imu/data")
         self.declare_parameter("gps_topic", value="/gps")
 
         self.imu_topic_name = self.get_parameter("imu_topic").get_parameter_value().string_value
