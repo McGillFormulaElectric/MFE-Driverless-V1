@@ -20,12 +20,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'max_speed_ms',
             default_value='10.0',
-            description='Maximum vehicle speed in m/s sent to EUFS sim.'
+            description='Max vehicle speed in m/s (throttle=1). Requires EUFS launched with commandMode:=velocity.'
         ),
         DeclareLaunchArgument(
             'max_steering_deg',
             default_value='25.0',
-            description='Maximum steering angle in degrees sent to EUFS sim.'
+            description='Maximum steering angle in degrees.'
         ),
 
         # ---------------------------------------------------------------- #

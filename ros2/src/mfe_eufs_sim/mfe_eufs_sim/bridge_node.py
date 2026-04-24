@@ -26,7 +26,7 @@ from sensor_msgs.msg import Image, PointCloud2, PointField
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Header
 
-from eufs_msgs.msg import ConeArrayWithCovariance, CanState
+from eufs_msgs.msg import ConeArrayWithCovariance
 from mfe_msgs.msg import Cone, Track
 from fs_msgs.msg import ControlCommand
 
@@ -155,7 +155,7 @@ class EufsSimBridge(Node):
 
     # Physical limits used for control command conversion
     MAX_STEERING_ANGLE_RAD = math.radians(25.0)   # ±25° max steering
-    MAX_SPEED_MS = 15.0                            # m/s — tune for competition event
+    MAX_SPEED_MS = 10.0                            # m/s — max speed (throttle=1, velocity mode)
 
     def __init__(self):
         super().__init__('mfe_eufs_sim_bridge')
@@ -164,7 +164,7 @@ class EufsSimBridge(Node):
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('max_steering_deg', 25.0)
-        self.declare_parameter('max_speed_ms', 15.0)
+        self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
 
         self._map_frame = self.get_parameter('map_frame').value
@@ -226,7 +226,7 @@ class EufsSimBridge(Node):
                 'Install with: sudo apt install ros-$ROS_DISTRO-ackermann-msgs')
 
         self.get_logger().info(
-            f'EufsSimBridge started. '
+            f'EufsSimBridge started (velocity mode). '
             f'Sim cones → planner: {self._use_sim_cones_directly} | '
             f'Max speed: {self.MAX_SPEED_MS} m/s | '
             f'Max steering: {math.degrees(self.MAX_STEERING_ANGLE_RAD):.1f}°')
@@ -274,14 +274,12 @@ class EufsSimBridge(Node):
         """
         Convert fs_msgs/ControlCommand → ackermann_msgs/AckermannDriveStamped.
 
-        ControlCommand fields (all normalised):
-            steering  ∈ [-1, +1]   (+1 = full left in FSAE convention)
-            throttle  ∈ [0, 1]
-            brake     ∈ [0, 1]
+        EUFS sim must be launched with commandMode:=velocity so that
+        AckermannDrive.speed is treated as m/s (target speed).
 
-        AckermannDrive fields:
-            steering_angle  (radians)
-            speed           (m/s)    — EUFS sim is in velocity control mode
+        throttle ∈ [0,1] → forward speed: throttle * MAX_SPEED_MS
+        brake    ∈ [0,1] → overrides throttle, reduces speed proportionally
+        steering ∈ [-1,+1] → steering_angle in radians
         """
         if not _ACKERMANN_AVAILABLE or self._cmd_pub is None:
             return
@@ -289,10 +287,11 @@ class EufsSimBridge(Node):
         # Steering: normalised → radians
         steering_rad = float(msg.steering) * self.MAX_STEERING_ANGLE_RAD
 
-        # Speed: throttle drives forward, braking overrides
-        # Simple blending: net_throttle in [-1, 1]
-        net = float(msg.throttle) - float(msg.brake)
-        speed_ms = net * self.MAX_SPEED_MS
+        # Speed: brake reduces the throttle demand (brake-by-wire)
+        throttle = float(msg.throttle)
+        brake = float(msg.brake)
+        speed_ms = (throttle - brake) * self.MAX_SPEED_MS
+        speed_ms = max(0.0, speed_ms)   # clamp — no reverse
 
         cmd = AckermannDriveStamped()
         cmd.header.stamp = self.get_clock().now().to_msg()
