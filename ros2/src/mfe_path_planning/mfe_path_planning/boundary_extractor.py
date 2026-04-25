@@ -4,7 +4,8 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import SensorDataQoS
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
 import tf2_ros
 from tf2_ros import TransformException

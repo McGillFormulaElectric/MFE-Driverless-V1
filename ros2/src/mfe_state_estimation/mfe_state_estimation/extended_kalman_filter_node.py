@@ -3,7 +3,8 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import SensorDataQoS
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
 from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFilter
 
