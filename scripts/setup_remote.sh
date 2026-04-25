@@ -49,7 +49,8 @@ sudo apt install -y \
     ros-humble-nav-msgs \
     ros-humble-geometry-msgs \
     ros-humble-ackermann-msgs \
-    ros-humble-foxglove-bridge
+    ros-humble-foxglove-bridge \
+    ros-humble-slam-toolbox
 
 echo "==> [5/6] Installing Python dependencies..."
 pip3 install numpy ultralytics
