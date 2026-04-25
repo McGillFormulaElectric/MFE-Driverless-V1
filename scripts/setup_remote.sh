@@ -52,10 +52,9 @@ sudo apt install -y \
     ros-humble-foxglove-bridge
 
 echo "==> [5/6] Installing Python dependencies..."
-pip3 install \
-    numpy \
-    ultralytics \
-    ft-fsd-path-planning
+pip3 install numpy ultralytics
+# ft-fsd-path-planning is not on PyPI — install from source
+pip3 install git+https://github.com/papalotis/ft-fsd-path-planning.git
 
 echo "==> [6/6] Sourcing ROS2 in ~/.bashrc..."
 grep -qxF 'source /opt/ros/humble/setup.bash' ~/.bashrc \
