@@ -32,7 +32,13 @@ sudo apt install -y \
     ros-humble-ament-cmake-auto \
     ros-humble-eigen3-cmake-module
 
-echo "==> [3/6] Installing perception dependencies..."
+echo "==> [3/6] Installing Gazebo..."
+sudo apt install -y \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-dev \
+    ros-humble-gazebo-plugins
+
+echo "==> [4/7] Installing perception dependencies..."
 sudo apt install -y \
     ros-humble-pcl-ros \
     ros-humble-pcl-conversions \
@@ -52,12 +58,12 @@ sudo apt install -y \
     ros-humble-foxglove-bridge \
     ros-humble-slam-toolbox
 
-echo "==> [5/6] Installing Python dependencies..."
+echo "==> [5/7] Installing Python dependencies..."
 pip3 install numpy ultralytics
 # ft-fsd-path-planning is not on PyPI — install from source
 pip3 install git+https://github.com/papalotis/ft-fsd-path-planning.git
 
-echo "==> [6/6] Sourcing ROS2 in ~/.bashrc..."
+echo "==> [6/7] Sourcing ROS2 in ~/.bashrc..."
 grep -qxF 'source /opt/ros/humble/setup.bash' ~/.bashrc \
     || echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc
 
