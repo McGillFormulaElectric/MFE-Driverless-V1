@@ -9,7 +9,10 @@ GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
 EUFS_WS=~/Develop/MFE26-eufs-sim
 MFE_WS=~/Develop/MFE-Driverless-V1/ros2
 
-SOURCE_ALL="source /opt/ros/humble/setup.bash && \
+export EUFS_MASTER=$EUFS_WS
+
+SOURCE_ALL="export EUFS_MASTER=$EUFS_WS && \
+            source /opt/ros/humble/setup.bash && \
             source $GAZEBO_ROS_WS/install/setup.bash && \
             source $EUFS_WS/install/setup.bash && \
             source $MFE_WS/install/setup.bash"
