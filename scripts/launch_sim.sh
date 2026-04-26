@@ -23,10 +23,12 @@ tmux kill-session -t mfe 2>/dev/null || true
 # Create new session with first pane (EUFS Sim)
 tmux new-session -d -s mfe -x 220 -y 50
 
-# Split into 4 panes: top-left, top-right, bottom-left, bottom-right
+# Split into 6 panes: 3 left, 3 right
 tmux split-window -h -t mfe          # left | right
-tmux split-window -v -t mfe:0.0      # top-left | bottom-left
-tmux split-window -v -t mfe:0.1      # top-right | bottom-right
+tmux split-window -v -t mfe:0.0      # top-left | mid-left
+tmux split-window -v -t mfe:0.0      # mid-left | bottom-left
+tmux split-window -v -t mfe:0.1      # top-right | mid-right
+tmux split-window -v -t mfe:0.3      # mid-right | bottom-right
 
 # Pane 0 (top-left) — EUFS Sim
 tmux send-keys -t mfe:0.0 \
@@ -35,17 +37,25 @@ tmux send-keys -t mfe:0.0 \
 # Small delay so sim starts first
 sleep 2
 
-# Pane 1 (bottom-left) — MFE Bridge
-tmux send-keys -t mfe:0.2 \
+# Pane 1 (mid-left) — MFE Bridge
+tmux send-keys -t mfe:0.1 \
     "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py" Enter
 
-# Pane 2 (top-right) — MFE Stack
-tmux send-keys -t mfe:0.1 \
+# Pane 2 (bottom-left) — MFE Stack
+tmux send-keys -t mfe:0.2 \
     "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py" Enter
 
-# Pane 3 (bottom-right) — Foxglove Bridge
+# Pane 3 (top-right) — Foxglove Bridge
 tmux send-keys -t mfe:0.3 \
     "$SOURCE_ALL && ros2 launch foxglove_bridge foxglove_bridge_launch.xml" Enter
+
+# Pane 4 (mid-right) — Mission control (set mission + go)
+tmux send-keys -t mfe:0.4 \
+    "$SOURCE_ALL" Enter
+
+# Pane 5 (bottom-right) — Free terminal
+tmux send-keys -t mfe:0.5 \
+    "$SOURCE_ALL" Enter
 
 # Attach to session
 tmux attach-session -t mfe
