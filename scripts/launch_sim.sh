@@ -48,8 +48,15 @@ MISSION_CMD="$SOURCE_ALL && ros2 service call /ros_can/set_mission eufs_msgs/srv
 # Logging command — ground truth state + odometry
 LOG_CMD="$SOURCE_ALL && ros2 topic echo /ground_truth/state | tee $LOG_DIR/${TRACK}_\$(date +%Y%m%d_%H%M%S).log"
 
-# Kill any existing session
+# Kill any existing session and stale ROS/Gazebo processes
 tmux kill-session -t mfe 2>/dev/null || true
+pkill -f gzserver 2>/dev/null || true
+pkill -f gzclient 2>/dev/null || true
+pkill -f ros2 2>/dev/null || true
+pkill -f path_planner_node 2>/dev/null || true
+pkill -f lidar_perception_node 2>/dev/null || true
+pkill -f static_transform_publisher 2>/dev/null || true
+sleep 1
 
 # Create new session
 tmux new-session -d -s mfe -x 220 -y 50
