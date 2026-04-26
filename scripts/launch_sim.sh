@@ -27,7 +27,7 @@ tmux split-window -v -t mfe:0.1      # top-right | bottom-right
 
 # Pane 0 (top-left) — EUFS Sim
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher eufs_launcher.launch.py commandMode:=velocity" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher eufs_launcher.launch.py commandMode:=velocity gui:=false" Enter
 
 # Small delay so sim starts first
 sleep 2
@@ -42,7 +42,7 @@ tmux send-keys -t mfe:0.1 \
 
 # Pane 3 (bottom-right) — Foxglove Bridge
 tmux send-keys -t mfe:0.3 \
-    "source /opt/ros/humble/setup.bash && ros2 launch foxglove_bridge foxglove_bridge_launch.xml" Enter
+    "$SOURCE_ALL && ros2 launch foxglove_bridge foxglove_bridge_launch.xml" Enter
 
 # Attach to session
 tmux attach-session -t mfe
