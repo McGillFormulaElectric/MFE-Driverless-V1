@@ -81,7 +81,7 @@ tmux send-keys -t mfe:0.1 \
 
 # Pane 2 (bottom-left) — MFE Stack
 tmux send-keys -t mfe:0.2 \
-    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py" Enter
+    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$TRACK" Enter
 
 # Pane 3 (top-right) — Foxglove Bridge
 tmux send-keys -t mfe:0.3 \
