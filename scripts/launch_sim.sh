@@ -58,6 +58,11 @@ pkill -f lidar_perception_node 2>/dev/null || true
 pkill -f static_transform_publisher 2>/dev/null || true
 sleep 1
 
+# Restart ROS2 daemon cleanly after killing all ros2 processes
+source /opt/ros/humble/setup.bash
+ros2 daemon stop 2>/dev/null || true
+ros2 daemon start
+
 # Create new session
 tmux new-session -d -s mfe -x 220 -y 50
 
