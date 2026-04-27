@@ -70,7 +70,7 @@ tmux split-window -v -t mfe:0.3      # mid-right | bottom-right
 
 # Pane 0 (top-left) — EUFS Sim
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=false rviz:=false" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=false rviz:=false launch_group:=no_perception" Enter
 
 # Small delay so sim starts first
 sleep 2
