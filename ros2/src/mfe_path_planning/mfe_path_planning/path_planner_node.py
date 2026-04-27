@@ -165,6 +165,12 @@ class PathPlannerNode(Node):
             self.get_logger().error(f'Path calculation failed: {e}', throttle_duration_sec=2.0)
             return
 
+        cone_counts = [len(b) for b in buckets]
+        self.get_logger().info(
+            f'planner: pos={self._car_pos} dir={self._car_dir} '
+            f'cones={cone_counts} path_pts={len(path_xy) if path_xy is not None else None}',
+            throttle_duration_sec=2.0)
+
         stamp = self.get_clock().now().to_msg()
         frame = self._map_frame
 
