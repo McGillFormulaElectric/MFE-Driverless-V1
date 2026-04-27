@@ -188,13 +188,13 @@ class EufsSimBridge(Node):
             Image, '/camera/image_raw', _QOS_MFE)
 
         # ---------- EUFS → MFE: Cones ----------
-        # /cones — noisy perception-level cones (simulates what the perception stack
-        # would output). When use_sim_cones_directly=True this bypasses the LiDAR/
-        # vision pipeline and feeds directly into the path planner — useful for
-        # testing path planning in isolation.
+        # /ground_truth/cones — used directly for path planning when
+        # use_sim_cones_directly=True. Ground truth has proper BLUE/YELLOW/ORANGE
+        # color labels that the path planner needs to determine left/right boundaries.
+        # (The /cones topic simulates LiDAR perception which strips color info.)
         if self._use_sim_cones_directly:
             self.create_subscription(
-                ConeArrayWithCovariance, '/cones', self._sim_cones_cb, _QOS_EUFS)
+                ConeArrayWithCovariance, '/ground_truth/cones', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
                 Track, '/planning/cones', _QOS_MFE)
 
