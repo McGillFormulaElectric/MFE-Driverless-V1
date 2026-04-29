@@ -27,10 +27,14 @@ from geometry_msgs.msg import PoseStamped
 from mfe_msgs.msg import Cone, Track
 
 try:
-    from ft_fsd_path_planning import PathPlanner, ConeTypes, MissionTypes
+    from fsd_path_planning import PathPlanner, ConeTypes, MissionTypes
     _LIB_AVAILABLE = True
 except ImportError:
-    _LIB_AVAILABLE = False
+    try:
+        from ft_fsd_path_planning import PathPlanner, ConeTypes, MissionTypes
+        _LIB_AVAILABLE = True
+    except ImportError:
+        _LIB_AVAILABLE = False
 
 
 _QOS = QoSProfile(
@@ -47,7 +51,7 @@ _MFE_TO_FSD = {
     Cone.ORANGE_BIG:   ConeTypes.ORANGE_BIG if _LIB_AVAILABLE else 2,
     Cone.ORANGE_SMALL: ConeTypes.ORANGE_SMALL if _LIB_AVAILABLE else 3,
     Cone.UNKNOWN:      ConeTypes.UNKNOWN if _LIB_AVAILABLE else 4,
-}
+} if _LIB_AVAILABLE else {}
 
 
 def _yaw_from_quaternion(q) -> float:
