@@ -165,11 +165,13 @@ class PathPlannerNode(Node):
         ]
 
         try:
-            path_xy, (left_xy, right_xy) = self._planner.calculate_path_in_global_frame(
+            result = self._planner.calculate_path_in_global_frame(
                 cones_by_type,
                 self._car_pos,
                 self._car_dir,
+                return_intermediate_results=True,
             )
+            path_xy, left_xy, right_xy, *_ = result
         except Exception as e:
             self.get_logger().error(f'Path calculation failed: {e}', throttle_duration_sec=2.0)
             return
@@ -184,11 +186,11 @@ class PathPlannerNode(Node):
         frame = self._map_frame
 
         if path_xy is not None and len(path_xy) > 0:
-            self._pub_centerline.publish(_path_from_xy(path_xy[:, :2], frame, stamp))
+            self._pub_centerline.publish(_path_from_xy(np.array(path_xy)[:, :2], frame, stamp))
         if left_xy is not None and len(left_xy) > 0:
-            self._pub_left.publish(_path_from_xy(left_xy[:, :2], frame, stamp))
+            self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
         if right_xy is not None and len(right_xy) > 0:
-            self._pub_right.publish(_path_from_xy(right_xy[:, :2], frame, stamp))
+            self._pub_right.publish(_path_from_xy(np.array(right_xy)[:, :2], frame, stamp))
 
 
 def main(args=None):
