@@ -43,15 +43,20 @@ _QOS = QoSProfile(
     depth=10,
 )
 
-# mfe_msgs/Cone color enum → ft_fsd_path_planning ConeTypes
+# mfe_msgs/Cone color enum → fsd_path_planning ConeTypes
 # BLUE=0 is left boundary, YELLOW=1 is right boundary (FSAE standard)
-_MFE_TO_FSD = {
-    Cone.BLUE:         ConeTypes.LEFT if _LIB_AVAILABLE else 0,
-    Cone.YELLOW:       ConeTypes.RIGHT if _LIB_AVAILABLE else 1,
-    Cone.ORANGE_BIG:   ConeTypes.ORANGE_BIG if _LIB_AVAILABLE else 2,
-    Cone.ORANGE_SMALL: ConeTypes.ORANGE_SMALL if _LIB_AVAILABLE else 3,
-    Cone.UNKNOWN:      ConeTypes.UNKNOWN if _LIB_AVAILABLE else 4,
-} if _LIB_AVAILABLE else {}
+# fsd_path_planning ConeTypes: UNKNOWN=0, RIGHT=1, LEFT=2,
+#   START_FINISH_AREA=3, START_FINISH_LINE=4
+if _LIB_AVAILABLE:
+    _MFE_TO_FSD = {
+        Cone.BLUE:         ConeTypes.LEFT,
+        Cone.YELLOW:       ConeTypes.RIGHT,
+        Cone.ORANGE_BIG:   ConeTypes.START_FINISH_AREA,
+        Cone.ORANGE_SMALL: ConeTypes.START_FINISH_LINE,
+        Cone.UNKNOWN:      ConeTypes.UNKNOWN,
+    }
+else:
+    _MFE_TO_FSD = {}
 
 
 def _yaw_from_quaternion(q) -> float:
