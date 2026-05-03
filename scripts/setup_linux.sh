@@ -53,22 +53,28 @@ case "$ARCH" in
     arm64)  NVIM_ARCH="arm64" ;;
     *)      NVIM_ARCH="$ARCH" ;;
 esac
-NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
+NVIM_VERSION=$(curl -sf https://api.github.com/repos/neovim/neovim/releases/latest \
     | grep '"tag_name"' | cut -d'"' -f4)
-NVIM_TARBALL="nvim-linux-${NVIM_ARCH}.tar.gz"
-curl -LO "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${NVIM_TARBALL}"
-sudo rm -rf /opt/nvim-linux-${NVIM_ARCH}
-sudo tar -C /opt -xzf "${NVIM_TARBALL}"
-sudo ln -sf /opt/nvim-linux-${NVIM_ARCH}/bin/nvim /usr/local/bin/nvim
-rm "${NVIM_TARBALL}"
-echo "Neovim ${NVIM_VERSION} installed"
+if [ -z "$NVIM_VERSION" ]; then
+    echo "WARNING: Could not fetch nvim version — falling back to apt nvim"
+    sudo apt install -y neovim
+else
+    NVIM_TARBALL="nvim-linux-${NVIM_ARCH}.tar.gz"
+    curl -fL --retry 3 -o "/tmp/${NVIM_TARBALL}" \
+        "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${NVIM_TARBALL}"
+    sudo rm -rf /opt/nvim-linux-${NVIM_ARCH}
+    sudo tar -C /opt -xzf "/tmp/${NVIM_TARBALL}"
+    sudo ln -sf /opt/nvim-linux-${NVIM_ARCH}/bin/nvim /usr/local/bin/nvim
+    rm "/tmp/${NVIM_TARBALL}"
+    echo "Neovim ${NVIM_VERSION} installed"
+fi
 
 # =============================================================================
 echo "==> [3/8] Installing LazyVim..."
 # =============================================================================
 [ -d ~/.config/nvim ] && mv ~/.config/nvim ~/.config/nvim.bak.$(date +%s)
 [ -d ~/.local/share/nvim ] && mv ~/.local/share/nvim ~/.local/share/nvim.bak.$(date +%s)
-git clone https://github.com/LazyVim/starter ~/.config/nvim
+git clone --depth 1 https://github.com/LazyVim/starter ~/.config/nvim
 rm -rf ~/.config/nvim/.git
 
 # Add lazygit plugin config
@@ -263,7 +269,7 @@ echo "==> [8/8] Configuring shell..."
 # =============================================================================
 
 # tmux — TPM + config
-git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm 2>/dev/null || \
+git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm 2>/dev/null || \
     git -C ~/.tmux/plugins/tpm pull
 
 if [ ! -f ~/.tmux.conf ]; then
