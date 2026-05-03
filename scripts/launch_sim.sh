@@ -2,9 +2,11 @@
 # =============================================================================
 # MFE Driverless — Full Simulation Launch Script
 # Opens tmux with 6 panes and launches all components.
-# Usage: bash scripts/launch_sim.sh [accel|skidpad]
-#   accel   — acceleration event (default)
-#   skidpad — skidpad event
+# Usage: bash scripts/launch_sim.sh [accel|skidpad] [perception|no_perception]
+#   accel         — acceleration event (default)
+#   skidpad       — skidpad event
+#   perception    — full LiDAR pipeline (lidar_cone_detector → boundary_extractor)
+#   no_perception — ground truth cones direct to planner (default, faster to test)
 # =============================================================================
 
 GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
@@ -29,7 +31,26 @@ case "$EVENT" in
         ;;
 esac
 
-echo "==> Launching event: $TRACK (ami_state=$AMI_STATE)"
+# Parse perception mode
+MODE=${2:-no_perception}
+case "$MODE" in
+    perception)
+        LAUNCH_GROUP=default
+        USE_SIM_CONES=false
+        PUBLISH_GT_TF=true
+        ;;
+    no_perception)
+        LAUNCH_GROUP=no_perception
+        USE_SIM_CONES=true
+        PUBLISH_GT_TF=false
+        ;;
+    *)
+        echo "Unknown mode '$MODE'. Use: perception or no_perception"
+        exit 1
+        ;;
+esac
+
+echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE"
 
 # Create log directory
 mkdir -p $LOG_DIR
@@ -75,14 +96,14 @@ tmux split-window -v -t mfe:0.3      # mid-right | bottom-right
 
 # Pane 0 (top-left) — EUFS Sim
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=false rviz:=false launch_group:=no_perception" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=false rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF" Enter
 
 # Small delay so sim starts first
 sleep 2
 
 # Pane 1 (mid-left) — MFE Bridge
 tmux send-keys -t mfe:0.1 \
-    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py" Enter
+    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES" Enter
 
 # Pane 2 (bottom-left) — MFE Stack
 tmux send-keys -t mfe:0.2 \

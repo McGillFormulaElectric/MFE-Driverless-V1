@@ -45,14 +45,28 @@ ament_auto_add_executable(lidar_perception_node
 )
 target_link_libraries(lidar_perception_node ${PCL_LIBRARIES})
 
-# GPU path: compile with PLATFORM_JETSON and link CUDA/cuda-pcl
-if(DEFINED PLATFORM_JETSON)
-  target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_JETSON)
-  find_package(CUDA QUIET)
-  if(CUDA_FOUND)
-    target_include_directories(lidar_perception_node PRIVATE ${CUDA_INCLUDE_DIRS})
-    target_link_libraries(lidar_perception_node ${CUDA_LIBRARIES})
+# GPU path: auto-detect CUDA, support Jetson (SM87) and desktop GPU
+find_package(CUDA QUIET)
+if(CUDA_FOUND)
+  message(STATUS "CUDA found: ${CUDA_VERSION} — enabling GPU lidar pipeline")
+  # Detect platform: Jetson has tegra in the soc, desktop has discrete GPU
+  if(DEFINED PLATFORM_JETSON OR EXISTS "/etc/nv_tegra_release")
+    set(CUDA_ARCH "87")   # Jetson Orin Nano — Ampere SM87
+    target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_JETSON)
+    message(STATUS "Platform: Jetson (SM${CUDA_ARCH})")
+  else()
+    # Desktop GPU — let CUDA auto-select, or override with -DCUDA_ARCH=120
+    if(NOT DEFINED CUDA_ARCH)
+      set(CUDA_ARCH "native")
+    endif()
+    target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_DESKTOP_GPU)
+    message(STATUS "Platform: Desktop GPU (arch=${CUDA_ARCH})")
   endif()
+  set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH})
+  target_include_directories(lidar_perception_node PRIVATE ${CUDA_INCLUDE_DIRS})
+  target_link_libraries(lidar_perception_node ${CUDA_LIBRARIES})
+else()
+  message(STATUS "CUDA not found — lidar_perception_node will use CPU PCL only")
 endif()
 
 ament_python_install_package(${PROJECT_NAME})
