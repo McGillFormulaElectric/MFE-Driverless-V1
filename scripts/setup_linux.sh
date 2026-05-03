@@ -47,13 +47,20 @@ sudo ln -sf $(which batcat) /usr/local/bin/bat 2>/dev/null || true
 echo "==> [2/8] Installing Neovim (latest)..."
 # =============================================================================
 # Ubuntu apt ships an old nvim — install latest from GitHub
+# Neovim uses x86_64/arm64 naming, not amd64/arm64 (dpkg style)
+case "$ARCH" in
+    amd64)  NVIM_ARCH="x86_64" ;;
+    arm64)  NVIM_ARCH="arm64" ;;
+    *)      NVIM_ARCH="$ARCH" ;;
+esac
 NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
     | grep '"tag_name"' | cut -d'"' -f4)
-curl -LO "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-${ARCH}.tar.gz"
-sudo rm -rf /opt/nvim
-sudo tar -C /opt -xzf nvim-linux-${ARCH}.tar.gz
-sudo ln -sf /opt/nvim-linux-${ARCH}/bin/nvim /usr/local/bin/nvim
-rm nvim-linux-${ARCH}.tar.gz
+NVIM_TARBALL="nvim-linux-${NVIM_ARCH}.tar.gz"
+curl -LO "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${NVIM_TARBALL}"
+sudo rm -rf /opt/nvim-linux-${NVIM_ARCH}
+sudo tar -C /opt -xzf "${NVIM_TARBALL}"
+sudo ln -sf /opt/nvim-linux-${NVIM_ARCH}/bin/nvim /usr/local/bin/nvim
+rm "${NVIM_TARBALL}"
 echo "Neovim ${NVIM_VERSION} installed"
 
 # =============================================================================
