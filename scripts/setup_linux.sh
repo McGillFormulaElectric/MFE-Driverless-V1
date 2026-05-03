@@ -281,6 +281,7 @@ step_shell_config() {
     ZSHRC=~/.zshrc
     add_line() { grep -qxF "$1" "$ZSHRC" 2>/dev/null || echo "$1" >> "$ZSHRC"; }
 
+    add_line 'export PATH="$HOME/.local/bin:$PATH"'
     add_line 'eval "$(starship init zsh)"'
     add_line 'eval "$(zoxide init zsh)"'
     add_line 'alias ls="eza --icons"'
@@ -289,7 +290,6 @@ step_shell_config() {
     add_line 'alias cat="bat"'
     add_line 'alias lg="lazygit"'
     add_line 'alias vim="nvim"'
-    add_line 'export PATH="$HOME/.local/bin:$PATH"'
 
     if [ "$SHELL" != "$(which zsh)" ]; then
         chsh -s "$(which zsh)"
