@@ -27,12 +27,16 @@ sudo apt install -y \
     fontconfig
 
 # JetBrains Mono Nerd Font (used by WezTerm + nvim icons)
-mkdir -p ~/.local/share/fonts
-curl -Lo /tmp/JetBrainsMono.tar.xz \
-    "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
-tar -xf /tmp/JetBrainsMono.tar.xz -C ~/.local/share/fonts/
-fc-cache -fv ~/.local/share/fonts/
-rm /tmp/JetBrainsMono.tar.xz
+FONT_DIR=~/.local/share/fonts/JetBrainsMono
+mkdir -p "$FONT_DIR"
+NERD_VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest \
+    | grep '"tag_name"' | cut -d'"' -f4)
+curl -Lo /tmp/JetBrainsMono.zip \
+    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NERD_VERSION}/JetBrainsMono.zip"
+unzip -o /tmp/JetBrainsMono.zip "*.ttf" -d "$FONT_DIR"
+rm /tmp/JetBrainsMono.zip
+fc-cache -f
+echo "JetBrains Mono Nerd Font installed"
 
 # fd is called fdfind on Ubuntu, symlink it
 sudo ln -sf $(which fdfind) /usr/local/bin/fd 2>/dev/null || true
