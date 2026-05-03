@@ -70,7 +70,51 @@ echo "==> [5/7] Setting up LazyVim..."
 
 git clone https://github.com/LazyVim/starter ~/.config/nvim
 rm -rf ~/.config/nvim/.git
-echo "LazyVim installed — run 'nvim' to finish plugin install"
+mkdir -p ~/.config/nvim/lua/plugins
+
+# lazygit integration
+cat > ~/.config/nvim/lua/plugins/lazygit.lua << 'LUACONF'
+return {
+  {
+    "folke/snacks.nvim",
+    opts = {
+      lazygit = { enabled = true },
+    },
+    keys = {
+      { "<leader>gg", function() Snacks.lazygit() end,          desc = "Lazygit" },
+      { "<leader>gG", function() Snacks.lazygit.log() end,      desc = "Lazygit log" },
+      { "<leader>gf", function() Snacks.lazygit.log_file() end, desc = "Lazygit file log" },
+    },
+  },
+}
+LUACONF
+
+# diffview: side-by-side diff against any branch
+cat > ~/.config/nvim/lua/plugins/diffview.lua << 'LUACONF'
+return {
+  "sindrets/diffview.nvim",
+  dependencies = { "nvim-lua/plenary.nvim" },
+  cmd = { "DiffviewOpen", "DiffviewFileHistory" },
+  keys = {
+    { "<leader>gd", function() vim.cmd("DiffviewOpen main -- " .. vim.fn.expand("%")) end, desc = "Diff file vs main" },
+    { "<leader>gD", function()
+        local b = vim.fn.input("Branch: ", "main")
+        if b ~= "" then vim.cmd("DiffviewOpen " .. b .. " -- " .. vim.fn.expand("%")) end
+      end, desc = "Diff file vs branch" },
+    { "<leader>gm", "<cmd>DiffviewOpen main<cr>",     desc = "Diff repo vs main" },
+    { "<leader>gh", "<cmd>DiffviewFileHistory %<cr>", desc = "File history" },
+    { "<leader>gq", "<cmd>DiffviewClose<cr>",         desc = "Close diffview" },
+  },
+  opts = {
+    view = {
+      default      = { layout = "diff2_vertical" },
+      file_history = { layout = "diff2_vertical" },
+    },
+  },
+}
+LUACONF
+
+echo "LazyVim installed with lazygit + diffview plugins"
 
 # =============================================================================
 echo "==> [6/7] Setting up tmux (TPM + sensible config)..."
