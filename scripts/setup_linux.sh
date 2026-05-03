@@ -51,7 +51,30 @@ echo "==> [3/8] Installing LazyVim..."
 [ -d ~/.local/share/nvim ] && mv ~/.local/share/nvim ~/.local/share/nvim.bak.$(date +%s)
 git clone https://github.com/LazyVim/starter ~/.config/nvim
 rm -rf ~/.config/nvim/.git
-echo "LazyVim installed — run 'nvim' to finish plugin install"
+
+# Add lazygit plugin config
+mkdir -p ~/.config/nvim/lua/plugins
+cat > ~/.config/nvim/lua/plugins/lazygit.lua << 'LUACONF'
+return {
+  -- lazygit integration via snacks.nvim (bundled with LazyVim)
+  {
+    "folke/snacks.nvim",
+    opts = {
+      lazygit = {
+        -- use the system lazygit binary installed by setup_linux.sh
+        enabled = true,
+      },
+    },
+    keys = {
+      { "<leader>gg", function() Snacks.lazygit() end,        desc = "Lazygit" },
+      { "<leader>gG", function() Snacks.lazygit.log() end,    desc = "Lazygit log (cwd)" },
+      { "<leader>gf", function() Snacks.lazygit.log_file() end, desc = "Lazygit current file" },
+    },
+  },
+}
+LUACONF
+
+echo "LazyVim installed with lazygit keybinds: <leader>gg / gG / gf"
 
 # =============================================================================
 echo "==> [4/8] Installing Node.js (for Claude Code)..."
@@ -65,6 +88,17 @@ echo "==> [5/8] Installing Claude Code..."
 # =============================================================================
 sudo npm install -g @anthropic-ai/claude-code
 echo "Claude Code installed: $(claude --version 2>/dev/null || echo 'restart shell to verify')"
+
+# =============================================================================
+echo "==> [5b] Installing GitHub CLI + gh-dash..."
+# =============================================================================
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list
+sudo apt update && sudo apt install -y gh
+gh extension install dlvhdr/gh-dash
+echo "gh-dash installed — run: gh dash"
 
 # =============================================================================
 echo "==> [6/8] Installing eza, zoxide, starship..."
