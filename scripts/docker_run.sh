@@ -5,9 +5,18 @@
 # Usage: bash scripts/docker_run.sh [accel|skidpad] [perception|no_perception] [gui|nogui]
 #
 # Prerequisites on host:
-#   - Docker installed
-#   - NVIDIA drivers installed (nvidia-container-toolkit is auto-installed if missing)
+#   - NVIDIA drivers installed (everything else is auto-installed if missing)
 # =============================================================================
+
+# Install Docker if missing
+if ! command -v docker &>/dev/null; then
+    echo "==> Installing Docker..."
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker "$USER"
+    echo "Docker installed. NOTE: log out and back in for group membership to take effect."
+    echo "Then re-run this script."
+    exit 0
+fi
 
 # Install nvidia-container-toolkit if missing (needed for --gpus all)
 if ! dpkg -s nvidia-container-toolkit &>/dev/null; then
