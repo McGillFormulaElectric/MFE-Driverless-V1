@@ -2,11 +2,14 @@
 # =============================================================================
 # MFE Driverless — Full Simulation Launch Script
 # Opens tmux with 6 panes and launches all components.
-# Usage: bash scripts/launch_sim.sh [accel|skidpad] [perception|no_perception]
+#
+# Usage: bash scripts/launch_sim.sh [accel|skidpad] [perception|no_perception] [gui|nogui]
 #   accel         — acceleration event (default)
 #   skidpad       — skidpad event
 #   perception    — full LiDAR pipeline (lidar_cone_detector → boundary_extractor)
 #   no_perception — ground truth cones direct to planner (default, faster to test)
+#   gui           — show Gazebo GUI window (default)
+#   nogui         — headless Gazebo (faster, for Jetson / no display)
 # =============================================================================
 
 GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
@@ -50,7 +53,18 @@ case "$MODE" in
         ;;
 esac
 
-echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE"
+# Parse GUI mode
+GUI_ARG=${3:-gui}
+case "$GUI_ARG" in
+    gui)   GAZEBO_GUI=true  ;;
+    nogui) GAZEBO_GUI=false ;;
+    *)
+        echo "Unknown gui arg '$GUI_ARG'. Use: gui or nogui"
+        exit 1
+        ;;
+esac
+
+echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI"
 
 # Create log directory
 mkdir -p $LOG_DIR
@@ -62,12 +76,6 @@ SOURCE_ALL="export EUFS_MASTER=$EUFS_WS && \
             source $GAZEBO_ROS_WS/install/setup.bash && \
             source $EUFS_WS/install/setup.bash && \
             source $MFE_WS/install/setup.bash"
-
-# Mission set command (run from pane 4 after sim is up)
-MISSION_CMD="$SOURCE_ALL && ros2 service call /ros_can/set_mission eufs_msgs/srv/SetCanState '{ami_state: $AMI_STATE, as_state: 2}'"
-
-# Logging command — ground truth state + odometry
-LOG_CMD="$SOURCE_ALL && ros2 topic echo /ground_truth/state | tee $LOG_DIR/${TRACK}_\$(date +%Y%m%d_%H%M%S).log"
 
 # Kill any existing session and stale ROS/Gazebo processes
 tmux kill-session -t mfe 2>/dev/null || true
@@ -96,7 +104,7 @@ tmux split-window -v -t mfe:0.3      # mid-right | bottom-right
 
 # Pane 0 (top-left) — EUFS Sim
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=false rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF" Enter
 
 # Small delay so sim starts first
 sleep 2
