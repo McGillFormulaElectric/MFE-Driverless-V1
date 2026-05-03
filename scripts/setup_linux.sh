@@ -206,7 +206,7 @@ config.window_background_opacity = 0.95
 config.window_padding = { left = 8, right = 8, top = 8, bottom = 8 }
 config.enable_tab_bar = true
 config.hide_tab_bar_if_only_one_tab = true
-config.window_decorations = "RESIZE"
+config.window_decorations = "TITLE | RESIZE"
 config.scrollback_lines = 10000
 config.default_prog = { "/bin/zsh", "-l" }
 
