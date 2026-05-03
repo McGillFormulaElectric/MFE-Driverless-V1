@@ -76,6 +76,50 @@ LUACONF
 
 echo "LazyVim installed with lazygit keybinds: <leader>gg / gG / gf"
 
+# diffview: side-by-side file diff against any branch
+cat > ~/.config/nvim/lua/plugins/diffview.lua << 'LUACONF'
+return {
+  "sindrets/diffview.nvim",
+  dependencies = { "nvim-lua/plenary.nvim" },
+  cmd = { "DiffviewOpen", "DiffviewFileHistory" },
+  keys = {
+    -- Diff current file against main (vertical split)
+    {
+      "<leader>gd",
+      function()
+        local file = vim.fn.expand("%")
+        vim.cmd("DiffviewOpen main -- " .. file)
+      end,
+      desc = "Diff file vs main",
+    },
+    -- Diff current file against a branch you type
+    {
+      "<leader>gD",
+      function()
+        local branch = vim.fn.input("Diff against branch: ", "main")
+        if branch ~= "" then
+          local file = vim.fn.expand("%")
+          vim.cmd("DiffviewOpen " .. branch .. " -- " .. file)
+        end
+      end,
+      desc = "Diff file vs branch...",
+    },
+    -- Full repo diff against main
+    { "<leader>gm", "<cmd>DiffviewOpen main<cr>",           desc = "Diff repo vs main" },
+    -- File history (log with diffs) for current file
+    { "<leader>gh", "<cmd>DiffviewFileHistory %<cr>",        desc = "File git history" },
+    -- Close diffview
+    { "<leader>gq", "<cmd>DiffviewClose<cr>",                desc = "Close diffview" },
+  },
+  opts = {
+    view = {
+      default = { layout = "diff2_vertical" },   -- always vertical split
+      file_history = { layout = "diff2_vertical" },
+    },
+  },
+}
+LUACONF
+
 # =============================================================================
 echo "==> [4/8] Installing Node.js (for Claude Code)..."
 # =============================================================================
