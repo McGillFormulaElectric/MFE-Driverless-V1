@@ -5,11 +5,22 @@
 # Usage: bash scripts/docker_run.sh [accel|skidpad] [perception|no_perception] [gui|nogui]
 #
 # Prerequisites on host:
-#   - nvidia-container-toolkit installed  (sudo apt install nvidia-container-toolkit)
-#   - Docker daemon restarted after toolkit install
-#   - Repos cloned at ~/Develop/MFE26-eufs-sim and ~/Develop/MFE-Driverless-V1
-#     (setup_remote.sh --skip-ros will do this on first run inside the container)
+#   - Docker installed
+#   - NVIDIA drivers installed (nvidia-container-toolkit is auto-installed if missing)
 # =============================================================================
+
+# Install nvidia-container-toolkit if missing (needed for --gpus all)
+if ! dpkg -s nvidia-container-toolkit &>/dev/null; then
+    echo "==> Installing nvidia-container-toolkit..."
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    sudo apt update && sudo apt install -y nvidia-container-toolkit
+    sudo systemctl restart docker
+    echo "nvidia-container-toolkit installed and Docker restarted"
+fi
 
 EVENT=${1:-accel}
 MODE=${2:-no_perception}
