@@ -26,6 +26,14 @@ sudo apt install -y \
     xclip xsel \
     fontconfig
 
+# JetBrains Mono Nerd Font (used by WezTerm + nvim icons)
+mkdir -p ~/.local/share/fonts
+curl -Lo /tmp/JetBrainsMono.tar.xz \
+    "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
+tar -xf /tmp/JetBrainsMono.tar.xz -C ~/.local/share/fonts/
+fc-cache -fv ~/.local/share/fonts/
+rm /tmp/JetBrainsMono.tar.xz
+
 # fd is called fdfind on Ubuntu, symlink it
 sudo ln -sf $(which fdfind) /usr/local/bin/fd 2>/dev/null || true
 # bat is called batcat on Ubuntu, symlink it
@@ -170,6 +178,62 @@ curl -Lo lazygit.tar.gz \
 tar xf lazygit.tar.gz lazygit
 sudo install lazygit -D -t /usr/local/bin/
 rm lazygit lazygit.tar.gz
+
+# =============================================================================
+echo "==> [6b] Installing WezTerm..."
+# =============================================================================
+curl -fsSL https://apt.fury.io/wez/gpg.key \
+    | sudo gpg --yes --dearmor -o /usr/share/keyrings/wezterm-fury.gpg
+echo "deb [signed-by=/usr/share/keyrings/wezterm-fury.gpg] https://apt.fury.io/wez/ * *" \
+    | sudo tee /etc/apt/sources.list.d/wezterm.list
+sudo apt update && sudo apt install -y wezterm
+
+# Write a base WezTerm config
+mkdir -p ~/.config/wezterm
+cat > ~/.config/wezterm/wezterm.lua << 'WEZCONF'
+local wezterm = require("wezterm")
+local config = wezterm.config_builder()
+
+-- Font
+config.font = wezterm.font("JetBrains Mono", { weight = "Regular" })
+config.font_size = 13.0
+
+-- Theme
+config.color_scheme = "Catppuccin Mocha"
+
+-- Window
+config.window_background_opacity = 0.95
+config.window_padding = { left = 8, right = 8, top = 8, bottom = 8 }
+config.enable_tab_bar = true
+config.hide_tab_bar_if_only_one_tab = true
+config.window_decorations = "RESIZE"
+
+-- Scrollback
+config.scrollback_lines = 10000
+
+-- Shell
+config.default_prog = { "/bin/zsh", "-l" }
+
+-- Keys
+config.keys = {
+  -- Split panes
+  { key = "|", mods = "CTRL|SHIFT", action = wezterm.action.SplitHorizontal { domain = "CurrentPaneDomain" } },
+  { key = "-", mods = "CTRL|SHIFT", action = wezterm.action.SplitVertical   { domain = "CurrentPaneDomain" } },
+  -- Navigate panes
+  { key = "h", mods = "CTRL|SHIFT", action = wezterm.action.ActivatePaneDirection("Left")  },
+  { key = "l", mods = "CTRL|SHIFT", action = wezterm.action.ActivatePaneDirection("Right") },
+  { key = "k", mods = "CTRL|SHIFT", action = wezterm.action.ActivatePaneDirection("Up")    },
+  { key = "j", mods = "CTRL|SHIFT", action = wezterm.action.ActivatePaneDirection("Down")  },
+  -- New tab
+  { key = "t", mods = "CTRL|SHIFT", action = wezterm.action.SpawnTab("CurrentPaneDomain") },
+  -- Copy/paste
+  { key = "c", mods = "CTRL|SHIFT", action = wezterm.action.CopyTo("Clipboard") },
+  { key = "v", mods = "CTRL|SHIFT", action = wezterm.action.PasteFrom("Clipboard") },
+}
+
+return config
+WEZCONF
+echo "WezTerm installed with Catppuccin Mocha config"
 
 # =============================================================================
 echo "==> [7/8] Installing Discord..."
