@@ -8,7 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
 from fs_msgs.msg import ControlCommand
-from std_msgs.msg import Header
+from std_msgs.msg import Bool, Header
 
 
 class PurePursuitNode(Node):
@@ -27,8 +27,8 @@ class PurePursuitNode(Node):
         super().__init__('pure_pursuit_node')
 
         # Parameters
-        self.declare_parameter('lookahead_distance', 2.0)
-        self.declare_parameter('max_speed', 5.0)
+        self.declare_parameter('lookahead_distance', 5.0)
+        self.declare_parameter('max_speed', 10.0)
         self.declare_parameter('wheelbase', 1.5)
         self.declare_parameter('max_steering_deg', 25.0)
         self.declare_parameter('speed_reduction_factor', 0.5)
@@ -48,6 +48,8 @@ class PurePursuitNode(Node):
         self._car_x = None
         self._car_y = None
         self._car_yaw = None
+        self._mission_finished = False
+        self._path_idx = 0         # progress index into path (prevents rewinding on loops)
 
         # QoS
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
@@ -65,6 +67,12 @@ class PurePursuitNode(Node):
             '/ekf/output',
             self._odom_callback,
             best_effort_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/planning/mission_finished',
+            self._finished_callback,
+            reliable_qos,
         )
 
         # Publisher
@@ -87,13 +95,19 @@ class PurePursuitNode(Node):
     # Callbacks
     # ------------------------------------------------------------------
 
+    def _finished_callback(self, msg: Bool):
+        if msg.data and not self._mission_finished:
+            self.get_logger().info('Mission finished signal received — pure pursuit stopped.')
+            self._mission_finished = True
+
     def _path_callback(self, msg: Path):
         if not msg.poses:
             self.get_logger().warn('Received empty path — ignoring.')
             return
-        self._path = [
-            (p.pose.position.x, p.pose.position.y) for p in msg.poses
-        ]
+        new_path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+        if self._path is None or len(new_path) != len(self._path):
+            self._path_idx = 0   # reset progress when path length changes
+        self._path = new_path
 
     def _odom_callback(self, msg: Odometry):
         self._car_x = msg.pose.pose.position.x
@@ -105,6 +119,10 @@ class PurePursuitNode(Node):
     # ------------------------------------------------------------------
 
     def _control_loop(self):
+        # Yield to finish_detector once mission is complete
+        if self._mission_finished:
+            return
+
         # Publish zero command if state is not yet available
         if self._path is None or self._car_x is None:
             if self._path is None:
@@ -165,29 +183,42 @@ class PurePursuitNode(Node):
 
     def _find_lookahead_point(self):
         """
-        Find the furthest waypoint still within lookahead_distance of the car.
+        Find the furthest waypoint still within lookahead_distance.
 
-        Strategy:
-          1. Find the index of the closest waypoint.
-          2. Walk forward from there; keep the last point that is within
-             lookahead_distance.
-          3. If no point from the closest onward is within lookahead_distance,
-             return the closest waypoint itself (end-of-path fallback).
+        Searches a forward window from _path_idx to avoid rewinding on loops
+        (e.g. the skidpad 2-lap circular path revisits the same spatial point).
+        Falls back to a global search on startup.
         """
         path = self._path
         car_x, car_y = self._car_x, self._car_y
         ld = self._lookahead_distance
 
-        # Find the index of the closest waypoint
+        # Small window prevents latching onto a later overlapping path segment
+        # (e.g. skidpad exit straight overlaps the circle x-range).
+        # Global fallback handles startup / large deviations.
+        search_start = self._path_idx
+        search_end = min(len(path), search_start + 30)
+
         min_dist = float('inf')
-        closest_idx = 0
-        for i, (wx, wy) in enumerate(path):
+        closest_idx = search_start
+        for i in range(search_start, search_end):
+            wx, wy = path[i]
             d = math.hypot(wx - car_x, wy - car_y)
             if d < min_dist:
                 min_dist = d
                 closest_idx = i
 
-        # Walk forward from closest, keep the last point within lookahead circle
+        # Global fallback if no close point found in window (initialisation)
+        if min_dist > 20.0:
+            for i, (wx, wy) in enumerate(path):
+                d = math.hypot(wx - car_x, wy - car_y)
+                if d < min_dist:
+                    min_dist = d
+                    closest_idx = i
+
+        self._path_idx = closest_idx
+
+        # Walk forward for lookahead
         lookahead_point = None
         for i in range(closest_idx, len(path)):
             wx, wy = path[i]
@@ -195,11 +226,9 @@ class PurePursuitNode(Node):
             if d <= ld:
                 lookahead_point = (wx, wy)
             else:
-                # Once we exceed lookahead distance we can stop (path is ordered)
                 break
 
         if lookahead_point is None:
-            # No waypoint within lookahead circle — use the closest one
             lookahead_point = path[closest_idx]
 
         return lookahead_point

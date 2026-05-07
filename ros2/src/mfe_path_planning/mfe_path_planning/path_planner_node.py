@@ -84,6 +84,48 @@ def _path_from_xy(xy: np.ndarray, frame_id: str, stamp) -> Path:
     return path
 
 
+def _make_skidpad_path() -> np.ndarray:
+    """
+    Generate the full skidpad trajectory for the EUFS Gazebo track.
+
+    Sequence (per user spec): 2 laps LEFT (upper circle, counterclockwise)
+    then 2 laps RIGHT (lower circle, clockwise), then exit.
+
+    Parameters tuned to the EUFS standard skidpad track dimensions:
+      inner cone radius = 7.625 m (standard FSAE), outer = 10.6 m
+      path radius = midpoint = 9.1 m, circle centres at (14.4, ±9.3)
+    """
+    cx, cy_l, cy_r = 14.4, 9.3, -9.3   # x shared, y for left/right circles
+    R = 9.1                              # centreline radius
+
+    N = 50    # waypoints per full lap (keep message small; ~220 total waypoints)
+
+    # Entry straight from (0,0) to left-circle 6-o'clock entry
+    n_entry = 40
+    entry = np.column_stack([
+        np.linspace(0, cx, n_entry),
+        np.zeros(n_entry),
+    ])
+
+    # Left circle (upper, counterclockwise): entry at 6 o'clock (θ = -π/2), car moving +x
+    theta_l = np.linspace(-math.pi / 2, -math.pi / 2 + 4 * math.pi, N * 2 + 1)
+    left_circ = np.column_stack([cx + R * np.cos(theta_l), cy_l + R * np.sin(theta_l)])
+
+    # Right circle (lower, clockwise): entry at 12 o'clock (θ = +π/2), car moving +x
+    theta_r = np.linspace(math.pi / 2, math.pi / 2 - 4 * math.pi, N * 2 + 1)
+    right_circ = np.column_stack([cx + R * np.cos(theta_r), cy_r + R * np.sin(theta_r)])
+
+    # Exit straight from right-circle 12 o'clock back to y=0 then to end zone
+    n_exit = 40
+    exit_pts = np.column_stack([
+        np.linspace(cx, 40.0, n_exit),
+        np.zeros(n_exit),
+    ])
+
+    # Stitch: omit duplicate junction point between sections
+    return np.vstack([entry[:-1], left_circ, right_circ, exit_pts])
+
+
 class PathPlannerNode(Node):
 
     def __init__(self):
@@ -96,24 +138,34 @@ class PathPlannerNode(Node):
 
         # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
-        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration
+        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
+        self._mission = mission_str
 
-        if _LIB_AVAILABLE:
+        if _LIB_AVAILABLE and mission_str != 'skidpad':
             mission_map = {
                 'autocross':   MissionTypes.autocross,
                 'trackdrive':  MissionTypes.trackdrive,
                 'acceleration': MissionTypes.acceleration,
-                'skidpad':     MissionTypes.skidpad,
             }
             mission = mission_map.get(mission_str, MissionTypes.autocross)
             self._planner = PathPlanner(mission)
-            self.get_logger().info(
-                f'PathPlannerNode started. Mission: {mission_str}')
         else:
             self._planner = None
+
+        # Pre-compute skidpad path (published once on first cone observation)
+        self._skidpad_path_published = False
+        if mission_str == 'skidpad':
+            self._skidpad_path = _make_skidpad_path()
+            self.get_logger().info(
+                f'PathPlannerNode started. Mission: skidpad | '
+                f'hardcoded path: {len(self._skidpad_path)} waypoints, '
+                f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
+        else:
+            self._skidpad_path = None
+            self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
 
         # ---------- State ----------
         self._car_pos = np.array([0.0, 0.0])
@@ -139,6 +191,19 @@ class PathPlannerNode(Node):
         self._odom_received = True
 
     def _cones_cb(self, msg: Track) -> None:
+        # Skidpad: publish the pre-computed hardcoded path every time cones arrive
+        # (published repeatedly so pure_pursuit doesn't miss it on startup)
+        if self._mission == 'skidpad':
+            if self._odom_received:
+                stamp = self.get_clock().now().to_msg()
+                self._pub_centerline.publish(
+                    _path_from_xy(self._skidpad_path, self._map_frame, stamp))
+                if not self._skidpad_path_published:
+                    self._skidpad_path_published = True
+                    self.get_logger().info(
+                        f'Skidpad path first publish: {len(self._skidpad_path)} waypoints')
+            return
+
         if not _LIB_AVAILABLE or self._planner is None:
             return
 
@@ -185,8 +250,11 @@ class PathPlannerNode(Node):
         stamp = self.get_clock().now().to_msg()
         frame = self._map_frame
 
+        # final_path columns: (spline_parameter, path_x, path_y, curvature)
+        # Use columns 1:3 for actual (x, y); col 0 is the spline parameter, not a coordinate.
         if path_xy is not None and len(path_xy) > 0:
-            self._pub_centerline.publish(_path_from_xy(np.array(path_xy)[:, :2], frame, stamp))
+            self._pub_centerline.publish(_path_from_xy(np.array(path_xy)[:, 1:3], frame, stamp))
+        # sorted_left / sorted_right are Mx2 (x,y) already — use :2
         if left_xy is not None and len(left_xy) > 0:
             self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
         if right_xy is not None and len(right_xy) > 0:
