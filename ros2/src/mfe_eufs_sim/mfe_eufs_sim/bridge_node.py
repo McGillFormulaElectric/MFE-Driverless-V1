@@ -7,12 +7,24 @@ Translates between EUFS simulator topics and the MFE driverless stack topics.
 EUFS Sim → Driverless Stack:
   /velodyne_points              (PointCloud2)              → /lidar/points_raw
   /zed/left/image_rect_color    (Image)                    → /camera/image_raw
-  /cones                        (eufs_msgs/ConeArrayWithCovariance) → /planning/cones (mfe_msgs/Track)
-  /ground_truth/cones           (eufs_msgs/ConeArrayWithCovariance) → /perception/cones_uncolored (PointCloud2)
-  /ground_truth/state           (eufs_msgs/CarState)       → /ekf/output (nav_msgs/Odometry)
+  /ground_truth/cones           (eufs_msgs/ConeArrayWithCovariance) → /ground_truth/cones_colored (mfe_msgs/Track)
+                                                                       (accuracy measurement only)
+  /ground_truth/state           (eufs_msgs/CarState)       → /ground_truth/state_odom (nav_msgs/Odometry)
+
+  When use_sim_cones_directly=True (GT bypass mode):
+  /ground_truth/track           (eufs_msgs/ConeArrayWithCovariance) → /planning/cones (mfe_msgs/Track)
+                                                                       BLUE+YELLOW only, world frame, no transform
+
+  When use_sim_cones_directly=False (perception mode):
+  /lidar/points_raw is consumed by lidar_perception_node → /perception/cones_uncolored
+  Bridge does NOT publish to /perception/cones_uncolored — LiDAR detector owns that topic.
 
 Driverless Stack → EUFS Sim:
   /control/command              (fs_msgs/ControlCommand)   → /cmd (ackermann_msgs/AckermannDriveStamped)
+
+NOTE: The EKF node (mfe_state_estimation) publishes to /ekf/output from GPS+IMU data.
+      The bridge publishes ground truth as /ground_truth/state_odom for accuracy measurement only.
+      Do NOT publish to /ekf/output from the bridge — that topic belongs to the EKF node.
 """
 
 import math
@@ -188,30 +200,37 @@ class EufsSimBridge(Node):
             Image, '/camera/image_raw', _QOS_MFE)
 
         # ---------- EUFS → MFE: Cones ----------
-        # /ground_truth/cones — used directly for path planning when
-        # use_sim_cones_directly=True. Ground truth has proper BLUE/YELLOW/ORANGE
-        # color labels that the path planner needs to determine left/right boundaries.
-        # (The /cones topic simulates LiDAR perception which strips color info.)
+        # Ground truth cones (proximity-limited) → /ground_truth/cones_colored
+        self.create_subscription(
+            ConeArrayWithCovariance, '/ground_truth/cones', self._gt_cones_cb, _QOS_EUFS)
+        self._gt_colored_pub = self.create_publisher(
+            Track, '/ground_truth/cones_colored', _QOS_MFE)
+
+        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored
+        # Used by boundary_extractor as a color fallback when camera is not running.
+        self.create_subscription(
+            ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
+        self._gt_track_colored_pub = self.create_publisher(
+            Track, '/ground_truth/track_colored', _QOS_MFE)
+
+        # GT bypass mode: forward full track cones directly to /planning/cones so
+        # the path planner can run without the perception pipeline.
+        # /ground_truth/track gives ALL cones in Gazebo world frame (= TF map frame) —
+        # no coordinate transformation needed; positions are absolute and stable.
         if self._use_sim_cones_directly:
             self.create_subscription(
-                ConeArrayWithCovariance, '/ground_truth/cones', self._sim_cones_cb, _QOS_EUFS)
+                ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
                 Track, '/planning/cones', _QOS_MFE)
 
-        # /ground_truth/cones — noiseless, feeds /perception/cones_uncolored so the
-        # boundary_extractor and full stack can be exercised end-to-end.
-        self.create_subscription(
-            ConeArrayWithCovariance, '/ground_truth/cones',
-            self._gt_cones_cb, _QOS_EUFS)
-        self._uncolored_pub = self.create_publisher(
-            PointCloud2, '/perception/cones_uncolored', _QOS_MFE)
-
-        # ---------- EUFS → MFE: Vehicle state ----------
+        # ---------- EUFS → MFE: Vehicle state (ground truth for accuracy measurement) ----------
+        # Publishes to /ground_truth/state_odom — NOT to /ekf/output.
+        # The EKF node (mfe_state_estimation) is the sole publisher of /ekf/output.
         from eufs_msgs.msg import CarState
         self.create_subscription(
             CarState, '/ground_truth/state', self._car_state_cb, _QOS_EUFS)
         self._odom_pub = self.create_publisher(
-            Odometry, '/ekf/output', _QOS_MFE)
+            Odometry, '/ground_truth/state_odom', _QOS_MFE)
 
         # ---------- MFE → EUFS: Control commands ----------
         self.create_subscription(
@@ -225,9 +244,12 @@ class EufsSimBridge(Node):
                 'ackermann_msgs not found — /control/command will NOT be forwarded to /cmd. '
                 'Install with: sudo apt install ros-$ROS_DISTRO-ackermann-msgs')
 
+        mode = 'GT-bypass (→ /planning/cones)' if self._use_sim_cones_directly else 'perception (LiDAR detector owns /perception/cones_uncolored)'
         self.get_logger().info(
             f'EufsSimBridge started (velocity mode). '
-            f'Sim cones → planner: {self._use_sim_cones_directly} | '
+            f'Cone mode: {mode} | '
+            f'GT cones always → /ground_truth/cones_colored | '
+            f'Ground truth state → /ground_truth/state_odom (NOT /ekf/output) | '
             f'Max speed: {self.MAX_SPEED_MS} m/s | '
             f'Max steering: {math.degrees(self.MAX_STEERING_ANGLE_RAD):.1f}°')
 
@@ -247,22 +269,53 @@ class EufsSimBridge(Node):
 
     def _sim_cones_cb(self, msg: ConeArrayWithCovariance) -> None:
         """
-        Convert noisy sim cones → mfe_msgs/Track and publish to /planning/cones.
-        Bypasses lidar_perception_node and boundary_extractor — for planner testing.
+        Full track cones (GT bypass) → /planning/cones.
+
+        /ground_truth/track gives ALL track cones in Gazebo world frame, which is
+        identical to the TF map frame in a fresh sim (publish_gt_tf:=true sets
+        map→odom→base_footprint from Gazebo). Positions are absolute and stable —
+        no coordinate transformation required.
+
+        Only BLUE and YELLOW boundary cones are forwarded. ORANGE_BIG are
+        start/finish pylons that sit off to the side and confuse the path planner.
         """
-        track = _cone_array_to_track(msg, self._map_frame)
+        track = Track()
+        stamp = msg.header.stamp
+
+        def make_cone(point, color_int: int) -> Cone:
+            c = Cone()
+            c.header.stamp = stamp
+            c.header.frame_id = self._map_frame
+            c.location.x = float(point.x)
+            c.location.y = float(point.y)
+            c.location.z = float(point.z)
+            c.color = color_int
+            return c
+
+        for cw in msg.blue_cones:
+            track.track.append(make_cone(cw.point, Cone.BLUE))
+        for cw in msg.yellow_cones:
+            track.track.append(make_cone(cw.point, Cone.YELLOW))
+        # ORANGE_BIG omitted — start/finish pylons at off-track positions confuse the planner
+
         self._planning_cones_pub.publish(track)
 
     def _gt_cones_cb(self, msg: ConeArrayWithCovariance) -> None:
+        """Proximity-limited GT cones → /ground_truth/cones_colored."""
+        # Use actual frame_id (base_footprint) so consumers can transform correctly.
+        track = _cone_array_to_track(msg, msg.header.frame_id)
+        self._gt_colored_pub.publish(track)
+
+    def _gt_track_cb(self, msg: ConeArrayWithCovariance) -> None:
+        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored.
+        Published in the EUFS track-local frame for debugging/visualisation in Foxglove.
+        NOTE: frame_id='map' here is the Gazebo track-local origin, NOT the TF map frame.
         """
-        Convert ground truth cones → PointCloud2 and publish to
-        /perception/cones_uncolored so boundary_extractor can process them.
-        """
-        cloud = _cone_array_to_pointcloud2(msg)
-        self._uncolored_pub.publish(cloud)
+        track = _cone_array_to_track(msg, msg.header.frame_id)
+        self._gt_track_colored_pub.publish(track)
 
     def _car_state_cb(self, msg) -> None:
-        """Convert eufs_msgs/CarState → nav_msgs/Odometry → /ekf/output."""
+        """Convert eufs_msgs/CarState → nav_msgs/Odometry → /ground_truth/state_odom."""
         odom = _car_state_to_odometry(msg)
         self._odom_pub.publish(odom)
 

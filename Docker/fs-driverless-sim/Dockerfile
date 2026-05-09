@@ -4,6 +4,13 @@ ENV ROS_DISTRO=humble
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+ENV EUFS_MASTER=/root/Develop/MFE26-eufs-sim
+
+# Generate locale so bash doesn't warn on every invocation
+RUN apt-get update && apt-get install -y --no-install-recommends locales \
+    && locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
 
 # System deps: Gazebo 11, ROS bridge packages, perception libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-geometry-msgs \
     ros-humble-ackermann-msgs \
     ros-humble-foxglove-bridge \
+    ros-humble-xacro \
     ros-humble-joint-state-publisher \
     ros-humble-robot-state-publisher \
     ros-humble-slam-toolbox \
@@ -41,14 +49,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# NOTE: cuda-pcl (NVIDIA-AI-IOT/cuda-pcl) ships pre-built ARM aarch64 .so files only —
+# no x86_64 build path exists. On x86_64 (desktop/sim), lidar_perception_node falls back
+# to CPU PCL automatically (see CMakeLists.txt). On Jetson, build natively without Docker.
+
 # rosdep
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# Python deps — numpy must come first to avoid binary incompatibility
+# Python deps — install all together so pip respects the numpy<2 constraint
 RUN pip3 install --upgrade pip && \
-    pip3 install "numpy<2" && \
-    pip3 install "scipy>=1.13" scikit-learn icecream && \
-    pip3 install --upgrade --force-reinstall pandas
+    pip3 install "numpy<2" "scipy>=1.13" scikit-learn icecream pandas
 
 # ft-fsd-path-planning (PyPI name is broken; must install from source)
 RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /opt/ft-fsd-path-planning && \

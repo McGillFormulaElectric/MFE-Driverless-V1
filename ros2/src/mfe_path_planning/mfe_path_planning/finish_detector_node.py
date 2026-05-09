@@ -18,6 +18,8 @@ When finish is detected:
   - Publishes full brake to /control/command at 50 Hz.
 """
 
+import math
+
 import numpy as np
 
 import rclpy
@@ -60,20 +62,30 @@ class FinishDetectorNode(Node):
         # ---------- Parameters ----------
         self.declare_parameter('approach_x', 60.0)
         self.declare_parameter('finish_x', 78.0)       # position fallback trigger
+        self.declare_parameter('min_travel_m', 0.0)    # cumulative travel before any detection
+        self.declare_parameter('return_to_start_r', 0.0)  # >0: fire when car returns within this radius of start
         self.declare_parameter('detect_fwd_min_m', 1.5)
         self.declare_parameter('detect_fwd_max_m', 15.0)
         self.declare_parameter('detect_lateral_m', 4.0)
         self.declare_parameter('min_finish_points', 1)
 
-        self._approach_x = self.get_parameter('approach_x').value
-        self._finish_x   = self.get_parameter('finish_x').value
-        self._fwd_min    = self.get_parameter('detect_fwd_min_m').value
-        self._fwd_max    = self.get_parameter('detect_fwd_max_m').value
-        self._lat_max    = self.get_parameter('detect_lateral_m').value
-        self._min_pts    = self.get_parameter('min_finish_points').value
+        self._approach_x        = self.get_parameter('approach_x').value
+        self._finish_x          = self.get_parameter('finish_x').value
+        self._min_travel_m      = self.get_parameter('min_travel_m').value
+        self._return_r          = self.get_parameter('return_to_start_r').value
+        self._fwd_min           = self.get_parameter('detect_fwd_min_m').value
+        self._fwd_max           = self.get_parameter('detect_fwd_max_m').value
+        self._lat_max           = self.get_parameter('detect_lateral_m').value
+        self._min_pts           = self.get_parameter('min_finish_points').value
 
-        self._car_x      = 0.0
-        self._finished   = False
+        self._car_x         = 0.0
+        self._start_x       = None   # recorded on first odometry message
+        self._start_y       = None
+        self._prev_x        = None
+        self._prev_y        = None
+        self._travel_m      = 0.0
+        self._max_dist_from_start = 0.0   # track peak excursion to guard crossing false-positive
+        self._finished      = False
 
         # ---------- QoS ----------
         sensor_qos = QoSProfile(
@@ -112,8 +124,10 @@ class FinishDetectorNode(Node):
 
         self.get_logger().info(
             f'FinishDetectorNode started | '
-            f'LiDAR: approach_x={self._approach_x} m, range=[{self._fwd_min},{self._fwd_max}] m | '
-            f'Position fallback: finish_x={self._finish_x} m')
+            f'min_travel={self._min_travel_m} m | '
+            f'return_to_start_r={self._return_r} m | '
+            f'LiDAR range=[{self._fwd_min},{self._fwd_max}] m | '
+            f'position fallback: finish_x={self._finish_x} m')
 
     # ------------------------------------------------------------------ #
 
@@ -130,14 +144,49 @@ class FinishDetectorNode(Node):
         self._finished_pub.publish(done)             # → pure_pursuit
 
     def _odom_cb(self, msg: Odometry) -> None:
-        self._car_x = msg.pose.pose.position.x
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        self._car_x = x
+
+        # Record start position on first message
+        if self._start_x is None:
+            self._start_x, self._start_y = x, y
+
+        # Accumulate travel distance
+        if self._prev_x is not None:
+            self._travel_m += math.hypot(x - self._prev_x, y - self._prev_y)
+        self._prev_x, self._prev_y = x, y
+
+        if self._finished:
+            return
+
+        # Track max distance from start to guard against false positives at track crossing
+        dist_from_start = math.hypot(x - self._start_x, y - self._start_y)
+        if dist_from_start > self._max_dist_from_start:
+            self._max_dist_from_start = dist_from_start
+
+        # Return-to-start detection: fires once car has travelled min_travel_m
+        # AND has first ventured at least 15 m away from start (prevents firing at the
+        # peanut figure-8 crossing where the car briefly passes near the origin mid-lap).
+        if self._return_r > 0.0 and self._travel_m >= self._min_travel_m and self._max_dist_from_start >= 15.0:
+            if dist_from_start <= self._return_r:
+                self._latch_finished(
+                    f'return-to-start (dist={dist_from_start:.1f} m <= {self._return_r} m '
+                    f'after {self._travel_m:.0f} m travel, max_excursion={self._max_dist_from_start:.1f} m)')
+                return
 
         # Position-based fallback: fires when LiDAR detection was missed
-        if not self._finished and self._car_x >= self._finish_x:
+        if self._car_x >= self._finish_x:
             self._latch_finished(f'position (car_x={self._car_x:.1f} >= finish_x={self._finish_x})')
 
     def _lidar_cb(self, msg: PointCloud2) -> None:
-        if self._finished or self._car_x < self._approach_x:
+        if self._finished:
+            return
+        # Use travel distance gate if configured, else fall back to x-position gate
+        if self._min_travel_m > 0.0:
+            if self._travel_m < self._min_travel_m:
+                return
+        elif self._car_x < self._approach_x:
             return
         pts = _extract_xyz(msg)
         if pts.shape[0] == 0:

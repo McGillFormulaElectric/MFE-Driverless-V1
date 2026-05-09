@@ -65,10 +65,10 @@ def generate_launch_description():
 
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
-        default_value='',
+        default_value=os.path.expanduser('~/mfe_models/yolo/yolov8s/weights/best.pt'),
         description=(
             'Absolute path to YOLO weights file for the vision cone detector. '
-            'Leave empty (default) to skip launching the vision detector.'
+            'Leave empty to skip. Defaults to trained yolov8s weights.'
         ),
     )
 
@@ -205,13 +205,27 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     # Control — Pure pursuit
     # --------------------------------------------------------------------------
-    pure_pursuit_node = Node(
-        package='mfe_control',
-        executable='pure_pursuit_node',
-        name='pure_pursuit_node',
-        output='screen',
-        remappings=[('/ekf/output', pose_topic)],
-    )
+    # Pure pursuit speed/lookahead are mission-dependent: skidpad needs lower speed
+    # for the tight 9.1m radius circles; other missions use the full 10 m/s.
+    def _make_pure_pursuit(context):
+        mission_str = context.launch_configurations.get('mission', 'autocross')
+        pt = context.launch_configurations.get('pose_topic', '/ekf/output')
+        if mission_str == 'skidpad':
+            params = [{'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6}]
+        elif mission_str == 'acceleration':
+            params = [{'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}]
+        else:  # autocross / trackdrive
+            params = [{'max_speed': 7.0, 'lookahead_distance': 3.5, 'max_lateral_accel': 5.0, 'speed_reduction_factor': 0.3}]
+        return [Node(
+            package='mfe_control',
+            executable='pure_pursuit_node',
+            name='pure_pursuit_node',
+            output='screen',
+            parameters=params,
+            remappings=[('/ekf/output', pt)],
+        )]
+
+    pure_pursuit_node = OpaqueFunction(function=_make_pure_pursuit)
 
     # --------------------------------------------------------------------------
     # Mission control — Finish-line detector
@@ -222,6 +236,14 @@ def generate_launch_description():
         fx = _FINISH_X.get(mission_str, 100.0)
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
+        # Closed-loop tracks (autocross/trackdrive) use return-to-start detection:
+        # once min_travel_m is covered, fire when the car comes back within
+        # return_to_start_r metres of its start position.
+        # Linear tracks (acceleration, skidpad) keep the original x-position logic.
+        if mission_str in ('autocross', 'trackdrive'):
+            extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0}
+        else:
+            extra = {}
         return [Node(
             package='mfe_path_planning',
             executable='finish_detector_node',
@@ -234,6 +256,7 @@ def generate_launch_description():
                 'detect_fwd_max_m': 15.0,
                 'detect_lateral_m': 4.0,
                 'min_finish_points': 1,
+                **extra,
             }],
             remappings=[('/ekf/output', pt)],
         )]

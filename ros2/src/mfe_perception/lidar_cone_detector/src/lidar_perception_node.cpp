@@ -22,6 +22,7 @@
 #else
     #define USE_GPU_PIPELINE 0
     #include <pcl/filters/voxel_grid.h>
+    #include <pcl/filters/passthrough.h>
     #include <pcl/segmentation/sac_segmentation.h>
     #include <pcl/filters/extract_indices.h>
     #include <pcl/search/kdtree.h>
@@ -263,7 +264,9 @@ private:
             pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
             pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
             seg.setOptimizeCoefficients(true);
-            seg.setModelType(pcl::SACMODEL_PLANE);
+            seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
+            seg.setAxis(Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+            seg.setEpsAngle(pcl::deg2rad(10.0f));
             seg.setMethodType(pcl::SAC_RANSAC);
             seg.setDistanceThreshold(ground_threshold_);
             seg.setInputCloud(downsampled);
@@ -276,6 +279,19 @@ private:
             extract.setIndices(inliers);
             extract.setNegative(true);
             extract.filter(*object_cloud);
+
+            // 3b. Z-passthrough: keep only cone-body height range [0.05, 0.60 m]
+            //     Eliminates residual ground scrape (z<0.05) and car-body reflections (z>0.60)
+            {
+                pcl::PassThrough<pcl::PointXYZ> pt;
+                pt.setInputCloud(object_cloud);
+                pt.setFilterFieldName("z");
+                pt.setFilterLimits(0.05f, 0.60f);
+                pcl::PointCloud<pcl::PointXYZ>::Ptr cone_body(new pcl::PointCloud<pcl::PointXYZ>);
+                pt.filter(*cone_body);
+                object_cloud = cone_body;
+            }
+
             *debug_object_cloud = *object_cloud; // For vis
 
             // 4. Clustering

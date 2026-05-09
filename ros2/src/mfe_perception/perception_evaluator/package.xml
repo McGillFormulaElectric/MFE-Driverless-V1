@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>perception_evaluator</name>
+  <version>0.1.0</version>
+  <description>Compares perception pipeline output vs ground truth cones</description>
+  <maintainer email="team@mfe.ca">MFE Driverless</maintainer>
+  <license>MIT</license>
+  <depend>rclpy</depend>
+  <depend>mfe_msgs</depend>
+  <depend>eufs_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>std_msgs</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

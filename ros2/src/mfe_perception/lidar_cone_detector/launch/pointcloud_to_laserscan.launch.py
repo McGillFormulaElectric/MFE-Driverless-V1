@@ -14,20 +14,20 @@ def generate_launch_description():
             namespace='lidar',
             executable='pointcloud_to_laserscan_node',
             remappings=[
-                ('cloud_in', 'pcl/objects'),
+                ('cloud_in', 'points_raw'),   # /lidar/points_raw (bridged from /velodyne_points)
                 ('scan', 'pcl/laserscan')
             ],
             parameters=[{
-                'target_frame':       'fsds/Lidar1',
-                'transform_tolerance': 0.05,
-                'min_height':         -1.3,    # ignore points below this (m) (has to be negative)
-                'max_height':         0.0,    # ignore points above this (m) (has to be negative)
-                'angle_min':         -3.14,   # start angle of the scan [rad]
-                'angle_max':          3.14,   # end angle of the scan [rad]
-                'scan_time':          0.07,  # expected time between scans [s]
-                'range_min':          1.0,    # minimum valid range [m]
-                'range_max':          30.0,    # maximum valid range [m]
-                'use_inf':           True
+                'target_frame':        'velodyne',  # EUFS sim VLP-16 frame
+                'transform_tolerance':  0.1,
+                'min_height':          -0.5,   # below LiDAR mount — captures cone bodies
+                'max_height':           0.5,   # above LiDAR mount
+                'angle_min':           -3.14,
+                'angle_max':            3.14,
+                'scan_time':            0.1,   # matches VLP-16 10 Hz
+                'range_min':            0.5,
+                'range_max':           30.0,
+                'use_inf':             True
             }]
         )
     ])

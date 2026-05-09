@@ -51,8 +51,8 @@ if _LIB_AVAILABLE:
     _MFE_TO_FSD = {
         Cone.BLUE:         ConeTypes.LEFT,
         Cone.YELLOW:       ConeTypes.RIGHT,
-        Cone.ORANGE_BIG:   ConeTypes.START_FINISH_AREA,
-        Cone.ORANGE_SMALL: ConeTypes.START_FINISH_LINE,
+        Cone.ORANGE_BIG:   ConeTypes.UNKNOWN,   # keep planner from triggering finish logic
+        Cone.ORANGE_SMALL: ConeTypes.UNKNOWN,
         Cone.UNKNOWN:      ConeTypes.UNKNOWN,
     }
 else:
@@ -216,10 +216,17 @@ class PathPlannerNode(Node):
 
         # Build cones_by_type: list of Nx2 arrays indexed by ConeTypes enum value
         # ft-fsd-path-planning expects: [unknown[], right[], left[], orange_big[], orange_small[]]
+        # Filter to cones within CONE_VIS_R of the car to avoid confusing the planner
+        # with the full track at once (critical for figure-8 / crossing tracks).
+        CONE_VIS_R = 20.0
         n_types = len(ConeTypes)
         buckets: list[list] = [[] for _ in range(n_types)]
 
         for cone in msg.track:
+            dx = cone.location.x - self._car_pos[0]
+            dy = cone.location.y - self._car_pos[1]
+            if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
+                continue
             cone_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
             buckets[cone_type].append([cone.location.x, cone.location.y])
 

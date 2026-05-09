@@ -56,4 +56,4 @@ endif()
 
 # install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
-# ament_auto_package() # Add back if needed for C++ components
+ament_package()

@@ -15,7 +15,6 @@ from rclpy.node import Node
 from ultralytics import YOLO
 
 from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
@@ -79,8 +78,6 @@ class ConeDetectionNode(Node):
         self.track_publisher = self.create_publisher(Track, "image/track", qos_profile) 
         self.centres_point_publisher = self.create_publisher(PointCloud2, "image/cone_centres", qos_profile) # the cone locations (can be visualized in rviz)
 
-        self.bridge = CvBridge()
-
         # store latest depth frame (if any)
         self.latest_depth = None
 
@@ -93,6 +90,21 @@ class ConeDetectionNode(Node):
         # self.object_tracking_t = threading.Thread(target=self.object_predicting, daemon=True)
         # self.object_tracking_t.start()
 
+    @staticmethod
+    def _imgmsg_to_bgr(msg: Image) -> np.ndarray:
+        """Convert sensor_msgs/Image to a BGR numpy array without cv_bridge."""
+        data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+        enc = msg.encoding
+        if enc in ('rgb8', 'bgr8'):
+            frame = data.reshape(msg.height, msg.width, 3)
+            return frame[..., ::-1].copy() if enc == 'rgb8' else frame.copy()
+        if enc in ('rgba8', 'bgra8'):
+            frame = data.reshape(msg.height, msg.width, 4)[..., :3]
+            return frame[..., ::-1].copy() if enc == 'rgba8' else frame.copy()
+        # fallback: treat as raw bytes, best-effort
+        channels = max(1, len(data) // (msg.height * msg.width))
+        return data.reshape(msg.height, msg.width, channels)
+
     def callback(self, msg: Image) -> None:
         """
         ROS2 subscription callback. Convert the ROS Image to OpenCV (numpy) and enqueue it.
@@ -101,7 +113,7 @@ class ConeDetectionNode(Node):
         Args:
             msg: sensor_msgs.msg.Image
         """
-        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        frame = self._imgmsg_to_bgr(msg)
 
         try:
             self.frame_queue.put(frame, timeout=3.0)
@@ -121,8 +133,9 @@ class ConeDetectionNode(Node):
         """
 
         try:
-            # attempt to convert depth into float32 meters
-            depth = self.bridge.imgmsg_to_cv2(msg)
+            data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+            depth = data.view(np.float32).reshape(msg.height, msg.width) if msg.encoding == '32FC1' \
+                else data.view(np.uint16).reshape(msg.height, msg.width).astype(np.float32)
         except Exception:
             self.get_logger().error("Failed to convert depth image")
             return
@@ -205,7 +218,15 @@ class ConeDetectionNode(Node):
                 self.get_logger().error(f"Error processing detections: {e}")
 
             # publish annotated image
-            image_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
+            image_msg = Image()
+            image_msg.header.stamp = self.get_clock().now().to_msg()
+            image_msg.header.frame_id = self.camera_frame
+            image_msg.height = annotated_frame.shape[0]
+            image_msg.width = annotated_frame.shape[1]
+            image_msg.encoding = 'bgr8'
+            image_msg.is_bigendian = 0
+            image_msg.step = annotated_frame.shape[1] * 3
+            image_msg.data = annotated_frame.tobytes()
             self.cone_image_publisher.publish(image_msg)
 
         return
@@ -225,9 +246,14 @@ class ConeDetectionNode(Node):
         all_cluster_points = []
         all_cluster_colors = []
 
-        centres = []  # list of (x,y,z)
-        centre_colors = []  # list of rgb uint8 triples
-        centre_areas = []  # area of bbox for heuristic color sizing
+        # YOLO class index → mfe_msgs/Cone color constant (matches FSOCO training labels)
+        _YOLO_CLS_TO_CONE = {0: Cone.BLUE, 1: Cone.YELLOW, 2: Cone.ORANGE_BIG, 3: Cone.ORANGE_SMALL}
+
+        centres = []       # list of (x,y,z) — metric 3D or pixel sentinel
+        centre_colors = [] # list of Cone color ints (from YOLO class) — for Track msg
+        centre_rgb = []    # list of (R,G,B) uint8 triples — for PointCloud2 visualization
+        centre_frames = [] # 'camera_base' (metric) or 'camera_pixel' (no depth)
+        centre_areas = []
 
         for r in detections:
             boxes = r.boxes
@@ -250,7 +276,11 @@ class ConeDetectionNode(Node):
                 cx = int((x1 + x2) / 2)
                 cy = int((y1 + y2) / 2)
 
-                # avg colour inside bbox (BGR -> convert to RGB)
+                # YOLO predicted class → cone color (replaces unreliable RGB heuristic)
+                yolo_cls = int(box.cls[0].item()) if box.cls is not None and len(box.cls) > 0 else -1
+                cone_color = int(_YOLO_CLS_TO_CONE.get(yolo_cls, Cone.UNKNOWN))
+
+                # avg colour inside bbox kept for pointcloud visualisation only
                 roi = frame[y1:y2, x1:x2]
                 if roi.size == 0:
                     continue
@@ -283,10 +313,17 @@ class ConeDetectionNode(Node):
                     X = (cx - self.cx_c) * z / self.fx
                     Y = (cy - self.cy_c) * z / self.fy
                     Z = z
+                    frame_mode = self.camera_frame
                 else:
-                    X, Y, Z = float('nan'), float('nan'), float('nan')
+                    # No depth: encode pixel centre as (cx, cy) and use z=-1 sentinel.
+                    # Consumers that understand this convention (e.g. fusion_evaluator) can
+                    # project LiDAR centroids to image space and match by pixel distance.
+                    X, Y, Z = float(cx), float(cy), -1.0
+                    frame_mode = 'camera_pixel'
                 centres.append((X, Y, Z))
-                centre_colors.append(mean_rgb)
+                centre_colors.append(cone_color)   # YOLO class int — for Track msg
+                centre_rgb.append(mean_rgb)         # RGB tuple — for PointCloud2 only
+                centre_frames.append(frame_mode)
                 area = float((x2 - x1) * (y2 - y1))
                 centre_areas.append(area)
 
@@ -321,7 +358,7 @@ class ConeDetectionNode(Node):
         # centres pointcloud
         if len(centres) > 0:
             pts_centres = np.array(centres, dtype=np.float32)
-            cols_centres = np.array(centre_colors, dtype=np.uint8)
+            cols_centres = np.array(centre_rgb, dtype=np.uint8)   # RGB for visualisation
             centres_msg = self.make_pointcloud2(pts_centres, cols_centres)
             self.centres_point_publisher.publish(centres_msg)
         else:
@@ -340,42 +377,21 @@ class ConeDetectionNode(Node):
             empty.data = b''
             self.centres_point_publisher.publish(empty)
 
-        # build and publish Track message containing Cone[] using colour heuristic
+        # build and publish Track message — colour comes directly from YOLO class prediction
         try:
             track_msg = Track()
             cones_list = []
             now = self.get_clock().now().to_msg()
-            for (cx_3d, cy_3d, cz_3d), rgb, area in zip(centres, centre_colors, centre_areas):
+            for (cx_3d, cy_3d, cz_3d), cone_color, fid in zip(centres, centre_colors, centre_frames):
                 cmsg = Cone()
-                # header
                 cmsg.header.stamp = now
-                cmsg.header.frame_id = self.camera_frame
-                # location uses geometry_msgs/Point (3D metric coords in camera frame)
+                cmsg.header.frame_id = fid   # 'camera_base' (metric) or 'camera_pixel' (no depth)
                 loc = Point()
-                loc.x = float(cx_3d) if not math.isnan(cx_3d) else 0.0
-                loc.y = float(cy_3d) if not math.isnan(cy_3d) else 0.0
-                loc.z = float(cz_3d) if not math.isnan(cz_3d) else 0.0
+                loc.x = float(cx_3d)
+                loc.y = float(cy_3d)
+                loc.z = float(cz_3d)   # -1.0 sentinel means pixel-coordinate mode
                 cmsg.location = loc
-
-                # simple colour heuristic
-                r, g, b = rgb
-                color_enum = Cone.UNKNOWN
-                # Yellow: both R and G high and B low
-                if r > 150 and g > 150 and b < 120:
-                    color_enum = Cone.YELLOW
-                # Blue dominant
-                elif b > r and b > g:
-                    color_enum = Cone.BLUE
-                # Orange (red dominant) - use area to decide big vs small
-                elif r > g and r > b:
-                    if area > 3000:
-                        color_enum = Cone.ORANGE_BIG
-                    else:
-                        color_enum = Cone.ORANGE_SMALL
-                else:
-                    color_enum = Cone.UNKNOWN
-
-                cmsg.color = int(color_enum)
+                cmsg.color = cone_color   # YOLO class index (BLUE=0, YELLOW=1, …)
                 self.cone_publisher.publish(cmsg)
                 cones_list.append(cmsg)
 

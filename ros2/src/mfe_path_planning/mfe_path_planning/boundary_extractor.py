@@ -65,13 +65,15 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
 
 class BoundaryExtractor(Node):
 
-    MATCH_RADIUS = 0.5  # meters — max distance to associate LiDAR centroid with camera cone
+    MATCH_RADIUS = 0.5   # meters — max distance to associate LiDAR centroid with camera cone
+    GT_MATCH_RADIUS = 2.0  # meters — looser match for GT color fallback
 
     def __init__(self):
         super().__init__('boundary_extractor')
 
         self._lidar_pts: np.ndarray = np.zeros((0, 3), dtype=np.float32)   # Nx3
         self._camera_cones: list = []   # list of mfe_msgs/Cone
+        self._gt_cones: list = []       # fallback color source when camera unavailable
 
         self._lidar_header: Header = Header()
         self._camera_header: Header = Header()
@@ -92,6 +94,16 @@ class BoundaryExtractor(Node):
             self._camera_callback,
             10)
 
+        # GT color fallback when camera is not running.
+        # /ground_truth/cones_colored is in base_footprint frame (proximity-limited, car-relative).
+        # Directly matchable against raw LiDAR centroids since velodyne XY ≈ base_footprint XY.
+        # Will be superseded by camera colors once YOLO is active.
+        self.sub_gt = self.create_subscription(
+            Track,
+            '/ground_truth/cones_colored',
+            self._gt_callback,
+            10)
+
         self.pub_track = self.create_publisher(Track, '/planning/cones', 10)
 
         # Publish at 10 Hz regardless of sensor rate
@@ -107,6 +119,9 @@ class BoundaryExtractor(Node):
         self._camera_cones = msg.track
         if msg.track:
             self._camera_header = msg.track[0].header
+
+    def _gt_callback(self, msg: Track) -> None:
+        self._gt_cones = msg.track
 
     def _transform_lidar_pts_to_map(self, pts: np.ndarray, src_frame: str) -> tuple:
         """
@@ -170,14 +185,24 @@ class BoundaryExtractor(Node):
             cam_src_frame = self._camera_header.frame_id
         cam_xyz_map, _cam_tf_ok = self._transform_camera_cones_to_map(camera_cones, cam_src_frame)
 
-        # Build camera KD-tree (x,y only) for fast lookup — using map-frame positions
+        # Build camera lookup (x,y only, map frame)
         cam_xy = None
         if camera_cones and cam_xyz_map.shape[0] > 0:
             cam_xy = cam_xyz_map[:, :2]
 
+        # Build GT color lookup — only used when camera unavailable.
+        # /ground_truth/cones_colored is in base_footprint frame.
+        # We match against raw LiDAR centroids in velodyne frame (XY ≈ base_footprint XY).
+        gt_xy = None
+        gt_colors = None
+        if not camera_cones and self._gt_cones:
+            gt_xy = np.array([[c.location.x, c.location.y]
+                              for c in self._gt_cones], dtype=np.float32)
+            gt_colors = [c.color for c in self._gt_cones]
+
         matched_camera_indices = set()
 
-        # --- Step 1: For each LiDAR centroid (in map frame), find best camera match ---
+        # --- Step 1: For each LiDAR centroid (in map frame), find best color match ---
         for i in range(len(lidar_pts_map)):
             lx = float(lidar_pts_map[i, 0])
             ly = float(lidar_pts_map[i, 1])
@@ -197,6 +222,14 @@ class BoundaryExtractor(Node):
                 if dists[best_idx] <= self.MATCH_RADIUS:
                     cone.color = camera_cones[best_idx].color
                     matched_camera_indices.add(best_idx)
+            elif gt_xy is not None and len(gt_xy) > 0:
+                # Fallback: GT cones in base_footprint; match raw LiDAR in velodyne (XY ≈ same)
+                lx_raw = float(lidar_pts[i, 0])
+                ly_raw = float(lidar_pts[i, 1])
+                dists = np.sqrt((gt_xy[:, 0] - lx_raw)**2 + (gt_xy[:, 1] - ly_raw)**2)
+                best_idx = int(np.argmin(dists))
+                if dists[best_idx] <= self.GT_MATCH_RADIUS:
+                    cone.color = gt_colors[best_idx]
 
             fused.append(cone)
 
