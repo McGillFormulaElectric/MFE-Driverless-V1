@@ -3,13 +3,18 @@
 Finish-line detector for FSAE events.
 
 Detection hierarchy:
-1. LiDAR (primary perception): watches /lidar/points_raw for dense returns in the
-   forward zone once the car passes approach_x.  Orange finish cones show up as a
-   cluster 1.5–15 m ahead.
+1. Return-to-start (closed-loop tracks): once the car has covered min_travel_m and
+   ventured at least 15 m from start, it counts a lap crossing each time it returns
+   within return_to_start_r metres of the start position.  After num_laps crossings
+   the mission is finished.  The 15 m excursion guard prevents false positives at
+   the peanut figure-8 crossing where the car briefly passes near the origin.
 
-2. Position fallback: if the car's odometry x exceeds finish_x (track parameter),
-   we declare the mission complete.  This fires when the Gazebo VLP-16 model fails
-   to return points from the orange cones (a known sim limitation).
+2. LiDAR (linear tracks / final-lap gate): watches /lidar/points_raw for dense
+   returns in the forward zone once the car passes approach_x.  Orange finish cones
+   show up as a cluster 1.5–15 m ahead.
+
+3. Position fallback: if odometry x exceeds finish_x we declare complete.  Fires
+   when the Gazebo VLP-16 fails to return points from the orange cones.
 
 When finish is detected:
   - Publishes /ros_can/mission_completed (Bool True) so the EUFS state machine
@@ -28,7 +33,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 
 from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Int32
 from fs_msgs.msg import ControlCommand
 
 
@@ -62,12 +67,13 @@ class FinishDetectorNode(Node):
         # ---------- Parameters ----------
         self.declare_parameter('approach_x', 60.0)
         self.declare_parameter('finish_x', 78.0)       # position fallback trigger
-        self.declare_parameter('min_travel_m', 0.0)    # cumulative travel before any detection
-        self.declare_parameter('return_to_start_r', 0.0)  # >0: fire when car returns within this radius of start
+        self.declare_parameter('min_travel_m', 0.0)    # cumulative travel before first lap detection
+        self.declare_parameter('return_to_start_r', 0.0)  # >0: lap gate radius around start position
         self.declare_parameter('detect_fwd_min_m', 1.5)
         self.declare_parameter('detect_fwd_max_m', 15.0)
         self.declare_parameter('detect_lateral_m', 4.0)
         self.declare_parameter('min_finish_points', 1)
+        self.declare_parameter('num_laps', 1)          # stop after this many lap crossings
 
         self._approach_x        = self.get_parameter('approach_x').value
         self._finish_x          = self.get_parameter('finish_x').value
@@ -77,15 +83,17 @@ class FinishDetectorNode(Node):
         self._fwd_max           = self.get_parameter('detect_fwd_max_m').value
         self._lat_max           = self.get_parameter('detect_lateral_m').value
         self._min_pts           = self.get_parameter('min_finish_points').value
+        self._num_laps          = max(1, self.get_parameter('num_laps').value)
 
-        self._car_x         = 0.0
-        self._start_x       = None   # recorded on first odometry message
-        self._start_y       = None
-        self._prev_x        = None
-        self._prev_y        = None
-        self._travel_m      = 0.0
-        self._max_dist_from_start = 0.0   # track peak excursion to guard crossing false-positive
-        self._finished      = False
+        self._car_x               = 0.0
+        self._start_x             = None   # recorded on first odometry message
+        self._start_y             = None
+        self._prev_x              = None
+        self._prev_y              = None
+        self._travel_m            = 0.0
+        self._max_dist_from_start = 0.0    # reset each lap to re-arm the 15 m excursion guard
+        self._laps_completed      = 0      # gate crossings so far
+        self._finished            = False
 
         # ---------- QoS ----------
         sensor_qos = QoSProfile(
@@ -104,17 +112,17 @@ class FinishDetectorNode(Node):
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, reliable_qos)
 
         # ---------- Publishers ----------
-        # Tell EUFS state machine the mission is done
         self._mission_completed_pub = self.create_publisher(
             Bool, '/ros_can/mission_completed', reliable_qos)
-        # Tell pure_pursuit to stop
         self._finished_pub = self.create_publisher(
             Bool, '/planning/mission_finished', latched_qos)
-        # Brake command (50 Hz, overrides pure_pursuit at 20 Hz)
         self._cmd_pub = self.create_publisher(
             ControlCommand, '/control/command', reliable_qos)
+        # Lap counter — visible in Foxglove as /planning/laps_completed
+        self._laps_pub = self.create_publisher(
+            Int32, '/planning/laps_completed', reliable_qos)
 
-        # Clear any stale latched True from a previous run so new subscribers start fresh
+        # Clear any stale latched True from a previous run
         init_msg = Bool()
         init_msg.data = False
         self._finished_pub.publish(init_msg)
@@ -123,7 +131,7 @@ class FinishDetectorNode(Node):
         self.create_timer(0.02, self._brake_loop)
 
         self.get_logger().info(
-            f'FinishDetectorNode started | '
+            f'FinishDetectorNode started | num_laps={self._num_laps} | '
             f'min_travel={self._min_travel_m} m | '
             f'return_to_start_r={self._return_r} m | '
             f'LiDAR range=[{self._fwd_min},{self._fwd_max}] m | '
@@ -148,11 +156,9 @@ class FinishDetectorNode(Node):
         y = msg.pose.pose.position.y
         self._car_x = x
 
-        # Record start position on first message
         if self._start_x is None:
             self._start_x, self._start_y = x, y
 
-        # Accumulate travel distance
         if self._prev_x is not None:
             self._travel_m += math.hypot(x - self._prev_x, y - self._prev_y)
         self._prev_x, self._prev_y = x, y
@@ -160,22 +166,37 @@ class FinishDetectorNode(Node):
         if self._finished:
             return
 
-        # Track max distance from start to guard against false positives at track crossing
         dist_from_start = math.hypot(x - self._start_x, y - self._start_y)
         if dist_from_start > self._max_dist_from_start:
             self._max_dist_from_start = dist_from_start
 
-        # Return-to-start detection: fires once car has travelled min_travel_m
-        # AND has first ventured at least 15 m away from start (prevents firing at the
-        # peanut figure-8 crossing where the car briefly passes near the origin mid-lap).
+        # Return-to-start gate: counts lap crossings at the orange-cone start/finish gate.
+        # Guards:
+        #   min_travel_m  — must cover at least one partial lap before first crossing counts
+        #   max_dist >= 15 m — reset each lap; prevents firing at the figure-8 midpoint
+        #                      crossing where the car briefly passes near the origin
         if self._return_r > 0.0 and self._travel_m >= self._min_travel_m and self._max_dist_from_start >= 15.0:
             if dist_from_start <= self._return_r:
-                self._latch_finished(
-                    f'return-to-start (dist={dist_from_start:.1f} m <= {self._return_r} m '
-                    f'after {self._travel_m:.0f} m travel, max_excursion={self._max_dist_from_start:.1f} m)')
+                self._laps_completed += 1
+                lap_msg = Int32()
+                lap_msg.data = self._laps_completed
+                self._laps_pub.publish(lap_msg)
+
+                if self._laps_completed >= self._num_laps:
+                    self._latch_finished(
+                        f'return-to-start lap {self._laps_completed}/{self._num_laps} '
+                        f'(dist={dist_from_start:.1f} m, travel={self._travel_m:.0f} m)')
+                else:
+                    self.get_logger().info(
+                        f'Lap {self._laps_completed}/{self._num_laps} complete '
+                        f'— dist={dist_from_start:.1f} m, total_travel={self._travel_m:.0f} m. '
+                        f'Continuing to lap {self._laps_completed + 1}.')
+                    # Re-arm excursion guard so the next lap crossing only counts after the
+                    # car has ventured 15 m away from start again.
+                    self._max_dist_from_start = 0.0
                 return
 
-        # Position-based fallback: fires when LiDAR detection was missed
+        # Position-based fallback (linear tracks / sim VLP-16 LiDAR gap)
         if self._car_x >= self._finish_x:
             self._latch_finished(f'position (car_x={self._car_x:.1f} >= finish_x={self._finish_x})')
 

@@ -91,10 +91,30 @@ def generate_launch_description():
         ),
     )
 
+    endless_arg = DeclareLaunchArgument(
+        'endless',
+        default_value='false',
+        description=(
+            'Disable finish detection so the car loops indefinitely. '
+            'Useful for multi-lap testing and Foxglove visualization.'
+        ),
+    )
+
+    num_laps_arg = DeclareLaunchArgument(
+        'num_laps',
+        default_value='1',
+        description=(
+            'Number of laps before the orange-cone finish gate triggers a stop. '
+            'On closed-loop tracks (autocross/peanut) each return to the start position '
+            'counts as one lap. Ignored when endless:=true.'
+        ),
+    )
+
     mission = LaunchConfiguration('mission')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
+    endless = LaunchConfiguration('endless')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -232,16 +252,17 @@ def generate_launch_description():
     # Parameters (approach_x, finish_x) are mission-dependent via OpaqueFunction.
     # --------------------------------------------------------------------------
     def _make_finish_detector(context):
+        if context.launch_configurations.get('endless', 'false').lower() == 'true':
+            return [LogInfo(msg='[bringup] finish_detector DISABLED — endless mode, car loops indefinitely')]
         mission_str = context.launch_configurations.get('mission', 'autocross')
+        num_laps = int(context.launch_configurations.get('num_laps', '1'))
         fx = _FINISH_X.get(mission_str, 100.0)
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
-        # Closed-loop tracks (autocross/trackdrive) use return-to-start detection:
-        # once min_travel_m is covered, fire when the car comes back within
-        # return_to_start_r metres of its start position.
-        # Linear tracks (acceleration, skidpad) keep the original x-position logic.
+        # Closed-loop tracks use return-to-start lap counting.
+        # Linear tracks (acceleration, skidpad) keep x-position logic — num_laps ignored.
         if mission_str in ('autocross', 'trackdrive'):
-            extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0}
+            extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
         else:
             extra = {}
         return [Node(
@@ -285,6 +306,8 @@ def generate_launch_description():
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
+        endless_arg,
+        num_laps_arg,
 
         # perception
         lidar_perception_node,

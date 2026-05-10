@@ -3,13 +3,13 @@
 # MFE Driverless — Full Simulation Launch Script
 # Opens tmux with 6 panes and launches all components.
 #
-# Usage: bash scripts/launch_sim.sh [accel|skidpad] [perception|no_perception] [gui|nogui]
-#   accel         — acceleration event (default)
-#   skidpad       — skidpad event
-#   perception    — full LiDAR pipeline (lidar_cone_detector → boundary_extractor)
-#   no_perception — ground truth cones direct to planner (default, faster to test)
-#   gui           — show Gazebo GUI window (default)
-#   nogui         — headless Gazebo (faster, for Jetson / no display)
+# Usage: bash scripts/launch_sim.sh [track] [mode] [gui] [laps]
+#   track         — accel (default), skidpad, peanut, small_track, rectangle, ...
+#   mode          — no_perception (default) | perception
+#   gui           — gui (default) | nogui
+#   laps          — number of laps before stopping at orange-cone finish gate (default: 1)
+#                   On closed-loop tracks (autocross/peanut) each return to start = 1 lap.
+#                   Use 0 to run indefinitely (same as endless mode).
 # =============================================================================
 
 GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
@@ -84,14 +84,21 @@ case "$GUI_ARG" in
         ;;
 esac
 
-echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI"
+# Parse laps (0 = endless)
+LAPS=${4:-1}
+
+echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI | laps: $LAPS"
 
 # Create log directory
 mkdir -p $LOG_DIR
 
 export EUFS_MASTER=$EUFS_WS
+# Use a non-default port to avoid conflicts (override with GAZEBO_PORT env var)
+GAZEBO_PORT=${GAZEBO_PORT:-11350}
+export GAZEBO_MASTER_URI=http://localhost:$GAZEBO_PORT
 
 SOURCE_ALL="export EUFS_MASTER=$EUFS_WS && \
+            export GAZEBO_MASTER_URI=http://localhost:$GAZEBO_PORT && \
             source /opt/ros/humble/setup.bash && \
             ([ -f $GAZEBO_ROS_WS/install/setup.bash ] && source $GAZEBO_ROS_WS/install/setup.bash || true) && \
             source $EUFS_WS/install/setup.bash && \
@@ -167,6 +174,13 @@ if [ "$MODE" = "no_perception" ]; then
     BRINGUP_EXTRAS="use_perception:=false pose_topic:=/ground_truth/state_odom"
 else
     BRINGUP_EXTRAS=""
+fi
+
+# Laps: 0 means endless (disable finish detector), otherwise pass num_laps
+if [ "$LAPS" = "0" ]; then
+    BRINGUP_EXTRAS="$BRINGUP_EXTRAS endless:=true"
+else
+    BRINGUP_EXTRAS="$BRINGUP_EXTRAS num_laps:=$LAPS"
 fi
 tmux send-keys -t mfe:0.2 \
     "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS" Enter
