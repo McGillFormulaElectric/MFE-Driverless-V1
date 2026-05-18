@@ -24,13 +24,13 @@ case "$EVENT" in
         TRACK=acceleration
         MISSION=acceleration
         AMI_STATE=11  # AMI_ACCELERATION
-        SPAWN_X=0.0; SPAWN_Y=0.0; SPAWN_YAW=0.0
+        BRIDGE_MAX_SPEED=13.0   # matches bringup pure_pursuit max_speed for acceleration
         ;;
     skidpad)
         TRACK=skidpad
         MISSION=skidpad
         AMI_STATE=12  # AMI_SKIDPAD
-        SPAWN_X=0.0; SPAWN_Y=-14.4; SPAWN_YAW=1.5707963
+        BRIDGE_MAX_SPEED=4.5    # matches bringup pure_pursuit max_speed for skidpad
         ;;
     autocross|small_track|peanut|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
         case "$EVENT" in
@@ -40,19 +40,21 @@ case "$EVENT" in
         esac
         MISSION=autocross
         AMI_STATE=13  # AMI_AUTOCROSS
-        # Per-track spawn positions (from each track's .launch file)
-        case "$TRACK" in
-            small_track)    SPAWN_X=-13.0; SPAWN_Y=10.3;  SPAWN_YAW=0.0 ;;
-            peanut)         SPAWN_X=0.0;   SPAWN_Y=0.0;   SPAWN_YAW=0.0 ;;
-            rectangle)      SPAWN_X=0.0;   SPAWN_Y=0.0;   SPAWN_YAW=0.0 ;;
-            *)              SPAWN_X=0.0;   SPAWN_Y=0.0;   SPAWN_YAW=0.0 ;;
-        esac
+        BRIDGE_MAX_SPEED=10.0   # matches bringup pure_pursuit max_speed for autocross/trackdrive
         ;;
     *)
         echo "Unknown event '$EVENT'. Use: accel, skidpad, autocross, small_track, peanut, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"
         exit 1
         ;;
 esac
+
+# Read spawn pose from the track CSV (car_start row: tag,x,y,yaw,...)
+CSV_FILE="$EUFS_WS/eufs_tracks/csv/${TRACK}.csv"
+if [ -f "$CSV_FILE" ] && grep -q "^car_start" "$CSV_FILE"; then
+    IFS=',' read -r _ SPAWN_X SPAWN_Y SPAWN_YAW _ < <(grep "^car_start" "$CSV_FILE")
+else
+    SPAWN_X=0.0; SPAWN_Y=0.0; SPAWN_YAW=0.0
+fi
 
 # Parse perception mode
 MODE=${2:-no_perception}
@@ -136,8 +138,8 @@ tmux send-keys -t mfe:0.0 \
 
 # Wait for gzserver + plugins to fully initialize.
 # complex tracks (small_track, peanut) take ~15 s; simple tracks (acceleration) ~5 s.
-echo "==> Waiting 15 s for Gazebo to initialize..."
-sleep 15
+echo "==> Waiting 25 s for Gazebo to initialize..."
+sleep 25
 
 # If the EUFS state machine isn't up yet (car not spawned), do it manually.
 source /opt/ros/humble/setup.bash
@@ -162,7 +164,7 @@ echo "==> Gazebo ready."
 
 # Pane 1 (mid-left) — MFE Bridge
 tmux send-keys -t mfe:0.1 \
-    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES" Enter
+    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED" Enter
 
 # Pane 2 (bottom-left) — MFE Stack
 # In no_perception mode:
@@ -173,7 +175,9 @@ tmux send-keys -t mfe:0.1 \
 if [ "$MODE" = "no_perception" ]; then
     BRINGUP_EXTRAS="use_perception:=false pose_topic:=/ground_truth/state_odom"
 else
-    BRINGUP_EXTRAS=""
+    # In sim perception mode: use GT odometry for pose (EKF GPS-origin ≠ Gazebo world frame),
+    # and disable SLAM (EUFS GT TF already provides map→odom; two publishers conflict).
+    BRINGUP_EXTRAS="pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
 fi
 
 # Laps: 0 means endless (disable finish detector), otherwise pass num_laps

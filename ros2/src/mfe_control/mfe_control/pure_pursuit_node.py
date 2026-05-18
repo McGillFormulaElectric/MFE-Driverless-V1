@@ -99,8 +99,7 @@ class PurePursuitNode(Node):
         if not msg.poses:
             return
         new_path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
-        if self._path is None or len(new_path) != len(self._path):
-            self._path_idx = 0
+        self._path_idx = 0  # always reset — planner regenerates from car's current position
         self._path = new_path
 
     def _odom_callback(self, msg: Odometry):
@@ -210,8 +209,13 @@ class PurePursuitNode(Node):
                 throttle_duration_sec=0.1,
             )
             return (0.0, brake_norm)
+        elif v_target < self._max_speed and dist_to_target <= d_brake * 3.0 + 2.0:
+            # Within 3× braking distance of a corner: ease down linearly toward corner speed
+            t = max(0.0, dist_to_target / (d_brake * 3.0 + 2.0))
+            v_desired = v_target + t * (self._max_speed - v_target)
+            return (max(0.1, v_desired / self._max_speed), 0.0)
         else:
-            # Accelerate — full throttle towards max_speed
+            # Far from any corner: full throttle
             return (1.0, 0.0)
 
     # ------------------------------------------------------------------
@@ -223,19 +227,23 @@ class PurePursuitNode(Node):
         car_x, car_y = self._car_x, self._car_y
         ld = self._lookahead_distance
 
-        search_start = self._path_idx
-        search_end   = min(len(path), search_start + 30)
+        # Find closest waypoint to the car, searching forward from _path_idx.
+        # _path_idx is reset to 0 on every new path, so this window covers the
+        # relevant portion and advances naturally as the car moves.
+        n = len(path)
+        search_end = min(n, self._path_idx + 60)
 
         min_dist    = float('inf')
-        closest_idx = search_start
-        for i in range(search_start, search_end):
+        closest_idx = self._path_idx
+        for i in range(self._path_idx, search_end):
             wx, wy = path[i]
             d = math.hypot(wx - car_x, wy - car_y)
             if d < min_dist:
                 min_dist    = d
                 closest_idx = i
 
-        if min_dist > 20.0:
+        # If nothing close was found in the window, fall back to global search
+        if min_dist > 10.0:
             for i, (wx, wy) in enumerate(path):
                 d = math.hypot(wx - car_x, wy - car_y)
                 if d < min_dist:
@@ -245,19 +253,12 @@ class PurePursuitNode(Node):
         self._path_idx = closest_idx
 
         # Find the first waypoint at or beyond the lookahead distance
-        lookahead_point = None
-        for i in range(closest_idx, len(path)):
+        for i in range(closest_idx, n):
             wx, wy = path[i]
-            d = math.hypot(wx - car_x, wy - car_y)
-            if d >= ld:
-                lookahead_point = (wx, wy)
-                break
+            if math.hypot(wx - car_x, wy - car_y) >= ld:
+                return (wx, wy)
 
-        # If no point is far enough, use the last point in path
-        if lookahead_point is None:
-            lookahead_point = path[-1]
-
-        return lookahead_point
+        return path[-1]
 
     def _publish_command(self, steering: float, throttle: float, brake: float):
         cmd = ControlCommand()

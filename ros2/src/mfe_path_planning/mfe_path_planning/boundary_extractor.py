@@ -95,12 +95,13 @@ class BoundaryExtractor(Node):
             10)
 
         # GT color fallback when camera is not running.
-        # /ground_truth/cones_colored is in base_footprint frame (proximity-limited, car-relative).
-        # Directly matchable against raw LiDAR centroids since velodyne XY ≈ base_footprint XY.
-        # Will be superseded by camera colors once YOLO is active.
+        # Use /ground_truth/track_colored (ALL track cones, map frame) — not proximity-limited.
+        # Matched against the already-transformed map-frame LiDAR centroids in _publish_fused.
+        # This is more robust than /ground_truth/cones_colored (proximity-limited, base_footprint)
+        # because the full track list is available from the first message, independent of car position.
         self.sub_gt = self.create_subscription(
             Track,
-            '/ground_truth/cones_colored',
+            '/ground_truth/track_colored',
             self._gt_callback,
             10)
 
@@ -191,8 +192,7 @@ class BoundaryExtractor(Node):
             cam_xy = cam_xyz_map[:, :2]
 
         # Build GT color lookup — only used when camera unavailable.
-        # /ground_truth/cones_colored is in base_footprint frame.
-        # We match against raw LiDAR centroids in velodyne frame (XY ≈ base_footprint XY).
+        # /ground_truth/track_colored is in map frame — match against map-frame LiDAR centroids.
         gt_xy = None
         gt_colors = None
         if not camera_cones and self._gt_cones:
@@ -223,10 +223,8 @@ class BoundaryExtractor(Node):
                     cone.color = camera_cones[best_idx].color
                     matched_camera_indices.add(best_idx)
             elif gt_xy is not None and len(gt_xy) > 0:
-                # Fallback: GT cones in base_footprint; match raw LiDAR in velodyne (XY ≈ same)
-                lx_raw = float(lidar_pts[i, 0])
-                ly_raw = float(lidar_pts[i, 1])
-                dists = np.sqrt((gt_xy[:, 0] - lx_raw)**2 + (gt_xy[:, 1] - ly_raw)**2)
+                # GT cones in map frame; match against map-frame LiDAR centroid (lx, ly)
+                dists = np.sqrt((gt_xy[:, 0] - lx)**2 + (gt_xy[:, 1] - ly)**2)
                 best_idx = int(np.argmin(dists))
                 if dists[best_idx] <= self.GT_MATCH_RADIUS:
                     cone.color = gt_colors[best_idx]
@@ -244,6 +242,15 @@ class BoundaryExtractor(Node):
                 cone.location.z = float(cam_xyz_map[j, 2])
                 cone.color = cam_cone.color
                 fused.append(cone)
+
+        # Count colors for diagnostics
+        color_counts = {}
+        for c in fused:
+            color_counts[c.color] = color_counts.get(c.color, 0) + 1
+        self.get_logger().info(
+            f'fused {len(fused)} cones | lidar={len(lidar_pts)} gt_src={len(self._gt_cones)} '
+            f'cam={len(camera_cones)} colors={color_counts}',
+            throttle_duration_sec=2.0)
 
         track_msg = Track()
         track_msg.track = fused

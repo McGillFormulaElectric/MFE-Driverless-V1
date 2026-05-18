@@ -18,6 +18,12 @@ Publishes:
 import math
 import numpy as np
 
+try:
+    from scipy.optimize import minimize as _sp_minimize
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -126,6 +132,75 @@ def _make_skidpad_path() -> np.ndarray:
     return np.vstack([entry[:-1], left_circ, right_circ, exit_pts])
 
 
+def _min_curvature_path(
+        centerline_xy: np.ndarray,
+        left_xy: np.ndarray,
+        right_xy: np.ndarray,
+        safety: float = 0.8) -> np.ndarray:
+    """
+    Minimum curvature racing line optimizer (Heilmeier et al. 2019, QP formulation).
+
+    Each centerline waypoint slides laterally by alpha_i within the track
+    boundaries.  Minimises sum||q_{i+1} - 2*q_i + q_{i-1}||² subject to
+    alpha_i in [-w_right_i, w_left_i], which maximises effective corner
+    radii → outside-inside-outside racing line.
+
+    No new dependencies: uses scipy.optimize which is already present.
+    Falls back to the original centerline if scipy is missing or inputs are thin.
+    """
+    if not _SCIPY_AVAILABLE:
+        return centerline_xy
+
+    N = len(centerline_xy)
+    if N < 4 or len(left_xy) == 0 or len(right_xy) == 0:
+        return centerline_xy
+
+    # Unit tangents (central differences) and left-pointing normals
+    tg = np.zeros_like(centerline_xy)
+    tg[1:-1] = centerline_xy[2:] - centerline_xy[:-2]
+    tg[0]    = centerline_xy[1]  - centerline_xy[0]
+    tg[-1]   = centerline_xy[-1] - centerline_xy[-2]
+    tg /= np.linalg.norm(tg, axis=1, keepdims=True).clip(1e-9)
+    nrm = np.column_stack([-tg[:, 1], tg[:, 0]])  # rotate 90° CCW → left
+
+    # Half-widths: distance from each centerline point to the nearest
+    # left / right boundary cone, scaled by the safety margin.
+    def _half_widths(boundary_xy: np.ndarray) -> np.ndarray:
+        w = np.empty(N)
+        for i in range(N):
+            w[i] = np.linalg.norm(boundary_xy - centerline_xy[i], axis=1).min()
+        return w * safety
+
+    w_l = _half_widths(left_xy)
+    w_r = _half_widths(right_xy)
+    bounds = [(-w_r[i], w_l[i]) for i in range(N)]
+
+    # Objective: sum of squared discrete curvatures, with analytic gradient.
+    # q_i = centerline_i + alpha_i * normal_i
+    # d2_i = q_{i+1} - 2*q_i + q_{i-1}   (discrete second derivative)
+    # d(||d2_i||²)/d(alpha_j):
+    #   j == i-1 → +1 coefficient on path[i-1]  → dot(2*d2_i,  nrm[j])
+    #   j == i   → -2 coefficient on path[i]    → dot(2*d2_i, -2*nrm[j])
+    #   j == i+1 → +1 coefficient on path[i+1]  → dot(2*d2_i,  nrm[j])
+    def _f_and_g(alpha: np.ndarray):
+        q  = centerline_xy + alpha[:, None] * nrm
+        d2 = q[2:] - 2.0 * q[1:-1] + q[:-2]          # (N-2, 2)
+        obj = float(np.einsum('ij,ij->', d2, d2))
+        td  = 2.0 * d2                                  # (N-2, 2)
+        grad = np.zeros(N)
+        grad[:-2]  += np.einsum('ij,ij->i', td,          nrm[:-2])
+        grad[1:-1] += np.einsum('ij,ij->i', td, -2.0  * nrm[1:-1])
+        grad[2:]   += np.einsum('ij,ij->i', td,          nrm[2:])
+        return obj, grad
+
+    res = _sp_minimize(
+        _f_and_g, np.zeros(N), jac=True, bounds=bounds,
+        method='L-BFGS-B',
+        options={'maxiter': 500, 'ftol': 1e-10, 'gtol': 1e-6},
+    )
+    return centerline_xy + res.x[:, None] * nrm
+
+
 class PathPlannerNode(Node):
 
     def __init__(self):
@@ -216,9 +291,14 @@ class PathPlannerNode(Node):
 
         # Build cones_by_type: list of Nx2 arrays indexed by ConeTypes enum value
         # ft-fsd-path-planning expects: [unknown[], right[], left[], orange_big[], orange_small[]]
-        # Filter to cones within CONE_VIS_R of the car to avoid confusing the planner
-        # with the full track at once (critical for figure-8 / crossing tracks).
-        CONE_VIS_R = 20.0
+        #
+        # Visibility filter: keep only cones that are:
+        #   (a) within CONE_VIS_R metres of the car, AND
+        #   (b) not more than CONE_BEHIND_M metres behind the car's heading direction.
+        # This prevents far-away and behind-car cones on crossing tracks (figure-8/peanut)
+        # from confusing the planner with cones from the other loop.
+        CONE_VIS_R    = 20.0   # max radius (m) — keep large for sparse tracks (small_track has 17m gaps)
+        CONE_BEHIND_M = 12.0   # allow up to 12 m behind car — 6m was cutting left-boundary cones mid-turn
         n_types = len(ConeTypes)
         buckets: list[list] = [[] for _ in range(n_types)]
 
@@ -226,6 +306,10 @@ class PathPlannerNode(Node):
             dx = cone.location.x - self._car_pos[0]
             dy = cone.location.y - self._car_pos[1]
             if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
+                continue
+            # forward projection: positive = ahead of car, negative = behind
+            fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
+            if fwd < -CONE_BEHIND_M:
                 continue
             cone_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
             buckets[cone_type].append([cone.location.x, cone.location.y])
@@ -236,6 +320,21 @@ class PathPlannerNode(Node):
             for b in buckets
         ]
 
+        n_left    = len(buckets[ConeTypes.LEFT])
+        n_right   = len(buckets[ConeTypes.RIGHT])
+        n_unknown = len(buckets[ConeTypes.UNKNOWN])
+        self.get_logger().info(
+            f'planner input: left={n_left} right={n_right} unknown={n_unknown} '
+            f'pos=({self._car_pos[0]:.1f},{self._car_pos[1]:.1f}) '
+            f'dir=({self._car_dir[0]:.2f},{self._car_dir[1]:.2f})',
+            throttle_duration_sec=2.0)
+
+        if n_left + n_right == 0:
+            self.get_logger().warn(
+                f'No colored cones visible — skipping planner.',
+                throttle_duration_sec=5.0)
+            return
+
         try:
             result = self._planner.calculate_path_in_global_frame(
                 cones_by_type,
@@ -245,13 +344,14 @@ class PathPlannerNode(Node):
             )
             path_xy, left_xy, right_xy, *_ = result
         except Exception as e:
-            self.get_logger().error(f'Path calculation failed: {e}', throttle_duration_sec=2.0)
+            self.get_logger().error(
+                f'Path calculation failed ({type(e).__name__}): {e} | '
+                f'left={n_left} right={n_right} unknown={n_unknown}',
+                throttle_duration_sec=2.0)
             return
 
-        cone_counts = [len(b) for b in buckets]
         self.get_logger().info(
-            f'planner: pos={self._car_pos} dir={self._car_dir} '
-            f'cones={cone_counts} path_pts={len(path_xy) if path_xy is not None else None}',
+            f'planner OK: path_pts={len(path_xy) if path_xy is not None else 0}',
             throttle_duration_sec=2.0)
 
         stamp = self.get_clock().now().to_msg()
@@ -259,9 +359,9 @@ class PathPlannerNode(Node):
 
         # final_path columns: (spline_parameter, path_x, path_y, curvature)
         # Use columns 1:3 for actual (x, y); col 0 is the spline parameter, not a coordinate.
+        # sorted_left / sorted_right are Mx2 (x,y) already — use :2
         if path_xy is not None and len(path_xy) > 0:
             self._pub_centerline.publish(_path_from_xy(np.array(path_xy)[:, 1:3], frame, stamp))
-        # sorted_left / sorted_right are Mx2 (x,y) already — use :2
         if left_xy is not None and len(left_xy) > 0:
             self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
         if right_xy is not None and len(right_xy) > 0:

@@ -100,6 +100,25 @@ def generate_launch_description():
         ),
     )
 
+    use_slam_arg = DeclareLaunchArgument(
+        'use_slam',
+        default_value='true',
+        description=(
+            'Launch SLAM toolbox (publishes map→odom TF + /map). '
+            'Set false in sim — EUFS GT TF already provides map→odom; two publishers conflict.'
+        ),
+    )
+
+    use_ekf_arg = DeclareLaunchArgument(
+        'use_ekf',
+        default_value='true',
+        description=(
+            'Launch the GPS+IMU EKF node. '
+            'Set false in sim when using pose_topic:=/ground_truth/state_odom '
+            '(EKF GPS-origin frame does not align with the Gazebo world/TF map frame).'
+        ),
+    )
+
     num_laps_arg = DeclareLaunchArgument(
         'num_laps',
         default_value='1',
@@ -115,6 +134,8 @@ def generate_launch_description():
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
     endless = LaunchConfiguration('endless')
+    use_slam = LaunchConfiguration('use_slam')
+    use_ekf = LaunchConfiguration('use_ekf')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -152,8 +173,9 @@ def generate_launch_description():
 
     # --------------------------------------------------------------------------
     # Perception — PointCloud2 → LaserScan conversion (feeds SLAM toolbox)
-    # Input:  lidar/pcl/objects  (PointCloud2 from lidar_cone_detector)
+    # Input:  /lidar/points_raw (PointCloud2)
     # Output: /lidar/pcl/laserscan (LaserScan consumed by slam_toolbox)
+    # Only launched when use_slam:=true.
     # --------------------------------------------------------------------------
     pc2scan_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -162,13 +184,15 @@ def generate_launch_description():
                 'launch',
                 'pointcloud_to_laserscan.launch.py',
             )
-        )
+        ),
+        condition=IfCondition(use_slam),
     )
 
     # --------------------------------------------------------------------------
     # Mapping — SLAM Toolbox (async, lifecycle-managed)
     # Subscribes: /lidar/pcl/laserscan (LaserScan)
     # Publishes:  /map (OccupancyGrid), TF map → odom
+    # Disabled in sim (use_slam:=false) — EUFS GT TF already publishes map→odom.
     # --------------------------------------------------------------------------
     slam_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -177,13 +201,16 @@ def generate_launch_description():
                 'launch',
                 'slam_toolbox.launch.py',
             )
-        )
+        ),
+        condition=IfCondition(use_slam),
     )
 
     # --------------------------------------------------------------------------
     # State estimation — Extended Kalman Filter (custom MFE node)
     # Subscribes: /imu/data (Imu), /gps (NavSatFix)
     # Publishes:  /ekf/output (nav_msgs/Odometry)
+    # Disabled in sim (use_ekf:=false) when pose_topic:=/ground_truth/state_odom —
+    # EKF GPS origin ≠ Gazebo world frame so EKF pose cannot be used with TF-derived cones.
     # --------------------------------------------------------------------------
     ekf_params_file = os.path.join(
         get_package_share_directory('mfe_state_estimation'), 'config', 'ekf_params.yaml'
@@ -195,6 +222,7 @@ def generate_launch_description():
         output='screen',
         parameters=[ekf_params_file],
         remappings=[('/imu/data', '/imu')],
+        condition=IfCondition(use_ekf),
     )
 
     # --------------------------------------------------------------------------
@@ -235,7 +263,7 @@ def generate_launch_description():
         elif mission_str == 'acceleration':
             params = [{'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}]
         else:  # autocross / trackdrive
-            params = [{'max_speed': 7.0, 'lookahead_distance': 3.5, 'max_lateral_accel': 5.0, 'speed_reduction_factor': 0.3}]
+            params = [{'max_speed': 10.0, 'lookahead_distance': 5.0, 'max_lateral_accel': 5.0, 'speed_reduction_factor': 0.3}]
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -308,6 +336,8 @@ def generate_launch_description():
         use_perception_arg,
         endless_arg,
         num_laps_arg,
+        use_slam_arg,
+        use_ekf_arg,
 
         # perception
         lidar_perception_node,

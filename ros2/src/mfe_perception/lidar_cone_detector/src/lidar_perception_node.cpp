@@ -266,7 +266,7 @@ private:
             seg.setOptimizeCoefficients(true);
             seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
             seg.setAxis(Eigen::Vector3f(0.0f, 0.0f, 1.0f));
-            seg.setEpsAngle(pcl::deg2rad(10.0f));
+            seg.setEpsAngle(10.0f * static_cast<float>(M_PI) / 180.0f);
             seg.setMethodType(pcl::SAC_RANSAC);
             seg.setDistanceThreshold(ground_threshold_);
             seg.setInputCloud(downsampled);
@@ -280,13 +280,19 @@ private:
             extract.setNegative(true);
             extract.filter(*object_cloud);
 
-            // 3b. Z-passthrough: keep only cone-body height range [0.05, 0.60 m]
-            //     Eliminates residual ground scrape (z<0.05) and car-body reflections (z>0.60)
+            // 3b. Z-passthrough: keep cone-body height range in the velodyne sensor frame.
+            //     VLP-16 is mounted at z=+0.30 m above ground (base_footprint origin).
+            //     FSAE small cones are 0.33 m tall, so in sensor frame:
+            //       cone base  ≈ -0.30 m  (ground)
+            //       cone top   ≈ +0.03 m  (just above sensor)
+            //     After RANSAC removes the ground plane at z≈-0.30 m (±ground_threshold),
+            //     surviving cone points span approximately z ∈ [-0.20, +0.05 m].
+            //     Upper bound 0.15 m excludes roll-bar / car-body returns above the sensor.
             {
                 pcl::PassThrough<pcl::PointXYZ> pt;
                 pt.setInputCloud(object_cloud);
                 pt.setFilterFieldName("z");
-                pt.setFilterLimits(0.05f, 0.60f);
+                pt.setFilterLimits(-0.30f, 0.15f);
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cone_body(new pcl::PointCloud<pcl::PointXYZ>);
                 pt.filter(*cone_body);
                 object_cloud = cone_body;
