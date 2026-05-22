@@ -195,27 +195,18 @@ class PurePursuitNode(Node):
                 v_target       = v_corner
                 dist_to_target = cum_dist
 
-        # Braking distance required to decelerate from v_now to v_target
+        # Command corner speed early enough for the EUFS velocity controller to respond.
+        # Start ramping down 20 m before the corner (or 5× kinematic braking distance,
+        # whichever is larger) so the controller has time to actually decelerate.
         d_brake = max(0.0, (v_now**2 - v_target**2) / (2.0 * self._max_deceleration))
+        ramp_dist = max(20.0, d_brake * 5.0)
 
-        # Only brake if we are genuinely over the corner speed AND within braking distance.
-        # If v_now <= v_target the car still needs to accelerate into the corner.
-        if v_now > v_target and dist_to_target <= d_brake + 1.0:
-            overspeed  = v_now - v_target
-            brake_norm = min(1.0, overspeed / max(1.0, self._max_speed * 0.3))
-            self.get_logger().debug(
-                f'BRAKE  v={v_now:.1f}→{v_target:.1f} m/s  '
-                f'd={dist_to_target:.1f}m  d_brake={d_brake:.1f}m  b={brake_norm:.2f}',
-                throttle_duration_sec=0.1,
-            )
-            return (0.0, brake_norm)
-        elif v_target < self._max_speed and dist_to_target <= d_brake * 3.0 + 2.0:
-            # Within 3× braking distance of a corner: ease down linearly toward corner speed
-            t = max(0.0, dist_to_target / (d_brake * 3.0 + 2.0))
-            v_desired = v_target + t * (self._max_speed - v_target)
-            return (max(0.1, v_desired / self._max_speed), 0.0)
+        if v_target < self._max_speed and dist_to_target <= ramp_dist:
+            # Linear ramp: max_speed far out, v_target at the corner
+            t = dist_to_target / ramp_dist          # 1.0 = far, 0.0 = at corner
+            v_cmd = v_target + t * (self._max_speed - v_target)
+            return (max(0.1, v_cmd / self._max_speed), 0.0)
         else:
-            # Far from any corner: full throttle
             return (1.0, 0.0)
 
     # ------------------------------------------------------------------
