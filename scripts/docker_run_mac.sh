@@ -59,12 +59,12 @@ fi
 
 # Build image for arm64 if not already built
 if ! docker image inspect mfe-driverless-sim &>/dev/null; then
-  echo "==> Building Docker image for arm64..."
+  echo "==> Building Docker image for arm64 (this takes ~10 min on first run)..."
   docker build \
     --platform linux/arm64 \
     -t mfe-driverless-sim \
-    -f "$MFE_DIR/Docker/dev/Dockerfile" \
-    "$MFE_DIR/Docker/dev"
+    -f "$MFE_DIR/Docker/mac/Dockerfile" \
+    "$MFE_DIR/Docker/mac"
 fi
 
 echo "==> Starting mfe-driverless-sim container..."
