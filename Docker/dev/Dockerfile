@@ -6,8 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-torch \
     && rm -rf /var/lib/apt/lists/*
 
-# arm64: used on M1/M2 Mac and Jetson (no CUDA — YOLO runs on CPU)
-FROM arm64v8/ros:humble-ros-base AS base-arm64
+# arm64: used on M1/M2 Mac (no CUDA — YOLO runs on CPU)
+# ros:humble-ros-base is a multi-arch manifest; Docker pulls arm64 when --platform linux/arm64
+FROM ros:humble-ros-base AS base-arm64
 ENV PLATFORM_TYPE="arm64"
 ENV DEBIAN_FRONTEND=noninteractive
 
