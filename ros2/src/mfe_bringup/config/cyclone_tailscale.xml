@@ -1,0 +1,58 @@
+<!--
+  CycloneDDS configuration for MFE Driverless over Tailscale.
+
+  Tailscale uses WireGuard (unicast UDP) — standard ROS2 DDS multicast peer
+  discovery won't work across it. This config binds DDS to the tailscale0
+  interface and uses explicit unicast peer addresses instead of multicast.
+
+  SETUP on every machine:
+    1. Install: sudo apt install ros-humble-rmw-cyclonedds-cpp
+    2. Add to ~/.bashrc (or /etc/environment for system-wide):
+         export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+         export CYCLONEDDS_URI=file:///path/to/this/cyclone_tailscale.xml
+         export ROS_DOMAIN_ID=42
+    3. Replace the Peer addresses below with your actual Tailscale IPs
+       (visible at https://login.tailscale.com/admin/machines):
+         Host PC         — your machine's Tailscale IP
+         mfe-driverless-1 — 100.84.7.80   (offline as of Mar 10)
+         mfe-driverless-2 — 100.119.35.6  (connected)
+
+  BANDWIDTH NOTE:
+    Raw LiDAR (/lidar/points_raw) is ~40–80 MB/s — keep perception on the same
+    machine as the sim (or sensors). Only processed topics cross Tailscale:
+      /planning/cones         ~0.01 MB/s
+      /planning/centerline    ~0.01 MB/s
+      /ground_truth/state_odom ~0.01 MB/s
+      /control/command        ~0.001 MB/s
+
+  TWO-JETSON REAL CAR SETUP:
+    Connect Jetson 1 ↔ Jetson 2 with a direct Gigabit Ethernet cable (10.0.0.1/2).
+    Use this Tailscale config only for remote monitoring / laptop access.
+    Raw sensor data flows over the direct cable, not Tailscale.
+-->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <!-- Bind exclusively to tailscale0 — avoids DDS leaking onto other interfaces -->
+      <Interfaces>
+        <NetworkInterface name="tailscale0" priority="default" multicast="false"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+
+    <Discovery>
+      <Peers>
+        <Peer address="100.98.63.80"/>   <!-- neil-system-product-name (host PC) -->
+        <Peer address="100.119.35.6"/>  <!-- mfe-driverless-2 (Jetson, active) -->
+        <Peer address="100.84.7.80"/>   <!-- mfe-driverless-1 (Jetson, offline) -->
+      </Peers>
+      <!-- Each machine auto-discovers itself; listing it here is harmless -->
+    </Discovery>
+
+    <Tracing>
+      <!-- Uncomment to debug discovery issues: -->
+      <!-- <Verbosity>config</Verbosity> -->
+      <!-- <OutputFile>stderr</OutputFile> -->
+    </Tracing>
+  </Domain>
+</CycloneDDS>

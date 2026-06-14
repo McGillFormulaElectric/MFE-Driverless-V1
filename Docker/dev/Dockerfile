@@ -6,11 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-torch \
     && rm -rf /var/lib/apt/lists/*
 
-FROM dustynv/ros:humble-pytorch-l4t-r35.2.1 AS base-arm64
-ENV PLATFORM_TYPE="jetson"
+# arm64: used on M1/M2 Mac and Jetson (no CUDA — YOLO runs on CPU)
+FROM arm64v8/ros:humble-ros-base AS base-arm64
+ENV PLATFORM_TYPE="arm64"
+ENV DEBIAN_FRONTEND=noninteractive
 
-
-RUN sudo apt clean
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH
 FROM base-${TARGETARCH} AS final

@@ -10,11 +10,15 @@ McGill Formula Electric autonomous racecar stack. ROS 2 Humble + Gazebo 11 + YOL
 |------|----------------|
 | [architecture.md](architecture.md) | System overview, full data-flow diagrams, TF frame chain, topic map |
 | [simulation.md](simulation.md) | How to start the sim, track list, modes, Foxglove, multi-lap, mission control |
+| [fleet.md](fleet.md) | Multi-machine deployment: fleet.launch.py, local_role options, SSH bootstrap |
+| [jetson_setup.md](jetson_setup.md) | Jetson setup script, packages built, SSH key auth, env vars |
+| [networking.md](networking.md) | Tailscale + CycloneDDS config, peer IPs, bandwidth considerations |
+| [vehicle.md](vehicle.md) | MFE25 constants: geometry, mass, Fisher motors, battery, control limits |
 | [packages.md](packages.md) | Every ROS 2 package: purpose, nodes, topics, parameters |
 | [nodes.md](nodes.md) | Every node in detail: full topic/param/algorithm reference |
 | [scripts.md](scripts.md) | Every shell script: purpose, arguments, what it does |
 | [docker.md](docker.md) | Docker images, Dockerfiles, multi-container setup, port isolation |
-| [training.md](training.md) | YOLO training pipeline, dataset prep, GPU tuning, using weights in ROS |
+| [training.md](training.md) | YOLO training pipeline, dataset prep, GPU tuning, achieved metrics (mAP50=0.767) |
 | [troubleshooting.md](troubleshooting.md) | Every bug we hit, root cause, and exact fix |
 
 ---

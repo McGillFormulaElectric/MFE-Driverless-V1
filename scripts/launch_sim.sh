@@ -164,7 +164,7 @@ echo "==> Gazebo ready."
 
 # Pane 1 (mid-left) — MFE Bridge
 tmux send-keys -t mfe:0.1 \
-    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED" Enter
+    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0" Enter
 
 # Pane 2 (bottom-left) — MFE Stack
 # In no_perception mode:

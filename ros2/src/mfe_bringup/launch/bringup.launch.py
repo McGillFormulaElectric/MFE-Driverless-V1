@@ -1,17 +1,40 @@
 """
 MFE Driverless — full hardware bringup launch file.
-Target: Jetson Orin Nano
+
+Supports single-machine, two-machine, and three-machine deployments:
+
+  Single machine (sim / dev):
+    ros2 launch mfe_bringup bringup.launch.py
+
+  Host PC — sim + perception only (raw data stays local):
+    ros2 launch mfe_bringup perception.launch.py
+
+  Perception Jetson (real car — Jetson 1, wired to sensors):
+    ros2 launch mfe_bringup perception.launch.py
+
+  Compute Jetson (real car — Jetson 2, or any Tailscale peer):
+    ros2 launch mfe_bringup compute.launch.py
+
+All machines must share ROS_DOMAIN_ID and CYCLONEDDS_URI pointing at
+config/cyclone_tailscale.xml (or be on the same LAN for multicast).
 """
 
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo, OpaqueFunction
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+
+# Vehicle constants — single source of truth for MFE25 geometry / limits
+_VEHICLE_YAML = os.path.join(
+    get_package_share_directory('mfe_bringup'), 'config', 'vehicle.yaml'
+)
 
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
@@ -65,7 +88,7 @@ def generate_launch_description():
 
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
-        default_value=os.path.expanduser('~/mfe_models/yolo/yolov8s/weights/best.pt'),
+        default_value=os.path.expanduser('~/mfe_models/yolo/yolo11s/weights/best.pt'),
         description=(
             'Absolute path to YOLO weights file for the vision cone detector. '
             'Leave empty to skip. Defaults to trained yolov8s weights.'
@@ -129,6 +152,25 @@ def generate_launch_description():
         ),
     )
 
+    run_perception_arg = DeclareLaunchArgument(
+        'run_perception',
+        default_value='true',
+        description=(
+            'Launch perception nodes (LiDAR, vision, boundary extractor, SLAM, EKF). '
+            'Set false on a compute-only node (Jetson 2) that receives processed cones '
+            'from a perception node (Jetson 1 / host) over the network.'
+        ),
+    )
+
+    run_compute_arg = DeclareLaunchArgument(
+        'run_compute',
+        default_value='true',
+        description=(
+            'Launch planning and control nodes (path planner, pure pursuit, finish detector). '
+            'Set false on a perception-only node so compute runs on a separate machine.'
+        ),
+    )
+
     mission = LaunchConfiguration('mission')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
@@ -136,6 +178,8 @@ def generate_launch_description():
     endless = LaunchConfiguration('endless')
     use_slam = LaunchConfiguration('use_slam')
     use_ekf = LaunchConfiguration('use_ekf')
+    run_perception = LaunchConfiguration('run_perception')
+    run_compute = LaunchConfiguration('run_compute')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -153,7 +197,10 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'leaf_size': 0.1,           # coarser voxel fine for 16-beam VLP-16
-            'ground_threshold': 0.15,   # 5 cm extra margin so cone bases survive RANSAC
+            'ground_threshold': 0.05,   # tight: only removes flat ground ±5 cm; larger values
+                                        # eat cone-body returns at the RANSAC inlier boundary.
+                                        # Sim VLP-16 ±1.33° beams: 0.15 m threshold limits
+                                        # detection to <6.5 m; 0.05 m extends it to ~10.8 m.
             'cluster_tolerance': 0.3,   # tighter than default 0.4 — prevents adjacent cone merges
             'min_cluster_size': 1,      # VLP-16 gets 1-2 pts per cone at 10 m; default 3 drops all
             'max_cluster_size': 50,     # cones won't produce 150 pts; tighter cap
@@ -258,18 +305,20 @@ def generate_launch_description():
     def _make_pure_pursuit(context):
         mission_str = context.launch_configurations.get('mission', 'autocross')
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
+        # vehicle.yaml supplies wheelbase, max_steering_deg, max_lateral_accel, max_deceleration
+        # Mission-specific overrides are merged on top (later dicts win in ROS2 parameter list)
         if mission_str == 'skidpad':
-            params = [{'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6}]
+            mission_params = {'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6}
         elif mission_str == 'acceleration':
-            params = [{'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}]
+            mission_params = {'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}
         else:  # autocross / trackdrive
-            params = [{'max_speed': 10.0, 'lookahead_distance': 5.0, 'max_lateral_accel': 5.0, 'speed_reduction_factor': 0.3}]
+            mission_params = {'max_speed': 8.0, 'lookahead_distance': 5.0, 'max_lateral_accel': 4.0, 'speed_reduction_factor': 0.3}
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
             name='pure_pursuit_node',
             output='screen',
-            parameters=params,
+            parameters=[_VEHICLE_YAML, mission_params],
             remappings=[('/ekf/output', pt)],
         )]
 
@@ -313,10 +362,10 @@ def generate_launch_description():
     finish_detector_node = OpaqueFunction(function=_make_finish_detector)
 
     # --------------------------------------------------------------------------
-    # Evaluation — Perception accuracy evaluator
-    # Compares /planning/cones vs /ground_truth/cones_colored (sim only).
-    # Publishes diagnostic_msgs/DiagnosticArray to /perception/accuracy at 1 Hz.
-    # Logs CSV to ~/mfe_logs/perception_accuracy.csv.
+    # Evaluation — Perception accuracy evaluators (sim only)
+    # evaluator_node:        end-to-end — /planning/cones vs GT (→ /perception/accuracy)
+    # fusion_evaluator_node: raw LiDAR+camera fused vs GT (→ /perception/fusion_accuracy)
+    # Both require /ground_truth/cones_colored which is only published by the sim bridge.
     # --------------------------------------------------------------------------
     evaluator_node = Node(
         package='perception_evaluator',
@@ -325,11 +374,41 @@ def generate_launch_description():
         output='screen',
     )
 
+    fusion_evaluator_node = Node(
+        package='perception_evaluator',
+        executable='fusion_evaluator_node',
+        name='fusion_evaluator',
+        output='screen',
+    )
+
     # --------------------------------------------------------------------------
     # Assemble description
     # --------------------------------------------------------------------------
+    perception_group = GroupAction(
+        condition=IfCondition(run_perception),
+        actions=[
+            lidar_perception_node,
+            vision_node_action,         # skipped unless vision_model_path is set
+            pc2scan_launch,             # PointCloud2 → LaserScan for SLAM
+            slam_launch,
+            ekf_node,
+            boundary_extractor_node,
+            evaluator_node,
+            fusion_evaluator_node,
+        ],
+    )
+
+    compute_group = GroupAction(
+        condition=IfCondition(run_compute),
+        actions=[
+            path_planner_node,
+            pure_pursuit_node,
+            finish_detector_node,
+        ],
+    )
+
     return LaunchDescription([
-        # args first
+        # args
         mission_arg,
         vision_model_arg,
         pose_topic_arg,
@@ -338,26 +417,10 @@ def generate_launch_description():
         num_laps_arg,
         use_slam_arg,
         use_ekf_arg,
+        run_perception_arg,
+        run_compute_arg,
 
-        # perception
-        lidar_perception_node,
-        vision_node_action,    # skipped unless vision_model_path is set
-        pc2scan_launch,        # PointCloud2 → LaserScan for SLAM
-
-        # mapping
-        slam_launch,
-
-        # state estimation
-        ekf_node,
-
-        # planning
-        boundary_extractor_node,
-        path_planner_node,
-
-        # control
-        pure_pursuit_node,
-        finish_detector_node,
-
-        # evaluation (sim only)
-        evaluator_node,
+        # node groups — each independently enable/disable-able
+        perception_group,
+        compute_group,
     ])

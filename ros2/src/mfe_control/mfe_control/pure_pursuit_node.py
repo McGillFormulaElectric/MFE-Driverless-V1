@@ -34,7 +34,7 @@ class PurePursuitNode(Node):
         # --- Parameters ---
         self.declare_parameter('lookahead_distance', 5.0)
         self.declare_parameter('max_speed', 10.0)
-        self.declare_parameter('wheelbase', 1.5)
+        self.declare_parameter('wheelbase', 1.56)
         self.declare_parameter('max_steering_deg', 25.0)
         self.declare_parameter('map_frame', 'map')
 

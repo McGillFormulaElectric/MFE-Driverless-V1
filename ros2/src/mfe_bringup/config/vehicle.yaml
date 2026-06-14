@@ -1,0 +1,74 @@
+# MFE25 Vehicle Constants
+# Source of truth for all vehicle geometry, mass, powertrain, and battery parameters
+# used across the driverless stack (control, perception, state estimation).
+# Physical values taken from Pseudo-TwoTrack-LapSim / VehicleDefinitionsGUI.m (MFE25).
+
+vehicle:
+  # ── Geometry ──────────────────────────────────────────────────────────────
+  wheelbase:        1.56    # [m]   front-to-rear axle distance
+  track_width:      1.15    # [m]   left-to-right wheel centre distance
+  cg_height:        0.25    # [m]   centre-of-gravity height above ground
+  cg_x:             0.44    # [-]   longitudinal CG position — 44% front / 56% rear
+
+  # ── Mass ──────────────────────────────────────────────────────────────────
+  mass_vehicle:     198.0   # [kg]  vehicle dry mass (measured at comp)
+  mass_driver:       70.0   # [kg]  driver mass
+  mass_total:       268.0   # [kg]  vehicle + driver
+  mass_sprung:      125.0   # [kg]  sprung mass
+  mass_unsprung_f:   30.0   # [kg]  unsprung mass front axle
+  mass_unsprung_r:   30.0   # [kg]  unsprung mass rear axle
+  mass_wheel:         4.1   # [kg]  wheel + tyre (1.1 kg rim + 3 kg tyre)
+
+  # Static corner loads (no aero, no regen, 268 kg × 9.81 m/s²):
+  #   Front per wheel ≈ 581 N  (44% × 268 kg × 9.81 / 2)
+  #   Rear  per wheel ≈ 739 N  (56% × 268 kg × 9.81 / 2)
+
+  # ── Powertrain ────────────────────────────────────────────────────────────
+  # Fisher motor × 4 (one per wheel, 4WD), 13.39:1 chain reduction
+  #   Peak torque  : 29 Nm/motor (flat 0 – 12 050 RPM), then power-limited
+  #   Peak power   : 41.5 kW/motor → 166 kW total (pack-limited to 66.7 kW)
+  #   Max speed    : 20 000 RPM → v_max ≈ 31 m/s at wheel (Re0 = 0.2023 m)
+  #   Wheel torque : 29 × 13.39 = 388 Nm/wheel at peak
+  #   Tractive F   : 388 / 0.2023 ≈ 1 919 N/wheel at peak torque
+  motor_type:           "Fisher"
+  motor_count:          4
+  gear_ratio:           13.39
+  motor_peak_torque_Nm: 29.0    # [Nm]  per motor
+  motor_peak_power_kW:  41.5    # [kW]  per motor
+  motor_max_rpm:        20000   # [RPM]
+  motor_torque_scaling: 0.9     # scaling applied to motor curve
+  max_pack_power_kW:    66.7    # [kW]  = 80 kW / 1.2 power scaling
+  inverter_eta:         0.98    # [-]   inverter efficiency
+  torque_split_rear:    0.65    # [-]   65% rear / 35% front torque distribution
+  tyre_radius:          0.2023  # [m]   rolling radius Re0
+
+  # ── Battery ───────────────────────────────────────────────────────────────
+  # ThunderPower AE8040160  144s2p  (288 cells total)
+  #   Cell: 6 Ah, 3.7 V nominal, 4.2 V max, 150 A peak discharge
+  battery_pack:          "AE8040160-144s2p"
+  battery_series:        144
+  battery_parallel:      2
+  battery_voltage_V:     600.0   # [V]   nominal pack voltage
+  battery_energy_kWh:    6.396   # [kWh] usable energy
+  battery_mass_kg:       46.9    # [kg]
+  battery_max_current_A: 150.0   # [A]   max continuous discharge
+  regen_enabled:         false   # regenerative braking disabled by default
+
+  # ── Aerodynamics ──────────────────────────────────────────────────────────
+  CL:              -4.26   # [-]   lift coefficient (negative = downforce)
+  CD:               1.77   # [-]   drag coefficient
+  Aref:             1.106  # [m²]  reference frontal area
+  aero_balance:     0.42   # [-]   aero balance — 42% front / 58% rear
+
+  # ── Suspension ────────────────────────────────────────────────────────────
+  spring_rate_front_lb_in:   450   # [lb/in]  front spring rate
+  spring_rate_rear_lb_in:    750   # [lb/in]  rear spring rate
+  roll_center_height_f:      0.106 # [m]
+  roll_center_height_r:      0.135 # [m]
+  chassis_torsional_stiffness_Nm_deg: 1800  # [Nm/deg]
+  front_brake_bias:          0.55  # [-]   55% front / 45% rear
+
+  # ── Control limits (used as defaults in pure_pursuit_node) ───────────────
+  max_steering_deg:     28.0   # [deg]  physical URDF joint limit is ±29.8° (0.52 rad) — stay under
+  max_lateral_accel:     8.0   # [m/s²]  used to compute corner speed: v = sqrt(a * R)
+  max_deceleration:     10.0   # [m/s²]

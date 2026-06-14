@@ -62,10 +62,12 @@ python3 train.py --models yolov8s --epochs 100 --batch 128
 
 | Setting | Value | Reason |
 |---------|-------|--------|
-| `batch` | `128` | Fills ~13.4 GB VRAM at ~80% GPU utilization |
+| `batch` | `32` | Safe limit — batch=128 causes CUDA OOM in TaskAlignedAssigner |
 | `workers` | `2` | Hard-coded in `train.py`; `workers=8` thrashes swap, drops GPU to 3% |
 | `device` | `0` | Single GPU |
 | `patience` | `20` | Early stop after 20 epochs without improvement |
+
+**Do not increase batch above 32** — YOLO11's `TaskAlignedAssigner` allocates a large temporary tensor proportional to `batch × anchors`, which OOMs at batch=128 even with 16 GB VRAM. At batch=32 the RTX 5060 Ti runs at ~96–98% GPU utilisation (~86 s/epoch).
 
 **Do not change `workers`** — the sim containers running alongside training add memory pressure. `workers=2` was tuned specifically for this coexistence.
 
@@ -106,7 +108,7 @@ After training completes, `train.py`:
 
 The default `vision_model_path` argument in `bringup.launch.py` is:
 ```
-~/mfe_models/yolo/yolov8s/weights/best.pt
+~/mfe_models/yolo/yolo11s/weights/best.pt
 ```
 
 ### Custom path
@@ -163,14 +165,21 @@ boundary_extractor (fuses with LiDAR positions)
 
 ---
 
-## Expected metrics (FSOCO, yolov8s, 100 epochs)
+## Achieved metrics (FSOCO, yolo11s, 50 epochs)
 
-Approximate ranges based on FSOCO benchmarks:
+Actual results from our trained model:
 
-| Metric | Typical range |
-|--------|--------------|
-| mAP50 | 0.85 – 0.95 |
-| mAP50-95 | 0.60 – 0.75 |
-| Precision | 0.85 – 0.93 |
-| Recall | 0.83 – 0.92 |
-| Training time | 45 – 90 min (RTX 5060 Ti, batch=128) |
+| Metric | Value |
+|--------|-------|
+| mAP50 | **0.767** |
+| mAP50-95 | 0.502 |
+| Training time | ~1 h 14 min (RTX 5060 Ti, batch=32, ~86 s/epoch) |
+| Dataset | 11 567 images, 4 classes, 80/20 split |
+
+Classes: `blue_cone`, `yellow_cone`, `large_orange_cone`, `orange_cone`.
+
+The mAP50 of 0.767 is lower than typical FSOCO benchmarks for yolov8s (0.85–0.95) because:
+1. Only 50 epochs were trained (vs. 100 in the benchmark).
+2. batch=32 vs. the benchmark's larger batches — smaller gradients, noisier convergence.
+
+Running 100 epochs with the same checkpoint (passing `model=last.pt`) will likely push mAP50 above 0.85.
