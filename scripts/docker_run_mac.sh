@@ -77,7 +77,7 @@ docker run --rm $TTY_FLAGS \
   --platform linux/arm64 \
   $DISPLAY_FLAGS \
   --volume "$DEVELOP_DIR":/root/Develop \
-  --network host \
+  --publish 8765:8765 \
   --ipc host \
   --name mfe-sim \
   mfe-driverless-sim \
