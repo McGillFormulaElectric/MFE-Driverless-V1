@@ -23,6 +23,7 @@ setup(
             'boundary_extractor = mfe_path_planning.boundary_extractor:main',
             'path_planner_node = mfe_path_planning.path_planner_node:main',
             'finish_detector_node = mfe_path_planning.finish_detector_node:main',
+            'lap_validator_node = mfe_path_planning.lap_validator_node:main',
         ],
     },
 )

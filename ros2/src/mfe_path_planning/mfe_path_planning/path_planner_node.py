@@ -247,6 +247,10 @@ class PathPlannerNode(Node):
         self._car_dir = np.array([1.0, 0.0])   # unit vector, default facing +X
         self._odom_received = False
 
+        # Cone map: accumulated global map of all seen cones across frames.
+        # Key: (rx, ry) rounded to nearest 0.5 m grid. Value: cone color (ConeTypes).
+        self._cone_map: dict = {}
+
         # ---------- Subscribers ----------
         self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS)
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, _QOS)
@@ -289,30 +293,51 @@ class PathPlannerNode(Node):
         if not msg.track:
             return
 
+        # --- Cone map accumulation ---
+        # Merge incoming cones into the global map (rounded to 0.5 m grid).
+        # This builds up a global picture of all seen cones as the car drives.
+        _GRID = 0.5
+        _CONE_MAP_MAX = 500
+        for cone in msg.track:
+            rx = round(cone.location.x / _GRID) * _GRID
+            ry = round(cone.location.y / _GRID) * _GRID
+            key = (rx, ry)
+            if key not in self._cone_map:
+                if len(self._cone_map) >= _CONE_MAP_MAX:
+                    # Remove an arbitrary oldest entry to stay within cap
+                    self._cone_map.pop(next(iter(self._cone_map)))
+                self._cone_map[key] = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
+            else:
+                # If we get a colored update for a previously unknown cone, upgrade it
+                new_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
+                if self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
+                    self._cone_map[key] = new_type
+
         # Build cones_by_type: list of Nx2 arrays indexed by ConeTypes enum value
         # ft-fsd-path-planning expects: [unknown[], right[], left[], orange_big[], orange_small[]]
         #
-        # Visibility filter: keep only cones that are:
+        # Visibility filter: keep only cones from the accumulated map that are:
         #   (a) within CONE_VIS_R metres of the car, AND
         #   (b) not more than CONE_BEHIND_M metres behind the car's heading direction.
         # This prevents far-away and behind-car cones on crossing tracks (figure-8/peanut)
         # from confusing the planner with cones from the other loop.
+        # The full accumulated map (not just the current frame) is used so perception mode
+        # builds up a global picture as the car drives around.
         CONE_VIS_R    = 20.0   # max radius (m) — keep large for sparse tracks (small_track has 17m gaps)
         CONE_BEHIND_M = 12.0   # allow up to 12 m behind car — 6m was cutting left-boundary cones mid-turn
         n_types = len(ConeTypes)
         buckets: list[list] = [[] for _ in range(n_types)]
 
-        for cone in msg.track:
-            dx = cone.location.x - self._car_pos[0]
-            dy = cone.location.y - self._car_pos[1]
+        for (rx, ry), cone_type in self._cone_map.items():
+            dx = rx - self._car_pos[0]
+            dy = ry - self._car_pos[1]
             if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
                 continue
             # forward projection: positive = ahead of car, negative = behind
             fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
             if fwd < -CONE_BEHIND_M:
                 continue
-            cone_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
-            buckets[cone_type].append([cone.location.x, cone.location.y])
+            buckets[cone_type].append([rx, ry])
 
         cones_by_type = [
             np.array(b, dtype=np.float64).reshape(-1, 2) if b
@@ -361,7 +386,30 @@ class PathPlannerNode(Node):
         # Use columns 1:3 for actual (x, y); col 0 is the spline parameter, not a coordinate.
         # sorted_left / sorted_right are Mx2 (x,y) already — use :2
         if path_xy is not None and len(path_xy) > 0:
-            self._pub_centerline.publish(_path_from_xy(np.array(path_xy)[:, 1:3], frame, stamp))
+            centerline = np.array(path_xy)[:, 1:3]
+
+            # Run racing line optimizer when we have enough points and boundaries
+            if (len(path_xy) > 3
+                    and left_xy is not None and len(left_xy) > 3
+                    and right_xy is not None and len(right_xy) > 3):
+                left   = np.array(left_xy)[:, :2]
+                right  = np.array(right_xy)[:, :2]
+                try:
+                    optimized = _min_curvature_path(centerline, left, right, safety=0.7)
+                    self.get_logger().info(
+                        'Racing line optimizer applied.',
+                        throttle_duration_sec=5.0)
+                except Exception as opt_e:
+                    self.get_logger().warn(
+                        f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
+                        'falling back to raw centerline.',
+                        throttle_duration_sec=5.0)
+                    optimized = centerline
+            else:
+                optimized = centerline
+
+            self._pub_centerline.publish(_path_from_xy(optimized, frame, stamp))
+
         if left_xy is not None and len(left_xy) > 0:
             self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
         if right_xy is not None and len(right_xy) > 0:

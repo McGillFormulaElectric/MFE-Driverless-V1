@@ -171,6 +171,12 @@ def generate_launch_description():
         ),
     )
 
+    max_speed_arg = DeclareLaunchArgument(
+        'max_speed',
+        default_value='0.0',
+        description='Override pure pursuit max_speed (m/s). 0 = use mission default.',
+    )
+
     mission = LaunchConfiguration('mission')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
@@ -180,6 +186,7 @@ def generate_launch_description():
     use_ekf = LaunchConfiguration('use_ekf')
     run_perception = LaunchConfiguration('run_perception')
     run_compute = LaunchConfiguration('run_compute')
+    max_speed = LaunchConfiguration('max_speed')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -313,6 +320,9 @@ def generate_launch_description():
             mission_params = {'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}
         else:  # autocross / trackdrive
             mission_params = {'max_speed': 8.0, 'lookahead_distance': 5.0, 'max_lateral_accel': 4.0, 'speed_reduction_factor': 0.3}
+        max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
+        if max_speed_override > 0.0:
+            mission_params['max_speed'] = max_speed_override
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -398,12 +408,20 @@ def generate_launch_description():
         ],
     )
 
+    lap_validator_node = Node(
+        package='mfe_path_planning',
+        executable='lap_validator_node',
+        name='lap_validator',
+        output='screen',
+    )
+
     compute_group = GroupAction(
         condition=IfCondition(run_compute),
         actions=[
             path_planner_node,
             pure_pursuit_node,
             finish_detector_node,
+            lap_validator_node,
         ],
     )
 
@@ -419,6 +437,7 @@ def generate_launch_description():
         use_ekf_arg,
         run_perception_arg,
         run_compute_arg,
+        max_speed_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,
