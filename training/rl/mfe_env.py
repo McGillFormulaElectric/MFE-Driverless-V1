@@ -66,11 +66,16 @@ def _nearest_cone(cones_xy: np.ndarray, car_x: float, car_y: float):
 
 
 class MFEDrivingEnv(gym.Env):
-    """Gym environment for the MFE Formula Student driverless car."""
+    """Gym environment for the MFE Formula Student driverless car.
+
+    Args:
+        rank: Instance index (0-based). Sets ROS_DOMAIN_ID = 42 + rank so
+              parallel instances connect to separate Gazebo sims.
+    """
 
     metadata = {'render_modes': []}
 
-    def __init__(self):
+    def __init__(self, rank: int = 0):
         super().__init__()
 
         self.observation_space = spaces.Box(
@@ -91,11 +96,14 @@ class MFEDrivingEnv(gym.Env):
         self._mission_done = False
         self._prev_x = 0.0
 
-        # ROS2 setup
+        # ROS2 setup — set domain ID before init so this instance connects to
+        # the correct Gazebo sim (each parallel instance has its own domain)
+        import os
+        os.environ['ROS_DOMAIN_ID'] = str(42 + rank)
         if not rclpy.ok():
             rclpy.init()
 
-        self._node = rclpy.create_node('mfe_rl_env')
+        self._node = rclpy.create_node(f'mfe_rl_env_{rank}')
         reliable_qos   = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         best_effort_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
