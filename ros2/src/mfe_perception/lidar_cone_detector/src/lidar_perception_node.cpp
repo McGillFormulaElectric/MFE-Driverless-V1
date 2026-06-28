@@ -281,18 +281,19 @@ private:
             extract.filter(*object_cloud);
 
             // 3b. Z-passthrough: keep cone-body height range in the velodyne sensor frame.
-            //     VLP-16 is mounted at z=+0.30 m above ground (base_footprint origin).
-            //     FSAE small cones are 0.33 m tall, so in sensor frame:
-            //       cone base  ≈ -0.30 m  (ground)
-            //       cone top   ≈ +0.03 m  (just above sensor)
-            //     After RANSAC removes the ground plane at z≈-0.30 m (±ground_threshold),
-            //     surviving cone points span approximately z ∈ [-0.20, +0.05 m].
-            //     Upper bound 0.15 m excludes roll-bar / car-body returns above the sensor.
+            //     In the EUFS sim the VLP-16 sensor origin is ~1.0 m above the track surface
+            //     (confirmed by probing /lidar/points_raw: ground returns at z ≈ -1.014 m median).
+            //     FSAE cones are 0.325 m tall, so cone bodies span z ∈ [-1.0, -0.675 m].
+            //     After RANSAC removes the ground plane (threshold 0.05 m around z≈-1.0 m),
+            //     cone-body returns survive at roughly z ∈ [-0.95, -0.60 m].
+            //     Lower limit -1.10 m: keeps returns just below the ground plane (RANSAC may
+            //     leave some near-ground cone-base points).  Upper limit -0.50 m: excludes
+            //     car-body / roll-bar returns that appear above the cone tops.
             {
                 pcl::PassThrough<pcl::PointXYZ> pt;
                 pt.setInputCloud(object_cloud);
                 pt.setFilterFieldName("z");
-                pt.setFilterLimits(-0.30f, 0.15f);
+                pt.setFilterLimits(-1.10f, -0.50f);
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cone_body(new pcl::PointCloud<pcl::PointXYZ>);
                 pt.filter(*cone_body);
                 object_cloud = cone_body;

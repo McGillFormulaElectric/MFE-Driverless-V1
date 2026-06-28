@@ -173,10 +173,10 @@ tmux send-keys -t mfe:0.1 \
 # In perception mode:
 #   use_perception:=true (default) → boundary_extractor runs, EKF provides pose
 if [ "$MODE" = "no_perception" ]; then
-    BRINGUP_EXTRAS="use_perception:=false pose_topic:=/ground_truth/state_odom"
+    # EUFS GT TF already publishes map→odom; SLAM and EKF must be disabled to avoid TF conflict.
+    BRINGUP_EXTRAS="use_perception:=false pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
 else
-    # In sim perception mode: use GT odometry for pose (EKF GPS-origin ≠ Gazebo world frame),
-    # and disable SLAM (EUFS GT TF already provides map→odom; two publishers conflict).
+    # Perception sim: same GT odometry + no SLAM/EKF (EUFS GT TF owns map→odom).
     BRINGUP_EXTRAS="pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
 fi
 
