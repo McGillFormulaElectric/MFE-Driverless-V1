@@ -90,6 +90,53 @@ def _path_from_xy(xy: np.ndarray, frame_id: str, stamp) -> Path:
     return path
 
 
+# Peanut figure-8 centerline — right loop first, then left loop.
+# Generated from EUFS peanut.csv boundary cones (midpoint of blue/yellow).
+# Driving sequence: (0,0) → gate (x≈6) → right loop → crossing → left loop → (0,0)
+_PEANUT_PATH = np.array([
+    [0.0000, 0.0000], [1.5000, 0.0000], [3.0000, -0.0500], [4.5000, -0.0500],
+    [6.4599, -0.0319], [7.1290, -0.1867], [7.7982, -0.3415], [8.4673, -0.4963],
+    [9.1041, -0.7449], [9.7345, -1.0104], [10.3404, -1.3364], [10.9105, -1.7183],
+    [11.4670, -2.1226], [12.0558, -2.4656], [12.6917, -2.7201], [13.3275, -2.9747],
+    [14.0055, -3.0360], [14.6929, -3.0379], [15.3705, -2.9622], [16.0337, -2.8081],
+    [16.6901, -2.6109], [17.3474, -2.4135], [17.9904, -2.1686], [18.5806, -1.8404],
+    [19.0732, -1.3613], [19.5446, -0.8631], [19.9219, -0.2917], [20.2769, 0.2944],
+    [20.6280, 0.8785], [20.9181, 1.4823], [21.1407, 2.1259], [21.3530, 2.7756],
+    [21.4752, 3.4380], [21.5358, 4.1193], [21.5963, 4.8005], [21.5458, 5.4801],
+    [21.4670, 6.1593], [21.3582, 6.8272], [21.1483, 7.4584], [20.9381, 8.0896],
+    [20.6231, 8.6745], [20.2607, 9.2099], [19.8520, 9.7260], [19.4037, 10.1961],
+    [18.9085, 10.5554], [18.3547, 10.8738], [17.8009, 11.1922], [17.2717, 11.3447],
+    [16.7212, 11.4423], [16.1815, 11.5277], [15.6796, 11.5247], [15.1473, 11.4773],
+    [14.6149, 11.4298], [14.0403, 11.2664], [13.4647, 11.1006], [12.8921, 10.8660],
+    [12.3140, 10.5494], [11.7215, 10.2462], [11.1594, 9.8687], [10.6075, 9.4659],
+    [10.0215, 9.1201], [9.4631, 8.7399], [8.9085, 8.3550], [8.3674, 7.9559],
+    [7.8266, 7.5566], [7.2732, 7.2286], [6.7144, 6.9227], [6.1520, 6.6612],
+    [5.5796, 6.4637], [4.9792, 6.4180], [4.3439, 6.4891], [3.7133, 6.6530],
+    [3.1570, 7.0577], [2.6054, 7.4677], [2.1336, 7.9614], [1.7003, 8.4933],
+    [1.2575, 9.0160], [0.7693, 9.4997], [0.2674, 9.9705], [-0.2362, 10.4393],
+    [-0.7717, 10.8697], [-1.3099, 11.2968], [-1.8601, 11.7064], [-2.4224, 12.1000],
+    [-2.9888, 12.4859], [-3.5770, 12.8373], [-4.1741, 13.1768], [-4.7888, 13.4655],
+    [-5.4438, 13.6613], [-6.1047, 13.8455], [-6.7748, 13.9741], [-7.4606, 14.0236],
+    [-8.1464, 14.0730], [-8.8262, 14.0359], [-9.5026, 13.9092], [-10.1732, 13.7690],
+    [-10.7608, 13.4281], [-11.3332, 13.0470], [-11.8912, 12.6487], [-12.3815, 12.1724],
+    [-12.8444, 11.6657], [-13.2777, 11.1313], [-13.6871, 10.5809], [-14.0290, 9.9838],
+    [-14.3675, 9.3851], [-14.6298, 8.7532], [-14.8555, 8.1037], [-15.0677, 7.4508],
+    [-15.2199, 6.7808], [-15.3722, 6.1109], [-15.4953, 5.4346], [-15.5265, 4.7552],
+    [-15.5349, 4.0734], [-15.5075, 3.3878], [-15.4625, 2.7060], [-15.3335, 2.0335],
+    [-15.1873, 1.3623], [-15.0104, 0.6990], [-14.7959, 0.0455], [-14.5761, -0.6057],
+    [-14.2418, -1.2047], [-13.8850, -1.7919], [-13.5202, -2.3746], [-13.1076, -2.9144],
+    [-12.6772, -3.4398], [-12.2104, -3.9302], [-11.6948, -4.3306], [-11.1218, -4.6770],
+    [-10.5360, -4.9343], [-9.9510, -5.0921], [-9.3427, -5.2034], [-8.7321, -5.1111],
+    [-8.1271, -5.0087], [-7.5291, -4.8414], [-6.9572, -4.6012], [-6.3854, -4.3609],
+    [-5.8160, -4.1037], [-5.2622, -3.7484], [-4.7084, -3.3932], [-4.1489, -3.0273],
+    [-3.6105, -2.5990], [-3.0583, -2.1985], [-2.4759, -1.8690], [-1.9006, -1.5312],
+    [-1.3130, -1.2400], [-0.6864, -1.0161], [-0.0599, -0.7922], [0.5845, -0.5989],
+    [1.2445, -0.4270], [1.9211, -0.3349], [2.6079, -0.3042], [3.2953, -0.2969],
+    [3.9801, -0.2572], [4.6649, -0.2176],
+    [3.5000, -0.1000], [2.0000, -0.0500], [0.5000, 0.0000], [0.0000, 0.0000],
+])
+
+
 def _make_skidpad_path() -> np.ndarray:
     """
     Generate the full skidpad trajectory for the EUFS Gazebo track.
@@ -219,7 +266,8 @@ class PathPlannerNode(Node):
         mission_str = self.get_parameter('mission').value
         self._mission = mission_str
 
-        if _LIB_AVAILABLE and mission_str != 'skidpad':
+        _HARDCODED_MISSIONS = {'skidpad', 'peanut'}
+        if _LIB_AVAILABLE and mission_str not in _HARDCODED_MISSIONS:
             mission_map = {
                 'autocross':   MissionTypes.autocross,
                 'trackdrive':  MissionTypes.trackdrive,
@@ -230,16 +278,25 @@ class PathPlannerNode(Node):
         else:
             self._planner = None
 
-        # Pre-compute skidpad path (published once on first cone observation)
+        # Pre-compute hardcoded paths for missions ft-fsd can't handle
         self._skidpad_path_published = False
         if mission_str == 'skidpad':
             self._skidpad_path = _make_skidpad_path()
+            self._peanut_path  = None
             self.get_logger().info(
                 f'PathPlannerNode started. Mission: skidpad | '
                 f'hardcoded path: {len(self._skidpad_path)} waypoints, '
                 f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
+        elif mission_str == 'peanut':
+            self._skidpad_path = None
+            self._peanut_path  = _PEANUT_PATH
+            self.get_logger().info(
+                f'PathPlannerNode started. Mission: peanut | '
+                f'hardcoded path: {len(self._peanut_path)} waypoints, '
+                f'sequence: (0,0) → right loop → crossing → left loop → (0,0)')
         else:
             self._skidpad_path = None
+            self._peanut_path  = None
             self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
 
         # ---------- State ----------
@@ -270,17 +327,18 @@ class PathPlannerNode(Node):
         self._odom_received = True
 
     def _cones_cb(self, msg: Track) -> None:
-        # Skidpad: publish the pre-computed hardcoded path every time cones arrive
-        # (published repeatedly so pure_pursuit doesn't miss it on startup)
-        if self._mission == 'skidpad':
+        # Hardcoded missions: publish pre-computed path on every cone callback
+        # so pure_pursuit picks it up reliably on startup.
+        if self._mission in ('skidpad', 'peanut'):
             if self._odom_received:
+                hardcoded = self._skidpad_path if self._mission == 'skidpad' else self._peanut_path
                 stamp = self.get_clock().now().to_msg()
                 self._pub_centerline.publish(
-                    _path_from_xy(self._skidpad_path, self._map_frame, stamp))
+                    _path_from_xy(hardcoded, self._map_frame, stamp))
                 if not self._skidpad_path_published:
                     self._skidpad_path_published = True
                     self.get_logger().info(
-                        f'Skidpad path first publish: {len(self._skidpad_path)} waypoints')
+                        f'{self._mission} path first publish: {len(hardcoded)} waypoints')
             return
 
         if not _LIB_AVAILABLE or self._planner is None:

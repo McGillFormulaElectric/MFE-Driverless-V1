@@ -31,17 +31,13 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
-# Vehicle constants — single source of truth for MFE25 geometry / limits
-_VEHICLE_YAML = os.path.join(
-    get_package_share_directory('mfe_bringup'), 'config', 'vehicle.yaml'
-)
-
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
     'autocross':    100.0,
     'trackdrive':   100.0,
     'acceleration':  78.0,  # orange finish gate at x=78 m on EUFS acceleration track
     'skidpad':       37.0,  # end of exit corridor on EUFS skidpad track
+    'peanut':       100.0,  # unused — peanut uses return-to-start lap counting
 }
 
 
@@ -82,13 +78,13 @@ def generate_launch_description():
     mission_arg = DeclareLaunchArgument(
         'mission',
         default_value='autocross',
-        choices=['autocross', 'trackdrive', 'acceleration', 'skidpad'],
+        choices=['autocross', 'trackdrive', 'acceleration', 'skidpad', 'peanut'],
         description='FSAE mission type passed to path planner',
     )
 
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
-        default_value=os.path.expanduser('~/mfe_models/yolo/yolo11s/weights/best.pt'),
+        default_value='',
         description=(
             'Absolute path to YOLO weights file for the vision cone detector. '
             'Leave empty to skip. Defaults to trained yolov8s weights.'
@@ -312,23 +308,32 @@ def generate_launch_description():
     def _make_pure_pursuit(context):
         mission_str = context.launch_configurations.get('mission', 'autocross')
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
-        # vehicle.yaml supplies wheelbase, max_steering_deg, max_lateral_accel, max_deceleration
-        # Mission-specific overrides are merged on top (later dicts win in ROS2 parameter list)
+        # Base vehicle constants (from vehicle.yaml — inlined here because vehicle.yaml
+        # uses a 'vehicle:' namespace, not a valid ROS2 params-file format)
+        params = {
+            'wheelbase': 1.56,
+            'max_steering_deg': 28.0,
+            'max_lateral_accel': 8.0,
+            'max_deceleration': 10.0,
+        }
         if mission_str == 'skidpad':
-            mission_params = {'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6}
+            params.update({'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6})
         elif mission_str == 'acceleration':
-            mission_params = {'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2}
+            params.update({'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2})
+        elif mission_str == 'peanut':
+            # Tighter lookahead + lower speed for the figure-8 crossing pinch
+            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5, 'speed_reduction_factor': 0.5})
         else:  # autocross / trackdrive
-            mission_params = {'max_speed': 8.0, 'lookahead_distance': 5.0, 'max_lateral_accel': 4.0, 'speed_reduction_factor': 0.3}
+            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3})
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:
-            mission_params['max_speed'] = max_speed_override
+            params['max_speed'] = max_speed_override
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
             name='pure_pursuit_node',
             output='screen',
-            parameters=[_VEHICLE_YAML, mission_params],
+            parameters=[params],
             remappings=[('/ekf/output', pt)],
         )]
 
@@ -348,7 +353,7 @@ def generate_launch_description():
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
         # Closed-loop tracks use return-to-start lap counting.
         # Linear tracks (acceleration, skidpad) keep x-position logic — num_laps ignored.
-        if mission_str in ('autocross', 'trackdrive'):
+        if mission_str in ('autocross', 'trackdrive', 'peanut'):
             extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
         else:
             extra = {}

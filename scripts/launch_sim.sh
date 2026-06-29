@@ -32,7 +32,13 @@ case "$EVENT" in
         AMI_STATE=12  # AMI_SKIDPAD
         BRIDGE_MAX_SPEED=4.5    # matches bringup pure_pursuit max_speed for skidpad
         ;;
-    autocross|small_track|peanut|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
+    peanut)
+        TRACK=peanut
+        MISSION=peanut
+        AMI_STATE=13  # AMI_AUTOCROSS
+        BRIDGE_MAX_SPEED=8.0    # matches bringup pure_pursuit max_speed for peanut (autocross speed)
+        ;;
+    autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
         case "$EVENT" in
             autocross)    TRACK=small_track ;;
             hairpins)     TRACK=hairpins_increasing_difficulty ;;
@@ -43,7 +49,7 @@ case "$EVENT" in
         BRIDGE_MAX_SPEED=10.0   # matches bringup pure_pursuit max_speed for autocross/trackdrive
         ;;
     *)
-        echo "Unknown event '$EVENT'. Use: accel, skidpad, autocross, small_track, peanut, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"
+        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"
         exit 1
         ;;
 esac
@@ -173,10 +179,11 @@ tmux send-keys -t mfe:0.1 \
 # In perception mode:
 #   use_perception:=true (default) → boundary_extractor runs, EKF provides pose
 if [ "$MODE" = "no_perception" ]; then
-    # EUFS GT TF already publishes map→odom; SLAM and EKF must be disabled to avoid TF conflict.
-    BRINGUP_EXTRAS="use_perception:=false pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
+    # GT cones go straight to /planning/cones — no perception, SLAM, or EKF needed.
+    # run_perception:=false disables the entire perception group (lidar, vision, evaluators).
+    BRINGUP_EXTRAS="use_perception:=false run_perception:=false pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
 else
-    # Perception sim: same GT odometry + no SLAM/EKF (EUFS GT TF owns map→odom).
+    # Perception sim: use GT odometry, disable SLAM/EKF (EUFS GT TF owns map→odom).
     BRINGUP_EXTRAS="pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
 fi
 
