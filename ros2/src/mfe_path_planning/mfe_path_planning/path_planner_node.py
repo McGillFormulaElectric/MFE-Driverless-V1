@@ -260,10 +260,12 @@ class PathPlannerNode(Node):
 
         # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
+        self.declare_parameter('use_racing_line', True)
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
+        self._use_racing_line = self.get_parameter('use_racing_line').value
         self._mission = mission_str
 
         _HARDCODED_MISSIONS = {'skidpad', 'peanut'}
@@ -298,6 +300,10 @@ class PathPlannerNode(Node):
             self._skidpad_path = None
             self._peanut_path  = None
             self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
+
+        # ---------- Counters ----------
+        self._opt_ok = 0
+        self._opt_fail = 0
 
         # ---------- State ----------
         self._car_pos = np.array([0.0, 0.0])
@@ -447,22 +453,27 @@ class PathPlannerNode(Node):
             centerline = np.array(path_xy)[:, 1:3]
 
             # Run racing line optimizer when we have enough points and boundaries
-            if (len(path_xy) > 3
+            if (self._use_racing_line and len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
                     and right_xy is not None and len(right_xy) > 3):
                 left   = np.array(left_xy)[:, :2]
                 right  = np.array(right_xy)[:, :2]
+                self.get_logger().info(
+                        f'Racing line : {self._opt_ok} ok — {self._opt_fail} fail.',
+                        throttle_duration_sec=5.0)
                 try:
                     optimized = _min_curvature_path(centerline, left, right, safety=0.7)
                     self.get_logger().info(
                         'Racing line optimizer applied.',
                         throttle_duration_sec=5.0)
+                    self._opt_ok += 1
                 except Exception as opt_e:
                     self.get_logger().warn(
                         f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
                         'falling back to raw centerline.',
                         throttle_duration_sec=5.0)
                     optimized = centerline
+                    self._opt_fail += 1
             else:
                 optimized = centerline
 

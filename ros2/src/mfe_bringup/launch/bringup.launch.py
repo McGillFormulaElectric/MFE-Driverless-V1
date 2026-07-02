@@ -29,6 +29,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
@@ -173,6 +174,12 @@ def generate_launch_description():
         description='Override pure pursuit max_speed (m/s). 0 = use mission default.',
     )
 
+    use_racing_line_arg = DeclareLaunchArgument(
+        'use_racing_line',
+        default_value='true',
+        description='Enable min-curvature racing line optimizer (false = plain centerline).',
+    )
+
     mission = LaunchConfiguration('mission')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
@@ -183,6 +190,7 @@ def generate_launch_description():
     run_perception = LaunchConfiguration('run_perception')
     run_compute = LaunchConfiguration('run_compute')
     max_speed = LaunchConfiguration('max_speed')
+    use_racing_line = LaunchConfiguration('use_racing_line')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -296,6 +304,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'mission': mission,
+            'use_racing_line': ParameterValue(use_racing_line, value_type=bool),
         }],
         remappings=[('/ekf/output', pose_topic)],
     )
@@ -443,6 +452,7 @@ def generate_launch_description():
         run_perception_arg,
         run_compute_arg,
         max_speed_arg,
+        use_racing_line_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,

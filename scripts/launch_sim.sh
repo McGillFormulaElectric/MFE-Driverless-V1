@@ -3,13 +3,15 @@
 # MFE Driverless — Full Simulation Launch Script
 # Opens tmux with 6 panes and launches all components.
 #
-# Usage: bash scripts/launch_sim.sh [track] [mode] [gui] [laps]
+# Usage: bash scripts/launch_sim.sh [track] [mode] [gui] [laps] [racing_line]
 #   track         — accel (default), skidpad, peanut, small_track, rectangle, ...
 #   mode          — no_perception (default) | perception
 #   gui           — gui (default) | nogui
 #   laps          — number of laps before stopping at orange-cone finish gate (default: 1)
 #                   On closed-loop tracks (autocross/peanut) each return to start = 1 lap.
 #                   Use 0 to run indefinitely (same as endless mode).
+#   racing_line   — on (default) | off — on runs the min-curvature racing line optimizer;
+#                   off uses the plain geometric centerline.
 # =============================================================================
 
 GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
@@ -95,7 +97,18 @@ esac
 # Parse laps (0 = endless)
 LAPS=${4:-1}
 
-echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI | laps: $LAPS"
+# Parse racing line toggle
+RACING_LINE=${5:-on}
+case "$RACING_LINE" in
+    on)  USE_RACING_LINE=true ;;
+    off) USE_RACING_LINE=false ;;
+    *)
+        echo "Unknown racing_line arg '$RACING_LINE'. Use: on or off"
+        exit 1
+        ;;
+esac
+
+echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI | laps: $LAPS | racing_line: $RACING_LINE"
 
 # Create log directory
 mkdir -p $LOG_DIR
@@ -193,6 +206,9 @@ if [ "$LAPS" = "0" ]; then
 else
     BRINGUP_EXTRAS="$BRINGUP_EXTRAS num_laps:=$LAPS"
 fi
+
+# Racing line optimizer on/off (passed through to path_planner_node)
+BRINGUP_EXTRAS="$BRINGUP_EXTRAS use_racing_line:=$USE_RACING_LINE"
 tmux send-keys -t mfe:0.2 \
     "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS" Enter
 
