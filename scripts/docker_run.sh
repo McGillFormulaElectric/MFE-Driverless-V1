@@ -2,7 +2,9 @@
 # =============================================================================
 # Run the MFE Driverless sim inside Docker with GPU + display passthrough.
 #
-# Usage: bash scripts/docker_run.sh [track] [perception|no_perception] [gui|nogui] [laps]
+# Usage: bash scripts/docker_run.sh [track] [perception|no_perception] [gui|nogui] [laps] [racing_line]
+#   racing_line — on (default) | off — on runs the min-curvature racing line optimizer;
+#                 off uses the plain geometric centerline.
 #
 # Prerequisites on host:
 #   - NVIDIA drivers installed (everything else is auto-installed if missing)
@@ -48,6 +50,7 @@ EVENT=${1:-accel}
 MODE=${2:-no_perception}
 GUI=${3:-gui}
 LAPS=${4:-1}
+RACING=${5:-on}
 
 DEVELOP_DIR="$HOME/Develop"
 MFE_DIR="$DEVELOP_DIR/MFE-Driverless-V1"
@@ -79,7 +82,7 @@ xhost +local:docker 2>/dev/null || true
 GPU_FLAGS="--gpus all --env NVIDIA_DRIVER_CAPABILITIES=all"
 
 echo "==> Starting mfe-driverless-sim container..."
-echo "    event=$EVENT  mode=$MODE  gui=$GUI  laps=$LAPS"
+echo "    event=$EVENT  mode=$MODE  gui=$GUI  laps=$LAPS  racing_line=$RACING"
 
 # Only allocate a TTY if stdin is a real terminal
 TTY_FLAGS=""
@@ -95,4 +98,4 @@ docker run --rm $TTY_FLAGS \
   --ipc host \
   --name mfe-sim \
   mfe-driverless-sim \
-  bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh "$EVENT" "$MODE" "$GUI" "$LAPS"
+  bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh "$EVENT" "$MODE" "$GUI" "$LAPS" "$RACING"
