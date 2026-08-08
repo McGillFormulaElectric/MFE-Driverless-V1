@@ -65,6 +65,21 @@ RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /o
     pip3 install /opt/ft-fsd-path-planning && \
     python3 -c "import fsd_path_planning; print('fsd_path_planning OK')"
 
+# Vision stack: YOLO inference for vision_cone_detector.
+# Without torch/ultralytics the node dies on import — perception mode then runs
+# LiDAR-only with the GT color fallback and the camera contributes nothing.
+# CPU wheels on purpose: ~250 MB vs ~4.5 GB for CUDA builds, and YOLO11n on CPU
+# keeps up with the sim's ~10 Hz camera. For GPU inference on an RTX 50xx swap
+# the index to  https://download.pytorch.org/whl/cu128  (first CUDA build with
+# Blackwell support) — note the CDN's multi-hundred-MB wheels download unreliably.
+# "numpy<2" repeated in each command so pip's resolver never upgrades it.
+# sympy: base image ships a distutils-installed 1.9 that pip cannot uninstall;
+# --ignore-installed overlays it with the >=1.13 torch requires.
+RUN pip3 install --retries 10 --timeout 120 --ignore-installed "sympy>=1.13" && \
+    pip3 install --retries 10 --timeout 120 "numpy<2" torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip3 install --retries 10 --timeout 120 "numpy<2" ultralytics && \
+    python3 -c "import torch, ultralytics; print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
+
 # Shell: source ROS in every bash session inside the container
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 

@@ -35,9 +35,9 @@ class FileLoaderNode(Node):
         
         self.bridge = CvBridge()
 
-        # to publish at the same framerate as the video
-        if self.cap.get(cv2.CAP_PROP_FPS) != 0 : fps = self.cap.get(cv2.CAP_PROP_FPS)
-        else : fps = 0.03
+        # to publish at the same framerate as the video (fall back to 30 fps —
+        # the old fallback of 0.03 "fps" made the timer fire every 33 seconds)
+        fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
 
         self.timer = self.create_timer(1 / fps, self.publish_frame)
 

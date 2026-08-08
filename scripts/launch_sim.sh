@@ -36,7 +36,7 @@ case "$EVENT" in
         TRACK=peanut
         MISSION=peanut
         AMI_STATE=13  # AMI_AUTOCROSS
-        BRIDGE_MAX_SPEED=8.0    # matches bringup pure_pursuit max_speed for peanut (autocross speed)
+        BRIDGE_MAX_SPEED=6.0   # matches bringup pure_pursuit max_speed for peanut
         ;;
     autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
         case "$EVENT" in
@@ -46,7 +46,7 @@ case "$EVENT" in
         esac
         MISSION=autocross
         AMI_STATE=13  # AMI_AUTOCROSS
-        BRIDGE_MAX_SPEED=10.0   # matches bringup pure_pursuit max_speed for autocross/trackdrive
+        BRIDGE_MAX_SPEED=8.0   # matches bringup autocross/trackdrive max_speed of 8.0
         ;;
     *)
         echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"

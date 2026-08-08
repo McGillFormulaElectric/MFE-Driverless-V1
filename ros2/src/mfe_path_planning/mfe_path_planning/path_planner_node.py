@@ -90,53 +90,6 @@ def _path_from_xy(xy: np.ndarray, frame_id: str, stamp) -> Path:
     return path
 
 
-# Peanut figure-8 centerline — right loop first, then left loop.
-# Generated from EUFS peanut.csv boundary cones (midpoint of blue/yellow).
-# Driving sequence: (0,0) → gate (x≈6) → right loop → crossing → left loop → (0,0)
-_PEANUT_PATH = np.array([
-    [0.0000, 0.0000], [1.5000, 0.0000], [3.0000, -0.0500], [4.5000, -0.0500],
-    [6.4599, -0.0319], [7.1290, -0.1867], [7.7982, -0.3415], [8.4673, -0.4963],
-    [9.1041, -0.7449], [9.7345, -1.0104], [10.3404, -1.3364], [10.9105, -1.7183],
-    [11.4670, -2.1226], [12.0558, -2.4656], [12.6917, -2.7201], [13.3275, -2.9747],
-    [14.0055, -3.0360], [14.6929, -3.0379], [15.3705, -2.9622], [16.0337, -2.8081],
-    [16.6901, -2.6109], [17.3474, -2.4135], [17.9904, -2.1686], [18.5806, -1.8404],
-    [19.0732, -1.3613], [19.5446, -0.8631], [19.9219, -0.2917], [20.2769, 0.2944],
-    [20.6280, 0.8785], [20.9181, 1.4823], [21.1407, 2.1259], [21.3530, 2.7756],
-    [21.4752, 3.4380], [21.5358, 4.1193], [21.5963, 4.8005], [21.5458, 5.4801],
-    [21.4670, 6.1593], [21.3582, 6.8272], [21.1483, 7.4584], [20.9381, 8.0896],
-    [20.6231, 8.6745], [20.2607, 9.2099], [19.8520, 9.7260], [19.4037, 10.1961],
-    [18.9085, 10.5554], [18.3547, 10.8738], [17.8009, 11.1922], [17.2717, 11.3447],
-    [16.7212, 11.4423], [16.1815, 11.5277], [15.6796, 11.5247], [15.1473, 11.4773],
-    [14.6149, 11.4298], [14.0403, 11.2664], [13.4647, 11.1006], [12.8921, 10.8660],
-    [12.3140, 10.5494], [11.7215, 10.2462], [11.1594, 9.8687], [10.6075, 9.4659],
-    [10.0215, 9.1201], [9.4631, 8.7399], [8.9085, 8.3550], [8.3674, 7.9559],
-    [7.8266, 7.5566], [7.2732, 7.2286], [6.7144, 6.9227], [6.1520, 6.6612],
-    [5.5796, 6.4637], [4.9792, 6.4180], [4.3439, 6.4891], [3.7133, 6.6530],
-    [3.1570, 7.0577], [2.6054, 7.4677], [2.1336, 7.9614], [1.7003, 8.4933],
-    [1.2575, 9.0160], [0.7693, 9.4997], [0.2674, 9.9705], [-0.2362, 10.4393],
-    [-0.7717, 10.8697], [-1.3099, 11.2968], [-1.8601, 11.7064], [-2.4224, 12.1000],
-    [-2.9888, 12.4859], [-3.5770, 12.8373], [-4.1741, 13.1768], [-4.7888, 13.4655],
-    [-5.4438, 13.6613], [-6.1047, 13.8455], [-6.7748, 13.9741], [-7.4606, 14.0236],
-    [-8.1464, 14.0730], [-8.8262, 14.0359], [-9.5026, 13.9092], [-10.1732, 13.7690],
-    [-10.7608, 13.4281], [-11.3332, 13.0470], [-11.8912, 12.6487], [-12.3815, 12.1724],
-    [-12.8444, 11.6657], [-13.2777, 11.1313], [-13.6871, 10.5809], [-14.0290, 9.9838],
-    [-14.3675, 9.3851], [-14.6298, 8.7532], [-14.8555, 8.1037], [-15.0677, 7.4508],
-    [-15.2199, 6.7808], [-15.3722, 6.1109], [-15.4953, 5.4346], [-15.5265, 4.7552],
-    [-15.5349, 4.0734], [-15.5075, 3.3878], [-15.4625, 2.7060], [-15.3335, 2.0335],
-    [-15.1873, 1.3623], [-15.0104, 0.6990], [-14.7959, 0.0455], [-14.5761, -0.6057],
-    [-14.2418, -1.2047], [-13.8850, -1.7919], [-13.5202, -2.3746], [-13.1076, -2.9144],
-    [-12.6772, -3.4398], [-12.2104, -3.9302], [-11.6948, -4.3306], [-11.1218, -4.6770],
-    [-10.5360, -4.9343], [-9.9510, -5.0921], [-9.3427, -5.2034], [-8.7321, -5.1111],
-    [-8.1271, -5.0087], [-7.5291, -4.8414], [-6.9572, -4.6012], [-6.3854, -4.3609],
-    [-5.8160, -4.1037], [-5.2622, -3.7484], [-4.7084, -3.3932], [-4.1489, -3.0273],
-    [-3.6105, -2.5990], [-3.0583, -2.1985], [-2.4759, -1.8690], [-1.9006, -1.5312],
-    [-1.3130, -1.2400], [-0.6864, -1.0161], [-0.0599, -0.7922], [0.5845, -0.5989],
-    [1.2445, -0.4270], [1.9211, -0.3349], [2.6079, -0.3042], [3.2953, -0.2969],
-    [3.9801, -0.2572], [4.6649, -0.2176],
-    [3.5000, -0.1000], [2.0000, -0.0500], [0.5000, 0.0000], [0.0000, 0.0000],
-])
-
-
 def _make_skidpad_path() -> np.ndarray:
     """
     Generate the full skidpad trajectory for the EUFS Gazebo track.
@@ -212,11 +165,17 @@ def _min_curvature_path(
 
     # Half-widths: distance from each centerline point to the nearest
     # left / right boundary cone, scaled by the safety margin.
+    # Capped at 2.0 m: where a boundary wall has a gap (e.g. a figure-8 crossing,
+    # missed detections) the nearest-cone distance blows up and the optimizer would
+    # swing the line through the gap into off-corridor cones. FSAE track half-width
+    # is ~1.5-2.5 m, so 2.0 m keeps the line inside a plausible corridor everywhere.
+    _W_MAX = 2.0
+
     def _half_widths(boundary_xy: np.ndarray) -> np.ndarray:
         w = np.empty(N)
         for i in range(N):
             w[i] = np.linalg.norm(boundary_xy - centerline_xy[i], axis=1).min()
-        return w * safety
+        return np.minimum(w, _W_MAX) * safety
 
     w_l = _half_widths(left_xy)
     w_r = _half_widths(right_xy)
@@ -260,21 +219,30 @@ class PathPlannerNode(Node):
 
         # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
-        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad
+        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
         self._mission = mission_str
 
-        _HARDCODED_MISSIONS = {'skidpad', 'peanut'}
+        # skidpad uses a hardcoded path; all other missions use ft-fsd cone-based planning.
+        # trackdrive-type missions (known closed track) plan GLOBALLY over the full cone
+        # map — required on tracks whose boundary walls pass near each other (e.g. a
+        # figure-8 crossing): a local radius filter makes the boundary trace jump walls,
+        # while the global trace follows each wall around its own loop by ring continuity.
+        # Local-type missions (autocross, acceleration) keep the visibility filter.
+        _HARDCODED_MISSIONS = {'skidpad'}
+        self._global_planning = False
         if _LIB_AVAILABLE and mission_str not in _HARDCODED_MISSIONS:
             mission_map = {
-                'autocross':   MissionTypes.autocross,
-                'trackdrive':  MissionTypes.trackdrive,
+                'autocross':    MissionTypes.autocross,
+                'trackdrive':   MissionTypes.trackdrive,
                 'acceleration': MissionTypes.acceleration,
+                'peanut':       MissionTypes.trackdrive,   # closed figure-8 → global planning
             }
             mission = mission_map.get(mission_str, MissionTypes.autocross)
             self._planner = PathPlanner(mission)
+            self._global_planning = (mission == MissionTypes.trackdrive)
         else:
             self._planner = None
 
@@ -282,21 +250,12 @@ class PathPlannerNode(Node):
         self._skidpad_path_published = False
         if mission_str == 'skidpad':
             self._skidpad_path = _make_skidpad_path()
-            self._peanut_path  = None
             self.get_logger().info(
                 f'PathPlannerNode started. Mission: skidpad | '
                 f'hardcoded path: {len(self._skidpad_path)} waypoints, '
                 f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
-        elif mission_str == 'peanut':
-            self._skidpad_path = None
-            self._peanut_path  = _PEANUT_PATH
-            self.get_logger().info(
-                f'PathPlannerNode started. Mission: peanut | '
-                f'hardcoded path: {len(self._peanut_path)} waypoints, '
-                f'sequence: (0,0) → right loop → crossing → left loop → (0,0)')
         else:
             self._skidpad_path = None
-            self._peanut_path  = None
             self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
 
         # ---------- State ----------
@@ -307,6 +266,16 @@ class PathPlannerNode(Node):
         # Cone map: accumulated global map of all seen cones across frames.
         # Key: (rx, ry) rounded to nearest 0.5 m grid. Value: cone color (ConeTypes).
         self._cone_map: dict = {}
+
+        # Lap-1 lock-in (global/trackdrive missions): while exploring, record the car's
+        # driven trail. When the car closes the loop, build the full-lap centerline from
+        # the accumulated cone map ordered by the trail, optimize it once, and lock it —
+        # no more per-cycle re-planning, and the trail ordering resolves self-crossing
+        # tracks (figure-8) because it follows the topology the car actually drove.
+        self._trail: list = []            # breadcrumb positions, ≥0.5 m apart
+        self._trail_dist = 0.0            # cumulative distance driven
+        self._trail_max_r = 0.0           # max distance from start (excursion guard)
+        self._locked_path = None          # Nx2 closed-loop path once lap 1 completes
 
         # ---------- Subscribers ----------
         self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS)
@@ -326,19 +295,127 @@ class PathPlannerNode(Node):
         self._car_dir = np.array([math.cos(yaw), math.sin(yaw)])
         self._odom_received = True
 
+        # Breadcrumb trail during lap 1 (global missions, before lock-in)
+        if self._global_planning and self._locked_path is None:
+            if not self._trail:
+                self._trail.append(self._car_pos.copy())
+            else:
+                step = float(np.linalg.norm(self._car_pos - self._trail[-1]))
+                if step >= 0.5:
+                    self._trail.append(self._car_pos.copy())
+                    self._trail_dist += step
+                    self._trail_max_r = max(
+                        self._trail_max_r,
+                        float(np.linalg.norm(self._car_pos - self._trail[0])))
+
+    def _build_locked_loop(self):
+        """
+        Build the full-lap closed centerline from the live-accumulated cone map,
+        ordered by the car's lap-1 breadcrumb trail.
+
+        The trail ordering is what makes this robust on self-crossing tracks
+        (figure-8): midpoints are sequenced by where the car actually drove, so
+        the crossing is traversed in the correct order. Returns Nx2 closed path
+        (first point == last point) or None if the map is too thin.
+        """
+        blue = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.LEFT])
+        yellow = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.RIGHT])
+        if len(blue) < 4 or len(yellow) < 4 or len(self._trail) < 20:
+            self.get_logger().warn(
+                f'Loop closed but map too thin to lock '
+                f'(blue={len(blue)} yellow={len(yellow)} trail={len(self._trail)})')
+            return None
+
+        trail = np.array(self._trail)
+
+        # Walk the driven trail; at each step take the midpoint of the nearest
+        # left (blue) and right (yellow) wall cone. Anchoring on the trail keeps
+        # the sequence continuous (no gaps/ordering problems, correct through a
+        # figure-8 crossing) and the local wall midpoint recenters the line even
+        # where the car drove off-center during exploration.
+        centerline = []
+        for tx, ty in trail[::2]:                      # every ~1 m of trail
+            db = np.hypot(blue[:, 0] - tx, blue[:, 1] - ty)
+            dy = np.hypot(yellow[:, 0] - tx, yellow[:, 1] - ty)
+            ib, iy = int(np.argmin(db)), int(np.argmin(dy))
+            if db[ib] <= 5.0 and dy[iy] <= 5.0:
+                p = ((blue[ib, 0] + yellow[iy, 0]) / 2.0,
+                     (blue[ib, 1] + yellow[iy, 1]) / 2.0)
+            else:
+                p = (float(tx), float(ty))             # walls not visible: keep drive line
+            if not centerline or (p[0]-centerline[-1][0])**2 + (p[1]-centerline[-1][1])**2 >= 0.75**2:
+                centerline.append(p)
+        centerline = np.array(centerline)
+        if len(centerline) < 10:
+            return None
+
+        # Light smoothing (3-point moving average, cyclic) to kill midpoint jitter
+        prev_c = np.roll(centerline, 1, axis=0)
+        next_c = np.roll(centerline, -1, axis=0)
+        centerline = (prev_c + centerline + next_c) / 3.0
+        raw = centerline.copy()
+
+        # One-time racing line optimization within the mapped boundaries (gentle)
+        try:
+            centerline = _min_curvature_path(centerline, blue, yellow, safety=0.5)
+        except Exception as e:
+            self.get_logger().warn(
+                f'Lock-in optimizer failed ({type(e).__name__}: {e}) — using raw centerline.')
+
+        # Clearance guard: any waypoint the optimizer pushed within 1.0 m of a cone
+        # reverts to its raw (centered) position — a clipped cone costs more than a
+        # slightly slower line.
+        all_cones = np.vstack([blue, yellow])
+        reverted = 0
+        for i in range(len(centerline)):
+            d = np.hypot(all_cones[:, 0] - centerline[i, 0],
+                         all_cones[:, 1] - centerline[i, 1]).min()
+            if d < 1.0:
+                centerline[i] = raw[i]
+                reverted += 1
+        if reverted:
+            self.get_logger().info(f'Lock-in clearance guard reverted {reverted} waypoints.')
+
+        # Resample to uniform ~1.0 m spacing. The midpoint walk collapses
+        # consecutive trail steps onto the same wall-cone midpoint, leaving the
+        # line as coarse as the wall-cone spacing (measured 1.75 m avg, 56 wpts
+        # for a 97.7 m peanut lap). That is too coarse for pure pursuit at the
+        # hairpins (measured 2.7 m cross-track at the SE corner) and halves the
+        # index separation between figure-8 crossing passes toward the 30-wpt
+        # closest-search window (the skidpad lap-skip failure mode).
+        # Closing point included, so pure pursuit wrap-around engages
+        # (path[0] == path[-1]).
+        closed = np.vstack([centerline, centerline[:1]])
+        seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        s = np.concatenate([[0.0], np.cumsum(seg)])
+        total = float(s[-1])
+        n = max(int(round(total)), 20)
+        si = np.linspace(0.0, total, n + 1)
+        return np.column_stack([
+            np.interp(si, s, closed[:, 0]),
+            np.interp(si, s, closed[:, 1]),
+        ])
+
     def _cones_cb(self, msg: Track) -> None:
-        # Hardcoded missions: publish pre-computed path on every cone callback
-        # so pure_pursuit picks it up reliably on startup.
-        if self._mission in ('skidpad', 'peanut'):
+        # Locked loop (global missions, lap 2+): the full-lap path was built from the
+        # live-accumulated cone map when the car closed lap 1. Publish it unchanged —
+        # no re-planning. Pure pursuit wraps around closed paths for endless laps.
+        if self._locked_path is not None:
+            stamp = self.get_clock().now().to_msg()
+            self._pub_centerline.publish(
+                _path_from_xy(self._locked_path, self._map_frame, stamp))
+            return
+
+        # Skidpad uses a hardcoded path (complex multi-lap sequence ft-fsd can't express).
+        if self._mission == 'skidpad':
             if self._odom_received:
-                hardcoded = self._skidpad_path if self._mission == 'skidpad' else self._peanut_path
                 stamp = self.get_clock().now().to_msg()
                 self._pub_centerline.publish(
-                    _path_from_xy(hardcoded, self._map_frame, stamp))
+                    _path_from_xy(self._skidpad_path, self._map_frame, stamp))
                 if not self._skidpad_path_published:
                     self._skidpad_path_published = True
                     self.get_logger().info(
-                        f'{self._mission} path first publish: {len(hardcoded)} waypoints')
+                        f'skidpad path first publish: {len(self._skidpad_path)} waypoints')
             return
 
         if not _LIB_AVAILABLE or self._planner is None:
@@ -357,6 +434,16 @@ class PathPlannerNode(Node):
         _GRID = 0.5
         _CONE_MAP_MAX = 500
         for cone in msg.track:
+            # Orange pylons mark the start/finish gate, not track boundaries.
+            # They are on /planning/cones for the finish detector's gate-pass
+            # detection; as UNKNOWN cones in the map they distort the ft-fsd
+            # boundary trace, so drop them here entirely.
+            if cone.color in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL):
+                continue
+            # A single non-finite cone (bad depth pixel upstream) must not kill
+            # the planner: round(NaN) raises ValueError.
+            if not (math.isfinite(cone.location.x) and math.isfinite(cone.location.y)):
+                continue
             rx = round(cone.location.x / _GRID) * _GRID
             ry = round(cone.location.y / _GRID) * _GRID
             key = (rx, ry)
@@ -371,30 +458,48 @@ class PathPlannerNode(Node):
                 if self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
                     self._cone_map[key] = new_type
 
+        # --- Lap-1 completion → lock the loop (global missions) ---
+        # Same spirit as the finish detector: the car must have driven far enough AND
+        # ventured away from the start before a return to the start counts as a lap.
+        if (self._global_planning
+                and self._trail
+                and self._trail_dist > 60.0
+                and self._trail_max_r > 15.0
+                and float(np.linalg.norm(self._car_pos - self._trail[0])) < 4.0):
+            locked = self._build_locked_loop()
+            if locked is not None:
+                self._locked_path = locked
+                arc = float(np.sum(np.hypot(np.diff(locked[:, 0]), np.diff(locked[:, 1]))))
+                self.get_logger().info(
+                    f'Lap 1 complete — locked full-loop path: {len(locked)} waypoints, '
+                    f'{arc:.1f} m, built from {len(self._cone_map)} live-mapped cones. '
+                    f'Re-planning stopped.')
+                stamp = self.get_clock().now().to_msg()
+                self._pub_centerline.publish(
+                    _path_from_xy(locked, self._map_frame, stamp))
+                return
+
         # Build cones_by_type: list of Nx2 arrays indexed by ConeTypes enum value
         # ft-fsd-path-planning expects: [unknown[], right[], left[], orange_big[], orange_small[]]
         #
-        # Visibility filter: keep only cones from the accumulated map that are:
-        #   (a) within CONE_VIS_R metres of the car, AND
-        #   (b) not more than CONE_BEHIND_M metres behind the car's heading direction.
-        # This prevents far-away and behind-car cones on crossing tracks (figure-8/peanut)
-        # from confusing the planner with cones from the other loop.
-        # The full accumulated map (not just the current frame) is used so perception mode
-        # builds up a global picture as the car drives around.
-        CONE_VIS_R    = 20.0   # max radius (m) — keep large for sparse tracks (small_track has 17m gaps)
-        CONE_BEHIND_M = 12.0   # allow up to 12 m behind car — 6m was cutting left-boundary cones mid-turn
+        # Visibility filter — local planning only. Global (trackdrive) planning needs the
+        # entire cone map: the global boundary trace follows each wall around the whole
+        # track, which is what disambiguates near-passing walls (figure-8 crossings).
+        CONE_VIS_R    = 50.0   # local: large radius for sparse tracks
+        CONE_BEHIND_M = 3.0    # small tolerance so the cone pair straddling the car survives
+
         n_types = len(ConeTypes)
         buckets: list[list] = [[] for _ in range(n_types)]
 
         for (rx, ry), cone_type in self._cone_map.items():
-            dx = rx - self._car_pos[0]
-            dy = ry - self._car_pos[1]
-            if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
-                continue
-            # forward projection: positive = ahead of car, negative = behind
-            fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
-            if fwd < -CONE_BEHIND_M:
-                continue
+            if not self._global_planning:
+                dx = rx - self._car_pos[0]
+                dy = ry - self._car_pos[1]
+                if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
+                    continue
+                # forward projection onto heading: negative = behind the car
+                if dx * self._car_dir[0] + dy * self._car_dir[1] < -CONE_BEHIND_M:
+                    continue
             buckets[cone_type].append([rx, ry])
 
         cones_by_type = [
@@ -446,6 +551,20 @@ class PathPlannerNode(Node):
                 throttle_duration_sec=5.0)
             return
 
+        # Off-map guard: if the car is far from every mapped cone it has left the
+        # track. ft-fsd happily extrapolates a straight path into the void in that
+        # state (measured: car cruised 2.6 km off the peanut map at max speed) —
+        # publish nothing instead, so pure pursuit's stale-path failsafe brakes.
+        all_xy = np.array(list(self._cone_map.keys()), dtype=np.float64)
+        d_nearest = float(np.min(np.hypot(all_xy[:, 0] - self._car_pos[0],
+                                          all_xy[:, 1] - self._car_pos[1])))
+        if d_nearest > 20.0:
+            self.get_logger().warn(
+                f'Car is {d_nearest:.0f} m from the nearest mapped cone — off track? '
+                'Skipping planner so the stale-path failsafe stops the car.',
+                throttle_duration_sec=2.0)
+            return
+
         try:
             result = self._planner.calculate_path_in_global_frame(
                 cones_by_type,
@@ -474,8 +593,14 @@ class PathPlannerNode(Node):
         if path_xy is not None and len(path_xy) > 0:
             centerline = np.array(path_xy)[:, 1:3]
 
-            # Run racing line optimizer when we have enough points and boundaries
-            if (len(path_xy) > 3
+            # Run racing line optimizer when we have enough points and boundaries.
+            # NOT in global-planning exploration: those paths are ephemeral (the
+            # lap-1 lock-in replaces them and does its own one-time optimization),
+            # and the per-cycle optimizer pushed the exploration replan period to
+            # ~2 s — exactly pure pursuit's stale threshold (measured spurious
+            # stale-brakes mid-straight on peanut at 6 m/s).
+            if (not self._global_planning
+                    and len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
                     and right_xy is not None and len(right_xy) > 3):
                 left   = np.array(left_xy)[:, :2]

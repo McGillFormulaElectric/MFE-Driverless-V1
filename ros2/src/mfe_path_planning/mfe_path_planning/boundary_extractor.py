@@ -67,6 +67,12 @@ class BoundaryExtractor(Node):
 
     MATCH_RADIUS = 0.5   # meters — max distance to associate LiDAR centroid with camera cone
     GT_MATCH_RADIUS = 2.0  # meters — looser match for GT color fallback
+    CAM_DEDUP_RADIUS = 1.2  # meters — unmatched camera cone this close to a LiDAR centroid
+                            # is the same physical cone seen with camera position error,
+                            # not a new cone: appending it would create a phantom duplicate
+    CAM_ONLY_MAX_RANGE = 12.0  # meters — camera-only cones (no LiDAR confirmation) beyond
+                               # this range are dropped: depth error grows with distance and
+                               # the planner's global cone map keeps phantoms forever
 
     def __init__(self):
         super().__init__('boundary_extractor')
@@ -124,6 +130,28 @@ class BoundaryExtractor(Node):
     def _gt_callback(self, msg: Track) -> None:
         self._gt_cones = msg.track
 
+    def _lookup_map_tf(self, src_frame: str, stamp_msg):
+        """
+        Look up map <- src_frame, preferring the sensor-capture stamp so cones are
+        placed where the car WAS when the sensor saw them (latest-TF lookup smears
+        positions by however far the car moved since capture). Falls back to the
+        latest transform if the stamped lookup fails (buffer too short / stamp 0).
+        Returns a TransformStamped or None.
+        """
+        if stamp_msg is not None and (stamp_msg.sec or stamp_msg.nanosec):
+            try:
+                return self._tf_buffer.lookup_transform(
+                    'map', src_frame, rclpy.time.Time.from_msg(stamp_msg))
+            except TransformException:
+                pass
+        try:
+            return self._tf_buffer.lookup_transform('map', src_frame, rclpy.time.Time())
+        except TransformException as e:
+            self.get_logger().warn(
+                f'Could not transform from {src_frame!r} to map: {e}',
+                throttle_duration_sec=2.0)
+            return None
+
     def _transform_lidar_pts_to_map(self, pts: np.ndarray, src_frame: str) -> tuple:
         """
         Try to transform an Nx3 array from src_frame to 'map'.
@@ -132,17 +160,10 @@ class BoundaryExtractor(Node):
         if pts.shape[0] == 0 or not src_frame:
             return pts, True
 
-        try:
-            tf_stamped = self._tf_buffer.lookup_transform(
-                'map',
-                src_frame,
-                rclpy.time.Time())
-            return _apply_tf(pts, tf_stamped), True
-        except TransformException as e:
-            self.get_logger().warn(
-                f'Could not transform LiDAR points from {src_frame!r} to map: {e}',
-                throttle_duration_sec=2.0)
+        tf_stamped = self._lookup_map_tf(src_frame, self._lidar_header.stamp)
+        if tf_stamped is None:
             return pts, False
+        return _apply_tf(pts, tf_stamped), True
 
     def _transform_camera_cones_to_map(self, cones: list, src_frame: str) -> tuple:
         """
@@ -150,24 +171,16 @@ class BoundaryExtractor(Node):
         Returns (Nx3 ndarray of transformed xyz, success).
         On failure returns the raw positions, False.
         """
+        cam_xyz = np.array([[c.location.x, c.location.y, c.location.z]
+                            for c in cones], dtype=np.float32) if cones \
+            else np.zeros((0, 3), dtype=np.float32)
         if not cones or not src_frame:
-            cam_xyz = np.array([[c.location.x, c.location.y, c.location.z]
-                                for c in cones], dtype=np.float32)
             return cam_xyz, True
 
-        cam_xyz = np.array([[c.location.x, c.location.y, c.location.z]
-                            for c in cones], dtype=np.float32)
-        try:
-            tf_stamped = self._tf_buffer.lookup_transform(
-                'map',
-                src_frame,
-                rclpy.time.Time())
-            return _apply_tf(cam_xyz, tf_stamped), True
-        except TransformException as e:
-            self.get_logger().warn(
-                f'Could not transform camera cones from {src_frame!r} to map: {e}',
-                throttle_duration_sec=2.0)
+        tf_stamped = self._lookup_map_tf(src_frame, self._camera_header.stamp)
+        if tf_stamped is None:
             return cam_xyz, False
+        return _apply_tf(cam_xyz, tf_stamped), True
 
     def _publish_fused(self) -> None:
         now = self.get_clock().now().to_msg()
@@ -179,6 +192,10 @@ class BoundaryExtractor(Node):
         # --- Transform LiDAR points to map frame ---
         lidar_src_frame = self._lidar_header.frame_id
         lidar_pts_map, lidar_tf_ok = self._transform_lidar_pts_to_map(lidar_pts, lidar_src_frame)
+        if not lidar_tf_ok:
+            # TF map<-velodyne failed: drop LiDAR cones this tick rather than publishing
+            # untransformed LiDAR-frame points mislabelled as map-frame cones.
+            lidar_pts_map = np.zeros((0, 3), dtype=np.float32)
 
         # --- Transform camera cone positions to map frame ---
         cam_src_frame = ''
@@ -186,16 +203,35 @@ class BoundaryExtractor(Node):
             cam_src_frame = self._camera_header.frame_id
         cam_xyz_map, _cam_tf_ok = self._transform_camera_cones_to_map(camera_cones, cam_src_frame)
 
+        # Filter camera cones down to metric-only, map-frame points before any use.
+        # When the vision node has no depth (no depth topic / no camera_info), it publishes
+        # cones in PIXEL coordinates (x=col, y=row, z=-1.0 sentinel, frame_id='camera_pixel').
+        # Those are not metric map-frame positions: their TF lookup fails and the raw pixel
+        # values would otherwise be matched/appended as garbage cones (e.g. at (320, 240)).
+        # Exclude any pixel-sentinel cone, and drop all camera cones if the map<-camera TF failed.
+        if not _cam_tf_ok:
+            camera_cones = []
+            cam_xyz_map = np.zeros((0, 3), dtype=np.float32)
+        else:
+            metric = [(c, cam_xyz_map[k]) for k, c in enumerate(camera_cones)
+                      if c.location.z != -1.0 and c.header.frame_id != 'camera_pixel'
+                      and bool(np.isfinite(cam_xyz_map[k]).all())]
+            camera_cones = [c for c, _ in metric]
+            cam_xyz_map = (np.array([xyz for _, xyz in metric], dtype=np.float32)
+                           if metric else np.zeros((0, 3), dtype=np.float32))
+
         # Build camera lookup (x,y only, map frame)
         cam_xy = None
         if camera_cones and cam_xyz_map.shape[0] > 0:
             cam_xy = cam_xyz_map[:, :2]
 
-        # Build GT color lookup — only used when camera unavailable.
-        # /ground_truth/track_colored is in map frame — match against map-frame LiDAR centroids.
+        # Build GT color lookup — fallback for LiDAR centroids the camera did not
+        # color (out of FOV / no metric depth / no match). Sim-only: the topic does
+        # not exist on hardware, so there gt_xy stays None and unmatched cones
+        # remain UNKNOWN. Camera color always wins when a match exists.
         gt_xy = None
         gt_colors = None
-        if not camera_cones and self._gt_cones:
+        if self._gt_cones:
             gt_xy = np.array([[c.location.x, c.location.y]
                               for c in self._gt_cones], dtype=np.float32)
             gt_colors = [c.color for c in self._gt_cones]
@@ -222,7 +258,7 @@ class BoundaryExtractor(Node):
                 if dists[best_idx] <= self.MATCH_RADIUS:
                     cone.color = camera_cones[best_idx].color
                     matched_camera_indices.add(best_idx)
-            elif gt_xy is not None and len(gt_xy) > 0:
+            if cone.color == Cone.UNKNOWN and gt_xy is not None and len(gt_xy) > 0:
                 # GT cones in map frame; match against map-frame LiDAR centroid (lx, ly)
                 dists = np.sqrt((gt_xy[:, 0] - lx)**2 + (gt_xy[:, 1] - ly)**2)
                 best_idx = int(np.argmin(dists))
@@ -232,8 +268,29 @@ class BoundaryExtractor(Node):
             fused.append(cone)
 
         # --- Step 2: Add unmatched camera cones (beyond LiDAR range or lateral) ---
+        # Unconfirmed camera cones only within CAM_ONLY_MAX_RANGE of the car; needs
+        # the car pose — if map<-base_footprint is unavailable, append none (conservative:
+        # a phantom in the planner's persistent map is worse than a briefly missing cone).
+        car_xy = None
+        if any(j not in matched_camera_indices for j in range(len(camera_cones))):
+            try:
+                tf_car = self._tf_buffer.lookup_transform(
+                    'map', 'base_footprint', rclpy.time.Time())
+                car_xy = (tf_car.transform.translation.x, tf_car.transform.translation.y)
+            except TransformException:
+                pass
         for j, cam_cone in enumerate(camera_cones):
             if j not in matched_camera_indices:
+                if car_xy is None:
+                    continue
+                if np.hypot(cam_xyz_map[j, 0] - car_xy[0],
+                            cam_xyz_map[j, 1] - car_xy[1]) > self.CAM_ONLY_MAX_RANGE:
+                    continue
+                if lidar_pts_map.shape[0] > 0:
+                    d2 = np.hypot(lidar_pts_map[:, 0] - cam_xyz_map[j, 0],
+                                  lidar_pts_map[:, 1] - cam_xyz_map[j, 1])
+                    if float(d2.min()) <= self.CAM_DEDUP_RADIUS:
+                        continue
                 cone = Cone()
                 cone.header.stamp = now
                 cone.header.frame_id = 'map'

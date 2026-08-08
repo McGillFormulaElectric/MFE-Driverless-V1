@@ -78,6 +78,15 @@ class FusionEvaluator(Node):
     def __init__(self):
         super().__init__('fusion_evaluator')
 
+        # TF frame the camera detections/pixels live in. The EUFS sim's zed frames
+        # (including the '*_optical' ones) are identity-rotated, i.e. ROS body
+        # convention (X fwd, Y left, Z up) — set camera_frame_is_optical:=true only
+        # if the frame really follows optical convention (X right, Y down, Z fwd).
+        self.declare_parameter('camera_frame', 'zed_depth_camera_frame')
+        self.declare_parameter('camera_frame_is_optical', False)
+        self._camera_frame = self.get_parameter('camera_frame').value
+        self._camera_optical = self.get_parameter('camera_frame_is_optical').value
+
         self._lidar_cloud: PointCloud2 | None = None
         self._camera_cones: list = []   # list of mfe_msgs/Cone
         self._gt_cones: list = []       # list of (x, y, color) in base_footprint
@@ -94,7 +103,9 @@ class FusionEvaluator(Node):
         self.create_subscription(Track, 'image/track', self._camera_cb, 10)
         self.create_subscription(PointCloud2, '/perception/cones_uncolored', self._lidar_cb, 10)
         self.create_subscription(Track, '/ground_truth/cones_colored', self._gt_cb, 10)
-        self.create_subscription(CameraInfo, '/camera/camera_info', self._camera_info_cb, 10)
+        # Relative topic so launch files can remap to the actual source
+        # (sim: /zed/camera_info — same remap the vision node uses in bringup).
+        self.create_subscription(CameraInfo, 'camera/camera_info', self._camera_info_cb, 10)
 
         self._pub = self.create_publisher(DiagnosticArray, '/perception/fusion_accuracy', 10)
         self.create_timer(2.0, self._evaluate)
@@ -185,22 +196,23 @@ class FusionEvaluator(Node):
     # Fusion: LiDAR centroids coloured by nearest camera cone
     # ------------------------------------------------------------------ #
 
-    def _project_lidar_to_pixels(self, lidar_xy_bf: np.ndarray) -> np.ndarray:
+    def _project_lidar_to_pixels(self, lidar_xy_bf: np.ndarray) -> tuple:
         """
-        Project LiDAR centroids (Nx2, base_footprint XY) to camera image pixels (Nx2).
-        Returns Nx2 array of (px, py) or empty array if intrinsics / TF unavailable.
-        Drops points behind the camera (Z <= 0 in camera frame).
+        Project LiDAR centroids (Nx2, base_footprint XY) to camera image pixels.
+        Returns (pixels Nx2, valid_mask over the input rows); both empty-shaped
+        if intrinsics / TF are unavailable. Drops points behind the camera.
         """
+        no_result = (np.zeros((0, 2)), np.zeros(len(lidar_xy_bf), dtype=bool))
         if self._fx is None:
-            return np.zeros((0, 2))
+            return no_result
 
-        # Look up base_footprint → camera_base (inverse of camera_base → base_footprint)
+        # Look up base_footprint → camera frame
         try:
             tf_cam = self._tf.lookup_transform(
-                'camera_base', TARGET_FRAME, rclpy.time.Time()
+                self._camera_frame, TARGET_FRAME, rclpy.time.Time()
             )
         except TransformException:
-            return np.zeros((0, 2))
+            return no_result
 
         r = tf_cam.transform.rotation
         t = tf_cam.transform.translation
@@ -209,17 +221,23 @@ class FusionEvaluator(Node):
 
         # Lift XY to XYZ (z=0 in base_footprint plane) then transform
         pts3 = np.column_stack([lidar_xy_bf[:, 0], lidar_xy_bf[:, 1], np.zeros(len(lidar_xy_bf))])
-        cam_pts = (R @ pts3.T).T + T   # Nx3 in camera_base frame
+        cam_pts = (R @ pts3.T).T + T   # Nx3 in camera frame
 
-        valid = cam_pts[:, 2] > 0.05   # only points in front of camera
+        if self._camera_optical:
+            # optical convention: X right, Y down, Z forward
+            x_o, y_o, z_o = cam_pts[:, 0], cam_pts[:, 1], cam_pts[:, 2]
+        else:
+            # body convention (X fwd, Y left, Z up) → optical
+            x_o, y_o, z_o = -cam_pts[:, 1], -cam_pts[:, 2], cam_pts[:, 0]
+
+        valid = z_o > 0.05   # only points in front of camera
         if not np.any(valid):
-            return np.zeros((0, 2))
+            return no_result
 
-        cp = cam_pts[valid]
-        px = self._fx * cp[:, 0] / cp[:, 2] + self._cx
-        py = self._fy * cp[:, 1] / cp[:, 2] + self._cy
+        px = self._fx * x_o[valid] / z_o[valid] + self._cx
+        py = self._fy * y_o[valid] / z_o[valid] + self._cy
         pixels = np.column_stack([px, py])
-        return pixels, valid   # type: ignore[return-value]
+        return pixels, valid
 
     def _fuse(self) -> list:
         """
@@ -261,24 +279,20 @@ class FusionEvaluator(Node):
 
         # --- pixel-mode camera matching (project LiDAR → image) ---
         if pixel_cones and len(lidar_xy) > 0:
-            proj_result = self._project_lidar_to_pixels(lidar_xy)
-            if isinstance(proj_result, tuple) and len(proj_result) == 2:
-                pixels, valid_mask = proj_result
-                if len(pixels) > 0:
-                    cam_pixels = np.array([[c.location.x, c.location.y] for c in pixel_cones])
-                    cam_colors_px = [c.color for c in pixel_cones]
-                    used_cam_px: set[int] = set()
+            pixels, valid_mask = self._project_lidar_to_pixels(lidar_xy)
+            if len(pixels) > 0:
+                cam_pixels = np.array([[c.location.x, c.location.y] for c in pixel_cones])
+                cam_colors_px = [c.color for c in pixel_cones]
 
-                    valid_indices = np.where(valid_mask)[0]
-                    for proj_i, lidar_i in enumerate(valid_indices):
-                        if lidar_colors[lidar_i] != UNKNOWN:
-                            continue   # already coloured by metric match
-                        dists = np.hypot(cam_pixels[:, 0] - pixels[proj_i, 0],
-                                         cam_pixels[:, 1] - pixels[proj_i, 1])
-                        best = int(np.argmin(dists))
-                        if dists[best] <= PIXEL_MATCH_R:
-                            lidar_colors[lidar_i] = cam_colors_px[best]
-                            used_cam_px.add(best)
+                valid_indices = np.where(valid_mask)[0]
+                for proj_i, lidar_i in enumerate(valid_indices):
+                    if lidar_colors[lidar_i] != UNKNOWN:
+                        continue   # already coloured by metric match
+                    dists = np.hypot(cam_pixels[:, 0] - pixels[proj_i, 0],
+                                     cam_pixels[:, 1] - pixels[proj_i, 1])
+                    best = int(np.argmin(dists))
+                    if dists[best] <= PIXEL_MATCH_R:
+                        lidar_colors[lidar_i] = cam_colors_px[best]
 
         for (lx, ly), color in zip(lidar_xy, lidar_colors):
             fused.append((float(lx), float(ly), color))

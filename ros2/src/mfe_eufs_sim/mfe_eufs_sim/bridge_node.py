@@ -206,22 +206,20 @@ class EufsSimBridge(Node):
         self._gt_colored_pub = self.create_publisher(
             Track, '/ground_truth/cones_colored', _QOS_MFE)
 
-        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored
-        # Used by boundary_extractor as a color fallback when camera is not running.
+        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored,
+        # and (GT bypass mode) → /planning/cones for the path planner.
+        # ONE subscription feeds both publishers: duplicate subscriptions to the same
+        # topic in one node were observed to silently starve (one delivered, the other
+        # never fired) — planner went blind while track_colored kept flowing.
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
         self._gt_track_colored_pub = self.create_publisher(
             Track, '/ground_truth/track_colored', _QOS_MFE)
-
-        # GT bypass mode: forward full track cones directly to /planning/cones so
-        # the path planner can run without the perception pipeline.
-        # /ground_truth/track gives ALL cones in Gazebo world frame (= TF map frame) —
-        # no coordinate transformation needed; positions are absolute and stable.
         if self._use_sim_cones_directly:
-            self.create_subscription(
-                ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
                 Track, '/planning/cones', _QOS_MFE)
+        else:
+            self._planning_cones_pub = None
 
         # ---------- EUFS → MFE: Vehicle state (ground truth for accuracy measurement) ----------
         # Publishes to /ground_truth/state_odom — NOT to /ekf/output.
@@ -276,8 +274,9 @@ class EufsSimBridge(Node):
         map→odom→base_footprint from Gazebo). Positions are absolute and stable —
         no coordinate transformation required.
 
-        Only BLUE and YELLOW boundary cones are forwarded. ORANGE_BIG are
-        start/finish pylons that sit off to the side and confuse the path planner.
+        BLUE and YELLOW boundary cones are forwarded for planning; ORANGE_BIG
+        start/finish pylons are forwarded for the finish detector's gate-pass
+        detection (the planner skips them at intake — see _MFE_TO_FSD).
         """
         track = Track()
         stamp = msg.header.stamp
@@ -296,7 +295,8 @@ class EufsSimBridge(Node):
             track.track.append(make_cone(cw.point, Cone.BLUE))
         for cw in msg.yellow_cones:
             track.track.append(make_cone(cw.point, Cone.YELLOW))
-        # ORANGE_BIG omitted — start/finish pylons at off-track positions confuse the planner
+        for cw in msg.big_orange_cones:
+            track.track.append(make_cone(cw.point, Cone.ORANGE_BIG))
 
         self._planning_cones_pub.publish(track)
 
@@ -307,12 +307,15 @@ class EufsSimBridge(Node):
         self._gt_colored_pub.publish(track)
 
     def _gt_track_cb(self, msg: ConeArrayWithCovariance) -> None:
-        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored.
+        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored,
+        and in GT-bypass mode → /planning/cones (single subscription feeds both).
         Published in the EUFS track-local frame for debugging/visualisation in Foxglove.
         NOTE: frame_id='map' here is the Gazebo track-local origin, NOT the TF map frame.
         """
         track = _cone_array_to_track(msg, msg.header.frame_id)
         self._gt_track_colored_pub.publish(track)
+        if self._planning_cones_pub is not None:
+            self._sim_cones_cb(msg)
 
     def _car_state_cb(self, msg) -> None:
         """Convert eufs_msgs/CarState → nav_msgs/Odometry → /ground_truth/state_odom."""

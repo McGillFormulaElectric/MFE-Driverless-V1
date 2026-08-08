@@ -42,6 +42,12 @@ public:
         this->declare_parameter("max_cluster_size", 150);
         this->declare_parameter("lidar_frame_id", "velodyne");
         this->declare_parameter("min_intensity", 0.0);  // 0 = disabled; try 100.0 for real VLP-16
+        // Cone-body height band in the sensor frame, applied after ground removal.
+        // Defaults match the EUFS sim VLP-16: sensor origin ~1.0 m above the track,
+        // FSAE cones are 0.325 m tall (see comment at the passthrough below).
+        // On hardware, set these from the real sensor mounting height.
+        this->declare_parameter("cone_z_min", -1.10f);
+        this->declare_parameter("cone_z_max", -0.50f);
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -50,6 +56,8 @@ public:
         max_cluster_size_ = this->get_parameter("max_cluster_size").as_int();
         lidar_frame_id_ = this->get_parameter("lidar_frame_id").as_string();
         min_intensity_  = this->get_parameter("min_intensity").as_double();
+        cone_z_min_ = this->get_parameter("cone_z_min").as_double();
+        cone_z_max_ = this->get_parameter("cone_z_max").as_double();
 
         // --- Communication ---
         sub_raw_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -350,7 +358,7 @@ private:
                 pcl::PassThrough<pcl::PointXYZ> pt;
                 pt.setInputCloud(object_cloud);
                 pt.setFilterFieldName("z");
-                pt.setFilterLimits(-1.10f, -0.50f);
+                pt.setFilterLimits(static_cast<float>(cone_z_min_), static_cast<float>(cone_z_max_));
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cone_body(new pcl::PointCloud<pcl::PointXYZ>);
                 pt.filter(*cone_body);
                 object_cloud = cone_body;
@@ -403,6 +411,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
+    double cone_z_min_, cone_z_max_;
     int min_cluster_size_, max_cluster_size_;
     std::string lidar_frame_id_;
 };
