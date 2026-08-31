@@ -87,10 +87,10 @@ private:
 
             // --- 1. Upload (Host -> GPU) ---
             float* d_input = NULL;
-            checkCudaErrors(cudaMalloc(&d_input, point_count * sizeof(pcl::PointXYZ))); // x,y,z,padding
-            checkCudaErrors(cudaMemcpyAsync(d_input, host_cloud->points.data(), point_count * sizeof(pcl::PointXYZ), cudaMemcpyHostToDevice, stream));
+            checkCudaErrors(cudaMalloc(&d_input, point_count * sizeof(pcl::PointXYZ)));
+            checkCudaErrors(cudaMemcpy(d_input, host_cloud->points.data(), point_count * sizeof(pcl::PointXYZ), cudaMemcpyHostToDevice));
 
-            // --- 1b. cuFilter (Passthrough ROI: X range 0-20m ahead, Y range ±8m) ---
+            // --- 1b. cuFilter (Passthrough ROI: X range 0-20m ahead) ---
             float* d_roi = NULL;
             checkCudaErrors(cudaMalloc(&d_roi, point_count * sizeof(pcl::PointXYZ)));
             unsigned int roi_count = 0;
@@ -98,36 +98,41 @@ private:
             cudaFilter roi_filter_x(stream);
             FilterParam_t roi_param_x;
             roi_param_x.type = PASSTHROUGH;
-            roi_param_x.dim = 0; // X axis
-            roi_param_x.downFilterLimits = 0.0f;
+            roi_param_x.dim = 0;
+            roi_param_x.downFilterLimits = -20.0f;
             roi_param_x.upFilterLimits = 20.0f;
             roi_param_x.limitsNegative = false;
             roi_filter_x.set(roi_param_x);
             roi_filter_x.filter(d_roi, &roi_count, d_input, point_count);
+            cudaFree(d_input);
 
-            // Then run VoxelGrid on the ROI output instead of d_input
-            // Change the VoxelGrid filter call to use d_roi and roi_count
+            if (roi_count == 0) {
+                cudaFree(d_roi);
+                checkCudaErrors(cudaStreamDestroy(stream));
+                return;
+            }
 
             // --- 2. cuFilter (VoxelGrid) ---
             float* d_filtered = NULL;
-            checkCudaErrors(cudaMalloc(&d_filtered, point_count * sizeof(pcl::PointXYZ)));
+            checkCudaErrors(cudaMalloc(&d_filtered, roi_count * sizeof(pcl::PointXYZ)));
             unsigned int filtered_count = 0;
 
             cudaFilter filter(stream);
             FilterParam_t filter_param;
             filter_param.type = VOXELGRID;
-            filter_param.dim = 3;
+            filter_param.dim = 0;
             filter_param.voxelX = static_cast<float>(leaf_size_);
             filter_param.voxelY = static_cast<float>(leaf_size_);
             filter_param.voxelZ = static_cast<float>(leaf_size_);
-            // Note: Different cuFilter versions set leaf size differently.
-            // If your version takes it in set(), use that. Otherwise use defaults or modify lib.
-            // Assuming this struct supports it or defaults are acceptable:
             filter.set(filter_param);
-
-            // Execute Filter: input -> filtered
-            // Note: Check your specific header if it takes explicit leaf sizes in function args
             filter.filter(d_filtered, &filtered_count, d_roi, roi_count);
+            cudaFree(d_roi);
+
+            if (filtered_count == 0) {
+                cudaFree(d_filtered);
+                checkCudaErrors(cudaStreamDestroy(stream));
+                return;
+            }
 
             // --- 3. cuSegmentation (Ground Removal) ---
             cudaSegmentation segmenter(SACMODEL_PLANE, SAC_RANSAC, stream);
@@ -240,8 +245,6 @@ private:
             }
 
             // Cleanup
-            cudaFree(d_input);
-            cudaFree(d_roi);
             cudaFree(d_filtered);
             cudaFree(d_seg_indices);
             cudaFree(d_model_coeffs);
