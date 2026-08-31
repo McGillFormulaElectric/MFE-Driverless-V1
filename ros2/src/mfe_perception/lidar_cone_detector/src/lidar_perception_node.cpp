@@ -104,9 +104,10 @@ private:
             roi_param_x.limitsNegative = false;
             roi_filter_x.set(roi_param_x);
             roi_filter_x.filter(d_roi, &roi_count, d_input, point_count);
+            cudaStreamSynchronize(stream);
             cudaFree(d_input);
 
-            if (roi_count == 0) {
+            if (roi_count < 50) {
                 cudaFree(d_roi);
                 checkCudaErrors(cudaStreamDestroy(stream));
                 return;
@@ -126,9 +127,10 @@ private:
             filter_param.voxelZ = static_cast<float>(leaf_size_);
             filter.set(filter_param);
             filter.filter(d_filtered, &filtered_count, d_roi, roi_count);
+            cudaStreamSynchronize(stream);
             cudaFree(d_roi);
 
-            if (filtered_count == 0) {
+            if (filtered_count < 50) {
                 cudaFree(d_filtered);
                 checkCudaErrors(cudaStreamDestroy(stream));
                 return;
