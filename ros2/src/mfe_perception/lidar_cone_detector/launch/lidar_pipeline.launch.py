@@ -52,9 +52,11 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {"run_visualization": False},
-            {'lidar_frame': 'lidar_base'}, # basic lidar frame
+            {'lidar_frame': 'lidar_base'},
         ],
-        # Old remapping: ('pcl/input', '/mfe_sensors/lidar/data'), # Remap to pcl/acc_cloud if using sliding win.
+        remappings=[
+            ('pcl/input', '/velodyne_points'),
+        ],
     )
 
     # DBSCAN Unsupervised Point Clustering for Cone Detection
