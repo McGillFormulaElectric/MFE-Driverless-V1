@@ -42,34 +42,24 @@ def generate_launch_description():
         condition=IfCondition(sliding_window_value)
     )
 
-    # RANSAC Ground Plane Removal after downsampling in preprocessor 
-    ground_plane_removal_node = Node(
+    # Unified GPU perception pipeline: filter + ground removal + clustering + centroids
+    lidar_perception_node = Node(
         package='lidar_cone_detector',
-        namespace='lidar',
-        name='ground_plane_removal_node',
-        executable='ground_plane_removal',
+        executable='lidar_perception_node',
+        name='lidar_perception_node',
         output='screen',
         emulate_tty=True,
         parameters=[
-            {"run_visualization": False},
-            {'lidar_frame': 'lidar_base'},
+            {'lidar_frame_id': 'velodyne'},
+            {'ground_threshold': 0.1},
+            {'leaf_size': 0.05},
+            {'cluster_tolerance': 0.4},
+            {'min_cluster_size': 3},
+            {'max_cluster_size': 150},
         ],
         remappings=[
-            ('pcl/input', '/velodyne_points'),
+            ('/lidar/points_raw', '/velodyne_points'),
         ],
-    )
-
-    # DBSCAN Unsupervised Point Clustering for Cone Detection
-    cone_detector_node = Node(
-        package='lidar_cone_detector',
-        namespace='lidar',
-        name='cone_detector_node',
-        executable='detected_cones',
-        output='screen',
-        emulate_tty=True,
-        arguments=[
-            '--verbose'
-        ]
     )
 
     # Convert to LaserScan for use in 2D Ceres Solver slam_toolbox (Graph-SLAM based)
@@ -118,9 +108,8 @@ def generate_launch_description():
         load_file_arg,
         sliding_window_arg,
         file_loader_node,
-        sliding_window_preprocessor_node, 
-        ground_plane_removal_node,
-        cone_detector_node,
+        sliding_window_preprocessor_node,
+        lidar_perception_node,
         # cone_transformer_node, # FOR SOME REASON THIS LOADS THE FILE. NO IDEA
         # lidar_tf_broadcaster_node,
         # launch_pc_to_ls,
