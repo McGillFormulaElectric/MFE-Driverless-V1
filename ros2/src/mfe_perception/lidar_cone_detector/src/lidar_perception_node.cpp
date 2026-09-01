@@ -13,12 +13,9 @@
     #include <cuda_runtime.h>
     #include <vector>
     #include <map>
-    
-    // NVIDIA cuda-pcl Headers
-    // Ensure these files are in your include path (e.g., lib/cuda-pcl/...)
     #include "cudaFilter.h"
     #include "cudaSegmentation.h"
-    #include "cudaCluster.h" 
+    #include "cudaCluster.h"
 #else
     #define USE_GPU_PIPELINE 0
     #include <pcl/filters/voxel_grid.h>
@@ -171,22 +168,24 @@ private:
             }
 
             // --- 4. cuCluster (Object Detection) ---
-            if (object_count < (unsigned int)(min_cluster_size_ * 3)) {
-                cudaFree(d_objects);
-                checkCudaErrors(cudaStreamDestroy(stream));
-                return;
-            }
+            // cudaCluster requires at least 256 points — pad input with sentinel
+            // values (large Z) so extra threads don't form false clusters.
+            static const unsigned int CUDA_CLUSTER_MIN = 256;
+            unsigned int cluster_count = std::max(object_count, CUDA_CLUSTER_MIN);
 
-            // Pad to next multiple of 256 — cudaCluster launches fixed-size thread blocks
-            // and will read beyond the end of the buffer if count isn't block-aligned.
-            unsigned int padded_count = ((object_count + 255) / 256) * 256;
+            float* d_cluster_input = NULL;
+            checkCudaErrors(cudaMalloc(&d_cluster_input, cluster_count * sizeof(pcl::PointXYZ)));
+            // Fill padding with far-away sentinel so they won't join real clusters
+            cudaMemset(d_cluster_input, 0x7f, cluster_count * sizeof(pcl::PointXYZ));
+            cudaMemcpy(d_cluster_input, d_objects, object_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToDevice);
+            cudaFree(d_objects);
 
             unsigned int* d_cluster_indices = NULL;
-            checkCudaErrors(cudaMalloc(&d_cluster_indices, padded_count * sizeof(unsigned int)));
-            cudaMemset(d_cluster_indices, 0, padded_count * sizeof(unsigned int));
-            float* d_cluster_out_unused = NULL;
-            checkCudaErrors(cudaMalloc(&d_cluster_out_unused, padded_count * 4 * sizeof(float)));
-            cudaMemset(d_cluster_out_unused, 0, padded_count * 4 * sizeof(float));
+            checkCudaErrors(cudaMalloc(&d_cluster_indices, cluster_count * sizeof(unsigned int)));
+            cudaMemset(d_cluster_indices, 0, cluster_count * sizeof(unsigned int));
+            float* d_cluster_out = NULL;
+            checkCudaErrors(cudaMalloc(&d_cluster_out, cluster_count * 4 * sizeof(float)));
+            cudaMemset(d_cluster_out, 0, cluster_count * 4 * sizeof(float));
 
             cudaExtractCluster clusterer(stream);
             extractClusterParam_t ecp;
@@ -197,16 +196,16 @@ private:
             ecp.voxelZ = cluster_tolerance_;
             ecp.countThreshold = 1;
             clusterer.set(ecp);
-            clusterer.extract(d_objects, object_count, d_cluster_out_unused, d_cluster_indices);
+            clusterer.extract(d_cluster_input, cluster_count, d_cluster_out, d_cluster_indices);
 
-            // --- 5. Centroid Calculation ---
-            std::vector<unsigned int> h_cluster_labels(object_count);
-            cudaMemcpy(h_cluster_labels.data(), d_cluster_indices, object_count * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+            // --- 5. Centroid Calculation (only over real points, not padding) ---
+            std::vector<unsigned int> h_cluster_labels(cluster_count);
+            cudaMemcpy(h_cluster_labels.data(), d_cluster_indices, cluster_count * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 
             std::map<unsigned int, int> counts;
             std::map<unsigned int, std::vector<float>> sums;
 
-            for (unsigned int i = 0; i < object_count; i++) {
+            for (unsigned int i = 0; i < object_count; i++) {  // only real points
                 unsigned int id = h_cluster_labels[i];
                 if (id == 0 || id > 999999) continue;
                 if (counts.find(id) == counts.end()) {
@@ -228,9 +227,9 @@ private:
             }
 
             // Cleanup
-            cudaFree(d_objects);
+            cudaFree(d_cluster_input);
             cudaFree(d_cluster_indices);
-            cudaFree(d_cluster_out_unused);
+            cudaFree(d_cluster_out);
             checkCudaErrors(cudaStreamDestroy(stream));
 
         #else
