@@ -14,7 +14,6 @@
     #include <vector>
     #include "cudaFilter.h"
     #include "cudaSegmentation.h"
-    #include "cudaCluster.h"
     #include <pcl/search/kdtree.h>
     #include <pcl/segmentation/extract_clusters.h>
 #else
@@ -168,92 +167,35 @@ private:
                 debug_object_cloud->points.push_back(p);
             }
 
-            // --- 4. Clustering ---
-            // cudaExtractCluster crashes when the point cloud is small because its
-            // internal voxel grid spans the bounding box of all input points.
-            // Sentinel-padding with 0x7f7f7f7f (≈1.7e38) makes that box
-            // astronomically large → OOB kernel access → cudaErrorIllegalAddress.
-            // Fix: fall back to CPU PCL clustering for small clouds.
-            static const unsigned int CUDA_CLUSTER_MIN = 256;
+            // --- 4. Download GPU-filtered cloud and cluster on CPU ---
+            // GPU filters reduce millions of raw points to a small cloud (typically
+            // tens to low-hundreds of points on a FSAE track). CPU PCL clustering
+            // on that result is near-instant, reliable, and has no minimum-point
+            // constraints. cudaExtractCluster is not used.
+            cudaFree(d_objects);
+            checkCudaErrors(cudaStreamDestroy(stream));
 
-            if (object_count < CUDA_CLUSTER_MIN) {
-                // CPU fallback — h_objects was already downloaded above
-                cudaFree(d_objects);
-                checkCudaErrors(cudaStreamDestroy(stream));
+            pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+            for (unsigned int i = 0; i < object_count; i++) {
+                filtered_cloud->points.emplace_back(h_objects[i*4], h_objects[i*4+1], h_objects[i*4+2]);
+            }
 
-                pcl::PointCloud<pcl::PointXYZ>::Ptr cpu_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-                for (unsigned int i = 0; i < object_count; i++) {
-                    cpu_cloud->points.emplace_back(h_objects[i*4], h_objects[i*4+1], h_objects[i*4+2]);
+            if (!filtered_cloud->empty()) {
+                pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+                tree->setInputCloud(filtered_cloud);
+                std::vector<pcl::PointIndices> cluster_indices;
+                pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+                ec.setClusterTolerance(cluster_tolerance_);
+                ec.setMinClusterSize(min_cluster_size_);
+                ec.setMaxClusterSize(max_cluster_size_);
+                ec.setSearchMethod(tree);
+                ec.setInputCloud(filtered_cloud);
+                ec.extract(cluster_indices);
+                for (const auto& idxs : cluster_indices) {
+                    Eigen::Vector4f c;
+                    pcl::compute3DCentroid(*filtered_cloud, idxs, c);
+                    centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
                 }
-                if (!cpu_cloud->empty()) {
-                    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-                    tree->setInputCloud(cpu_cloud);
-                    std::vector<pcl::PointIndices> cluster_indices;
-                    pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-                    ec.setClusterTolerance(cluster_tolerance_);
-                    ec.setMinClusterSize(min_cluster_size_);
-                    ec.setMaxClusterSize(max_cluster_size_);
-                    ec.setSearchMethod(tree);
-                    ec.setInputCloud(cpu_cloud);
-                    ec.extract(cluster_indices);
-                    for (const auto& idxs : cluster_indices) {
-                        Eigen::Vector4f c;
-                        pcl::compute3DCentroid(*cpu_cloud, idxs, c);
-                        centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
-                    }
-                }
-            } else {
-                // GPU clustering via cudaExtractCluster.
-                // indexEC layout: [n_clusters, size_0, size_1, ...]
-                // outputEC layout: points grouped by cluster, float4 each.
-                float* d_cluster_out = NULL;
-                checkCudaErrors(cudaMalloc(&d_cluster_out, object_count * 4 * sizeof(float)));
-                cudaMemset(d_cluster_out, 0, object_count * 4 * sizeof(float));
-
-                unsigned int* d_cluster_index = NULL;
-                checkCudaErrors(cudaMalloc(&d_cluster_index, (object_count + 1) * sizeof(unsigned int)));
-                cudaMemset(d_cluster_index, 0, (object_count + 1) * sizeof(unsigned int));
-
-                cudaExtractCluster clusterer(stream);
-                extractClusterParam_t ecp;
-                ecp.minClusterSize = min_cluster_size_;
-                ecp.maxClusterSize = max_cluster_size_;
-                ecp.voxelX = cluster_tolerance_;
-                ecp.voxelY = cluster_tolerance_;
-                ecp.voxelZ = cluster_tolerance_;
-                ecp.countThreshold = 1;
-                clusterer.set(ecp);
-                clusterer.extract(d_objects, object_count, d_cluster_out, d_cluster_index);
-                cudaStreamSynchronize(stream);
-                cudaFree(d_objects);
-
-                std::vector<unsigned int> h_index(object_count + 1);
-                cudaMemcpy(h_index.data(), d_cluster_index,
-                           (object_count + 1) * sizeof(unsigned int), cudaMemcpyDeviceToHost);
-                unsigned int n_clusters = h_index[0];
-
-                if (n_clusters > 0 && n_clusters <= object_count) {
-                    std::vector<float> h_out(object_count * 4);
-                    cudaMemcpy(h_out.data(), d_cluster_out,
-                               object_count * 4 * sizeof(float), cudaMemcpyDeviceToHost);
-                    unsigned int outoff = 0;
-                    for (unsigned int c = 0; c < n_clusters; c++) {
-                        unsigned int sz = h_index[c + 1];
-                        if (sz == 0) break;
-                        float sx = 0.0f, sy = 0.0f, sz_val = 0.0f;
-                        for (unsigned int p = 0; p < sz; p++) {
-                            sx     += h_out[(outoff + p) * 4 + 0];
-                            sy     += h_out[(outoff + p) * 4 + 1];
-                            sz_val += h_out[(outoff + p) * 4 + 2];
-                        }
-                        centroids_cloud->points.emplace_back(sx / sz, sy / sz, sz_val / sz);
-                        outoff += sz;
-                    }
-                }
-
-                cudaFree(d_cluster_out);
-                cudaFree(d_cluster_index);
-                checkCudaErrors(cudaStreamDestroy(stream));
             }
 
         #else
