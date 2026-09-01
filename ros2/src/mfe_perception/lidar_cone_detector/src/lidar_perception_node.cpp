@@ -147,8 +147,8 @@ private:
             FilterParam_t ground_param;
             ground_param.type = PASSTHROUGH;
             ground_param.dim = 2;              // Z axis
-            ground_param.downFilterLimits = -1.10f; // just below cone base
-            ground_param.upFilterLimits   = -0.40f; // above cone top
+            ground_param.downFilterLimits = -2.0f; // tune once sensor height is known
+            ground_param.upFilterLimits   =  2.0f;
             ground_param.limitsNegative   = false;
             ground_filter.set(ground_param);
             ground_filter.filter(d_objects, &object_count, d_filtered, filtered_count);
@@ -171,6 +171,12 @@ private:
             }
 
             // --- 4. cuCluster (Object Detection) ---
+            if (object_count < (unsigned int)(min_cluster_size_ * 3)) {
+                cudaFree(d_objects);
+                checkCudaErrors(cudaStreamDestroy(stream));
+                return;
+            }
+
             unsigned int* d_cluster_indices = NULL;
             checkCudaErrors(cudaMalloc(&d_cluster_indices, object_count * sizeof(unsigned int)));
             float* d_cluster_out_unused = NULL;
