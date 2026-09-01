@@ -136,120 +136,89 @@ private:
                 return;
             }
 
-            // --- 3. cuSegmentation (Ground Removal) ---
-            cudaSegmentation segmenter(SACMODEL_PLANE, SAC_RANSAC, stream);
-            segParam_t seg_param;
-            seg_param.distanceThreshold = ground_threshold_;
-            seg_param.maxIterations = 50;
-            seg_param.probability = 0.99;
-            seg_param.optimizeCoefficients = true;
-            segmenter.set(seg_param);
+            // --- 3. Ground Removal via Z-axis passthrough (replaces broken cuSegmentation RANSAC)
+            // cuSegmentation::getSamples reads GPU device pointers from CPU — causes SIGSEGV.
+            // Z-passthrough is faster and equally effective on flat FS tracks.
+            float* d_objects = NULL;
+            checkCudaErrors(cudaMalloc(&d_objects, filtered_count * sizeof(pcl::PointXYZ)));
+            unsigned int object_count = 0;
 
-            int* d_seg_indices = NULL;
-            checkCudaErrors(cudaMalloc(&d_seg_indices, filtered_count * sizeof(int)));
-            float* d_model_coeffs = NULL;
-            checkCudaErrors(cudaMalloc(&d_model_coeffs, 4 * sizeof(float)));
+            cudaFilter ground_filter(stream);
+            FilterParam_t ground_param;
+            ground_param.type = PASSTHROUGH;
+            ground_param.dim = 2;              // Z axis
+            ground_param.downFilterLimits = -1.10f; // just below cone base
+            ground_param.upFilterLimits   = -0.40f; // above cone top
+            ground_param.limitsNegative   = false;
+            ground_filter.set(ground_param);
+            ground_filter.filter(d_objects, &object_count, d_filtered, filtered_count);
+            cudaStreamSynchronize(stream);
+            cudaFree(d_filtered);
 
-            segmenter.segment(d_filtered, filtered_count, d_seg_indices, d_model_coeffs);
-
-            // --- 4. Separate Ground vs Objects (Compaction) ---
-            // We download to CPU to remove ground points because it's simpler/robust 
-            // without custom kernels.
-            std::vector<float> h_filtered(filtered_count * 4);
-            std::vector<int> h_seg_indices(filtered_count);
-            
-            checkCudaErrors(cudaMemcpyAsync(h_filtered.data(), d_filtered, filtered_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToHost, stream));
-            checkCudaErrors(cudaMemcpyAsync(h_seg_indices.data(), d_seg_indices, filtered_count * sizeof(int), cudaMemcpyDeviceToHost, stream));
-            checkCudaErrors(cudaStreamSynchronize(stream));
-
-            // Re-pack only OBJECT points
-            std::vector<float> object_points;
-            object_points.reserve(filtered_count * 4);
-
-            for(size_t i=0; i<filtered_count; i++) {
-                // index[i] == 1 usually means Ground Inlier in cuPCL
-                if(h_seg_indices[i] != 1) { 
-                    object_points.push_back(h_filtered[i*4 + 0]);
-                    object_points.push_back(h_filtered[i*4 + 1]);
-                    object_points.push_back(h_filtered[i*4 + 2]);
-                    object_points.push_back(0.0f); // Maintain padding
-                    
-                    // Visualization
-                    pcl::PointXYZ p;
-                    p.x = h_filtered[i*4 + 0]; p.y = h_filtered[i*4 + 1]; p.z = h_filtered[i*4 + 2];
-                    debug_object_cloud->points.push_back(p);
-                }
-            }
-            int object_count = object_points.size() / 4;
-
-            // --- 5. cuCluster (Object Detection) ---
-            if (object_count > 0) {
-                // Re-upload clean objects
-                float* d_objects = NULL;
-                checkCudaErrors(cudaMalloc(&d_objects, object_points.size() * sizeof(float)));
-                checkCudaErrors(cudaMemcpyAsync(d_objects, object_points.data(), object_points.size() * sizeof(float), cudaMemcpyHostToDevice, stream));
-
-                // Prepare Output buffers
-                unsigned int* d_cluster_indices = NULL;
-                checkCudaErrors(cudaMalloc(&d_cluster_indices, object_count * sizeof(unsigned int)));
-                float* d_cluster_out_unused = NULL;
-                checkCudaErrors(cudaMalloc(&d_cluster_out_unused, object_count * 4 * sizeof(float)));
-
-                // Configure Clusterer
-                cudaExtractCluster clusterer(stream);
-                extractClusterParam_t ecp;
-                ecp.minClusterSize = min_cluster_size_;
-                ecp.maxClusterSize = max_cluster_size_;
-                ecp.voxelX = cluster_tolerance_; 
-                ecp.voxelY = cluster_tolerance_;
-                ecp.voxelZ = cluster_tolerance_;
-                ecp.countThreshold = 1; 
-                clusterer.set(ecp);
-
-                // Execute
-                clusterer.extract(d_objects, object_count, d_cluster_out_unused, d_cluster_indices);
-
-                // --- 6. Centroid Calculation ---
-                std::vector<unsigned int> h_cluster_labels(object_count);
-                checkCudaErrors(cudaMemcpyAsync(h_cluster_labels.data(), d_cluster_indices, object_count * sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
-                checkCudaErrors(cudaStreamSynchronize(stream));
-
-                // Compute Centroids (Linear Pass)
-                std::map<unsigned int, int> counts;
-                std::map<unsigned int, std::vector<float>> sums; 
-
-                for (int i = 0; i < object_count; i++) {
-                    unsigned int id = h_cluster_labels[i];
-                    if (id == 0 || id > 999999) continue; // Noise
-
-                    if (counts.find(id) == counts.end()) {
-                        sums[id] = {0.0f, 0.0f, 0.0f};
-                        counts[id] = 0;
-                    }
-                    sums[id][0] += object_points[i*4 + 0];
-                    sums[id][1] += object_points[i*4 + 1];
-                    sums[id][2] += object_points[i*4 + 2];
-                    counts[id]++;
-                }
-
-                // Average to find center
-                for (auto const& [id, count] : counts) {
-                    pcl::PointXYZ p;
-                    p.x = sums[id][0] / count;
-                    p.y = sums[id][1] / count;
-                    p.z = sums[id][2] / count;
-                    centroids_cloud->points.push_back(p);
-                }
-
+            if (object_count == 0) {
                 cudaFree(d_objects);
-                cudaFree(d_cluster_indices);
-                cudaFree(d_cluster_out_unused);
+                checkCudaErrors(cudaStreamDestroy(stream));
+                return;
+            }
+
+            // Download for visualisation
+            std::vector<float> h_objects(object_count * 4);
+            cudaMemcpy(h_objects.data(), d_objects, object_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToHost);
+            for (unsigned int i = 0; i < object_count; i++) {
+                pcl::PointXYZ p;
+                p.x = h_objects[i*4]; p.y = h_objects[i*4+1]; p.z = h_objects[i*4+2];
+                debug_object_cloud->points.push_back(p);
+            }
+
+            // --- 4. cuCluster (Object Detection) ---
+            unsigned int* d_cluster_indices = NULL;
+            checkCudaErrors(cudaMalloc(&d_cluster_indices, object_count * sizeof(unsigned int)));
+            float* d_cluster_out_unused = NULL;
+            checkCudaErrors(cudaMalloc(&d_cluster_out_unused, object_count * 4 * sizeof(float)));
+
+            cudaExtractCluster clusterer(stream);
+            extractClusterParam_t ecp;
+            ecp.minClusterSize = min_cluster_size_;
+            ecp.maxClusterSize = max_cluster_size_;
+            ecp.voxelX = cluster_tolerance_;
+            ecp.voxelY = cluster_tolerance_;
+            ecp.voxelZ = cluster_tolerance_;
+            ecp.countThreshold = 1;
+            clusterer.set(ecp);
+            clusterer.extract(d_objects, object_count, d_cluster_out_unused, d_cluster_indices);
+
+            // --- 5. Centroid Calculation ---
+            std::vector<unsigned int> h_cluster_labels(object_count);
+            cudaMemcpy(h_cluster_labels.data(), d_cluster_indices, object_count * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+
+            std::map<unsigned int, int> counts;
+            std::map<unsigned int, std::vector<float>> sums;
+
+            for (unsigned int i = 0; i < object_count; i++) {
+                unsigned int id = h_cluster_labels[i];
+                if (id == 0 || id > 999999) continue;
+                if (counts.find(id) == counts.end()) {
+                    sums[id] = {0.0f, 0.0f, 0.0f};
+                    counts[id] = 0;
+                }
+                sums[id][0] += h_objects[i*4 + 0];
+                sums[id][1] += h_objects[i*4 + 1];
+                sums[id][2] += h_objects[i*4 + 2];
+                counts[id]++;
+            }
+
+            for (auto const& [id, count] : counts) {
+                pcl::PointXYZ p;
+                p.x = sums[id][0] / count;
+                p.y = sums[id][1] / count;
+                p.z = sums[id][2] / count;
+                centroids_cloud->points.push_back(p);
             }
 
             // Cleanup
-            cudaFree(d_filtered);
-            cudaFree(d_seg_indices);
-            cudaFree(d_model_coeffs);
+            cudaFree(d_objects);
+            cudaFree(d_cluster_indices);
+            cudaFree(d_cluster_out_unused);
             checkCudaErrors(cudaStreamDestroy(stream));
 
         #else
