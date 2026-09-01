@@ -177,10 +177,16 @@ private:
                 return;
             }
 
+            // Pad to next multiple of 256 — cudaCluster launches fixed-size thread blocks
+            // and will read beyond the end of the buffer if count isn't block-aligned.
+            unsigned int padded_count = ((object_count + 255) / 256) * 256;
+
             unsigned int* d_cluster_indices = NULL;
-            checkCudaErrors(cudaMalloc(&d_cluster_indices, object_count * sizeof(unsigned int)));
+            checkCudaErrors(cudaMalloc(&d_cluster_indices, padded_count * sizeof(unsigned int)));
+            cudaMemset(d_cluster_indices, 0, padded_count * sizeof(unsigned int));
             float* d_cluster_out_unused = NULL;
-            checkCudaErrors(cudaMalloc(&d_cluster_out_unused, object_count * 4 * sizeof(float)));
+            checkCudaErrors(cudaMalloc(&d_cluster_out_unused, padded_count * 4 * sizeof(float)));
+            cudaMemset(d_cluster_out_unused, 0, padded_count * 4 * sizeof(float));
 
             cudaExtractCluster clusterer(stream);
             extractClusterParam_t ecp;
