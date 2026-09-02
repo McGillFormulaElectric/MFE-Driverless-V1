@@ -45,7 +45,7 @@ def generate_launch_description():
     # Convert raw Velodyne packets → PointCloud2 (unorganized, no NaN)
     velodyne_convert_node = Node(
         package='velodyne_pointcloud',
-        executable='velodyne_convert_node',
+        executable='velodyne_transform_node',
         name='velodyne_convert',
         output='screen',
         parameters=[{
