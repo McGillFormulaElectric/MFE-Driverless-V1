@@ -235,7 +235,8 @@ private:
                         mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                     }
                     // Reject clusters too large to be cones (walls, barriers, car body)
-                    if ((mx_x - mn_x) > 0.5f || (mx_y - mn_y) > 0.5f || (mx_z - mn_z) > 0.5f)
+                    // FSAE cone: 0.28m base diameter, 0.325m tall
+                    if ((mx_x - mn_x) > 0.35f || (mx_y - mn_y) > 0.35f || (mx_z - mn_z) > 0.4f)
                         continue;
 
                     Eigen::Vector4f c;
