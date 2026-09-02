@@ -63,9 +63,11 @@ public:
 
 private:
     void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // Convert Input to PCL
+        // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::fromROSMsg(*msg, *host_cloud);
+        std::vector<int> nan_indices;
+        pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
 
         if (host_cloud->empty()) return;
 
