@@ -14,8 +14,9 @@
     #include <cuda_runtime.h>
     #include <vector>
     #include "cudaFilter.h"
-    #include "cudaSegmentation.h"
     #include <pcl/search/kdtree.h>
+    #include <pcl/segmentation/sac_segmentation.h>
+    #include <pcl/filters/extract_indices.h>
     #include <pcl/segmentation/extract_clusters.h>
 #else
     #define USE_GPU_PIPELINE 0
@@ -142,58 +143,61 @@ private:
                 return;
             }
 
-            // --- 3. cudaSegmentation: GPU RANSAC ground removal ---
-            // d_filtered is managed memory so getSamples() can read it from CPU without SIGSEGV.
-            // index[i] == 1 → inlier (ground plane); index[i] == 0 → outlier (object).
-            int* d_seg_index = NULL;
-            checkCudaErrors(cudaMallocManaged(&d_seg_index, filtered_count * sizeof(int)));
-            cudaMemset(d_seg_index, 0, filtered_count * sizeof(int));
-            float* d_seg_coeffs = NULL;
-            checkCudaErrors(cudaMallocManaged(&d_seg_coeffs, 4 * sizeof(float)));
-            cudaMemset(d_seg_coeffs, 0, 4 * sizeof(float));
-
-            cudaSegmentation segmenter(SACMODEL_PLANE, SAC_RANSAC, stream);
-            segParam_t seg_param;
-            seg_param.distanceThreshold    = ground_threshold_;
-            seg_param.maxIterations        = 50;
-            seg_param.probability          = 0.99;
-            seg_param.optimizeCoefficients = true;
-            segmenter.set(seg_param);
-            segmenter.segment(d_filtered, static_cast<int>(filtered_count),
-                              d_seg_index, d_seg_coeffs);
-            cudaStreamSynchronize(stream);
-
-            // d_filtered and d_seg_index are managed — read directly from CPU.
-            // Collect non-ground points into h_objects.
-            std::vector<float> h_objects;
-            h_objects.reserve(filtered_count * 4);
-            for (unsigned int i = 0; i < filtered_count; i++) {
-                if (d_seg_index[i] == 0) {  // outlier = not ground
-                    h_objects.push_back(d_filtered[i*4 + 0]);
-                    h_objects.push_back(d_filtered[i*4 + 1]);
-                    h_objects.push_back(d_filtered[i*4 + 2]);
-                    h_objects.push_back(d_filtered[i*4 + 3]);
-                }
-            }
-            unsigned int object_count = static_cast<unsigned int>(h_objects.size() / 4);
-
-            RCLCPP_INFO(this->get_logger(), "seg: ground=%u  objects=%u",
-                        filtered_count - object_count, object_count);
-
+            // --- 3. Download voxelgrid cloud and run CPU RANSAC ground removal ---
+            // cudaSegmentation only supports SACMODEL_PLANE (any plane), which
+            // incorrectly fits a tilted plane through all points on a flat track.
+            // CPU RANSAC with SACMODEL_PERPENDICULAR_PLANE constrains to horizontal
+            // ground and correctly separates cones from the ground plane.
+            // On ~5k points this takes <5ms — not a bottleneck.
+            std::vector<float> h_filtered(filtered_count * 4);
+            cudaMemcpy(h_filtered.data(), d_filtered,
+                       filtered_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToHost);
             cudaFree(d_filtered);
-            cudaFree(d_seg_index);
-            cudaFree(d_seg_coeffs);
+            checkCudaErrors(cudaStreamDestroy(stream));
 
-            if (object_count == 0) {
-                checkCudaErrors(cudaStreamDestroy(stream));
-                return;
+            pcl::PointCloud<pcl::PointXYZ>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+            voxel_cloud->reserve(filtered_count);
+            for (unsigned int i = 0; i < filtered_count; i++) {
+                voxel_cloud->points.emplace_back(h_filtered[i*4], h_filtered[i*4+1], h_filtered[i*4+2]);
             }
 
-            // Build debug visualisation cloud from non-ground points
-            for (unsigned int i = 0; i < object_count; i++) {
-                pcl::PointXYZ p;
-                p.x = h_objects[i*4]; p.y = h_objects[i*4+1]; p.z = h_objects[i*4+2];
-                debug_object_cloud->points.push_back(p);
+            pcl::SACSegmentation<pcl::PointXYZ> seg;
+            seg.setOptimizeCoefficients(true);
+            seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
+            seg.setAxis(Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+            seg.setEpsAngle(10.0f * static_cast<float>(M_PI) / 180.0f);
+            seg.setMethodType(pcl::SAC_RANSAC);
+            seg.setDistanceThreshold(ground_threshold_);
+            seg.setMaxIterations(50);
+            seg.setInputCloud(voxel_cloud);
+
+            pcl::PointIndices::Ptr ground_inliers(new pcl::PointIndices);
+            pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+            seg.segment(*ground_inliers, *coefficients);
+
+            pcl::PointCloud<pcl::PointXYZ>::Ptr object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+            pcl::ExtractIndices<pcl::PointXYZ> extract;
+            extract.setInputCloud(voxel_cloud);
+            extract.setIndices(ground_inliers);
+            extract.setNegative(true);
+            extract.filter(*object_cloud);
+
+            unsigned int object_count = object_cloud->size();
+            RCLCPP_INFO(this->get_logger(), "seg: ground=%zu  objects=%u",
+                        ground_inliers->indices.size(), object_count);
+
+            if (object_count == 0) return;
+
+            *debug_object_cloud = *object_cloud;
+
+            // Build h_objects for downstream clustering
+            std::vector<float> h_objects;
+            h_objects.reserve(object_count * 4);
+            for (const auto& p : object_cloud->points) {
+                h_objects.push_back(p.x);
+                h_objects.push_back(p.y);
+                h_objects.push_back(p.z);
+                h_objects.push_back(0.0f);
             }
 
             // --- 4. Cluster on CPU ---
