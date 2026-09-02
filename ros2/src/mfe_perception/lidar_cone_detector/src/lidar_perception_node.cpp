@@ -106,6 +106,8 @@ private:
             cudaStreamSynchronize(stream);
             cudaFree(d_input);
 
+            RCLCPP_INFO(this->get_logger(), "raw=%d  roi=%u", point_count, roi_count);
+
             if (roi_count < 50) {
                 cudaFree(d_roi);
                 checkCudaErrors(cudaStreamDestroy(stream));
@@ -130,6 +132,8 @@ private:
             filter.filter(d_filtered, &filtered_count, d_roi, roi_count);
             cudaStreamSynchronize(stream);
             cudaFree(d_roi);
+
+            RCLCPP_INFO(this->get_logger(), "voxel=%u", filtered_count);
 
             if (filtered_count < 50) {
                 cudaFree(d_filtered);
@@ -171,6 +175,9 @@ private:
                 }
             }
             unsigned int object_count = static_cast<unsigned int>(h_objects.size() / 4);
+
+            RCLCPP_INFO(this->get_logger(), "seg: ground=%u  objects=%u",
+                        filtered_count - object_count, object_count);
 
             cudaFree(d_filtered);
             cudaFree(d_seg_index);
