@@ -52,10 +52,10 @@ def generate_launch_description():
         parameters=[
             {'lidar_frame_id': 'velodyne'},
             {'ground_threshold': 0.1},
-            {'leaf_size': 0.05},
-            {'cluster_tolerance': 0.4},
-            {'min_cluster_size': 3},
-            {'max_cluster_size': 150},
+            {'leaf_size': 0.1},
+            {'cluster_tolerance': 0.2},
+            {'min_cluster_size': 5},
+            {'max_cluster_size': 50},
         ],
         remappings=[
             ('/lidar/points_raw', '/velodyne_points'),

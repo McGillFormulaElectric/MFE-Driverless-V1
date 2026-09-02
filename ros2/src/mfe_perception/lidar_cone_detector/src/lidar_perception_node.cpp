@@ -100,8 +100,8 @@ private:
             FilterParam_t roi_param_x;
             roi_param_x.type = PASSTHROUGH;
             roi_param_x.dim = 0;
-            roi_param_x.downFilterLimits = -20.0f;
-            roi_param_x.upFilterLimits = 20.0f;
+            roi_param_x.downFilterLimits = -1.0f;   // 1m behind (side cones)
+            roi_param_x.upFilterLimits = 15.0f;    // 15m ahead — beyond this VLP-16 has <2 hits/cone
             roi_param_x.limitsNegative = false;
             roi_filter_x.set(roi_param_x);
             roi_filter_x.filter(d_roi, &roi_count, d_input, point_count);
