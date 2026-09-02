@@ -186,12 +186,7 @@ private:
                 debug_object_cloud->points.push_back(p);
             }
 
-            // --- 4. Download GPU-filtered cloud and cluster on CPU ---
-            // GPU filters reduce millions of raw points to a small cloud (typically
-            // tens to low-hundreds of points on a FSAE track). CPU PCL clustering
-            // on that result is near-instant, reliable, and has no minimum-point
-            // constraints. cudaExtractCluster is not used.
-            cudaFree(d_objects);
+            // --- 4. Cluster on CPU ---
             checkCudaErrors(cudaStreamDestroy(stream));
 
             pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
