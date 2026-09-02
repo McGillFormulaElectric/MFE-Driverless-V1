@@ -4,6 +4,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/common/centroid.h>
+#include <pcl/filters/filter.h>
 
 // =================================================================================
 // 1. CONDITIONAL HEADERS (The Switch)
