@@ -180,7 +180,7 @@ private:
             seg.setEpsAngle(10.0f * static_cast<float>(M_PI) / 180.0f);
             seg.setMethodType(pcl::SAC_RANSAC);
             seg.setDistanceThreshold(ground_threshold_);
-            seg.setMaxIterations(50);
+            seg.setMaxIterations(100);
             seg.setInputCloud(voxel_cloud);
 
             pcl::PointIndices::Ptr ground_inliers(new pcl::PointIndices);
@@ -208,7 +208,7 @@ private:
                 for (const auto& p : object_cloud->points) {
                     if (std::abs(p.y) > 6.0f) continue;           // Y range: ±6 m
                     float h = std::abs((a*p.x + b*p.y + c_n*p.z + d) / norm);
-                    if (h < 0.01f || h > 0.6f) continue;          // cone height band (0–60 cm above ground)
+                    if (h < 0.005f || h > 0.7f) continue;         // cone height band (0–70 cm above ground)
                     cone_cloud->points.push_back(p);
                 }
                 object_cloud = cone_cloud;
