@@ -201,8 +201,6 @@ private:
             }
 
             // --- 4. Cluster on CPU ---
-            checkCudaErrors(cudaStreamDestroy(stream));
-
             pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
             for (unsigned int i = 0; i < object_count; i++) {
                 filtered_cloud->points.emplace_back(h_objects[i*4], h_objects[i*4+1], h_objects[i*4+2]);
