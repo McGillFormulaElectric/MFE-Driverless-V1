@@ -111,8 +111,10 @@ private:
             }
 
             // --- 2. cuFilter (VoxelGrid) ---
+            // Managed memory: cudaSegmentation::getSamples() reads cloud_in from CPU.
+            // cudaMallocManaged lets both GPU kernels and CPU access the same buffer.
             float* d_filtered = NULL;
-            checkCudaErrors(cudaMalloc(&d_filtered, roi_count * sizeof(pcl::PointXYZ)));
+            checkCudaErrors(cudaMallocManaged(&d_filtered, roi_count * sizeof(pcl::PointXYZ)));
             unsigned int filtered_count = 0;
 
             cudaFilter filter(stream);
@@ -133,34 +135,51 @@ private:
                 return;
             }
 
-            // --- 3. Ground Removal via Z-axis passthrough (replaces broken cuSegmentation RANSAC)
-            // cuSegmentation::getSamples reads GPU device pointers from CPU — causes SIGSEGV.
-            // Z-passthrough is faster and equally effective on flat FS tracks.
-            float* d_objects = NULL;
-            checkCudaErrors(cudaMalloc(&d_objects, filtered_count * sizeof(pcl::PointXYZ)));
-            unsigned int object_count = 0;
+            // --- 3. cudaSegmentation: GPU RANSAC ground removal ---
+            // d_filtered is managed memory so getSamples() can read it from CPU without SIGSEGV.
+            // index[i] == 1 → inlier (ground plane); index[i] == 0 → outlier (object).
+            int* d_seg_index = NULL;
+            checkCudaErrors(cudaMallocManaged(&d_seg_index, filtered_count * sizeof(int)));
+            cudaMemset(d_seg_index, 0, filtered_count * sizeof(int));
+            float* d_seg_coeffs = NULL;
+            checkCudaErrors(cudaMallocManaged(&d_seg_coeffs, 4 * sizeof(float)));
+            cudaMemset(d_seg_coeffs, 0, 4 * sizeof(float));
 
-            cudaFilter ground_filter(stream);
-            FilterParam_t ground_param;
-            ground_param.type = PASSTHROUGH;
-            ground_param.dim = 2;              // Z axis
-            ground_param.downFilterLimits = -2.0f; // tune once sensor height is known
-            ground_param.upFilterLimits   =  2.0f;
-            ground_param.limitsNegative   = false;
-            ground_filter.set(ground_param);
-            ground_filter.filter(d_objects, &object_count, d_filtered, filtered_count);
+            cudaSegmentation segmenter(SACMODEL_PLANE, SAC_RANSAC, stream);
+            segParam_t seg_param;
+            seg_param.distanceThreshold    = ground_threshold_;
+            seg_param.maxIterations        = 50;
+            seg_param.probability          = 0.99;
+            seg_param.optimizeCoefficients = true;
+            segmenter.set(seg_param);
+            segmenter.segment(d_filtered, static_cast<int>(filtered_count),
+                              d_seg_index, d_seg_coeffs);
             cudaStreamSynchronize(stream);
+
+            // d_filtered and d_seg_index are managed — read directly from CPU.
+            // Collect non-ground points into h_objects.
+            std::vector<float> h_objects;
+            h_objects.reserve(filtered_count * 4);
+            for (unsigned int i = 0; i < filtered_count; i++) {
+                if (d_seg_index[i] == 0) {  // outlier = not ground
+                    h_objects.push_back(d_filtered[i*4 + 0]);
+                    h_objects.push_back(d_filtered[i*4 + 1]);
+                    h_objects.push_back(d_filtered[i*4 + 2]);
+                    h_objects.push_back(d_filtered[i*4 + 3]);
+                }
+            }
+            unsigned int object_count = static_cast<unsigned int>(h_objects.size() / 4);
+
             cudaFree(d_filtered);
+            cudaFree(d_seg_index);
+            cudaFree(d_seg_coeffs);
 
             if (object_count == 0) {
-                cudaFree(d_objects);
                 checkCudaErrors(cudaStreamDestroy(stream));
                 return;
             }
 
-            // Download for visualisation
-            std::vector<float> h_objects(object_count * 4);
-            cudaMemcpy(h_objects.data(), d_objects, object_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToHost);
+            // Build debug visualisation cloud from non-ground points
             for (unsigned int i = 0; i < object_count; i++) {
                 pcl::PointXYZ p;
                 p.x = h_objects[i*4]; p.y = h_objects[i*4+1]; p.z = h_objects[i*4+2];
