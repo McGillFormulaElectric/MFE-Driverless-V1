@@ -56,6 +56,7 @@ def generate_launch_description():
             {'cluster_tolerance': 0.2},
             {'min_cluster_size': 5},
             {'max_cluster_size': 50},
+            {'min_intensity': 0.0},   # set to ~100.0 on real VLP-16 (retroreflective tape); keep 0 in sim
         ],
         remappings=[
             ('/lidar/points_raw', '/velodyne_points'),

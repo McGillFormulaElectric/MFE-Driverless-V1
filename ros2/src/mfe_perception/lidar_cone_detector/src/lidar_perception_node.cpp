@@ -7,6 +7,7 @@
 #include <pcl/common/centroid.h>
 #include <pcl/filters/filter.h>
 #include <cfloat>
+#include <pcl/kdtree/kdtree_flann.h>
 
 // =================================================================================
 // 1. CONDITIONAL HEADERS (The Switch)
@@ -40,6 +41,7 @@ public:
         this->declare_parameter("min_cluster_size", 3);
         this->declare_parameter("max_cluster_size", 150);
         this->declare_parameter("lidar_frame_id", "velodyne");
+        this->declare_parameter("min_intensity", 0.0);  // 0 = disabled; try 100.0 for real VLP-16
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -47,6 +49,7 @@ public:
         min_cluster_size_ = this->get_parameter("min_cluster_size").as_int();
         max_cluster_size_ = this->get_parameter("max_cluster_size").as_int();
         lidar_frame_id_ = this->get_parameter("lidar_frame_id").as_string();
+        min_intensity_  = this->get_parameter("min_intensity").as_double();
 
         // --- Communication ---
         sub_raw_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -78,6 +81,14 @@ private:
         pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
 
         if (host_cloud->empty()) return;
+
+        // Load PointXYZI in parallel — used for intensity filtering after geometric pipeline
+        pcl::PointCloud<pcl::PointXYZI>::Ptr host_cloud_i(new pcl::PointCloud<pcl::PointXYZI>);
+        if (min_intensity_ > 0.0) {
+            pcl::fromROSMsg(*msg, *host_cloud_i);
+            std::vector<int> nan_i;
+            pcl::removeNaNFromPointCloud(*host_cloud_i, *host_cloud_i, nan_i);
+        }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr debug_object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -212,6 +223,22 @@ private:
                     cone_cloud->points.push_back(p);
                 }
                 object_cloud = cone_cloud;
+            }
+
+            // Intensity filter — keep only high-reflectivity points (retroreflective cone tape)
+            // Disabled when min_intensity == 0 (sim has no meaningful intensity values)
+            if (min_intensity_ > 0.0 && !host_cloud_i->empty()) {
+                pcl::KdTreeFLANN<pcl::PointXYZI> kdtree_i;
+                kdtree_i.setInputCloud(host_cloud_i);
+                pcl::PointCloud<pcl::PointXYZ>::Ptr hi_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+                for (const auto& p : object_cloud->points) {
+                    pcl::PointXYZI sp; sp.x = p.x; sp.y = p.y; sp.z = p.z; sp.intensity = 0;
+                    std::vector<int> idx(1); std::vector<float> dist(1);
+                    if (kdtree_i.nearestKSearch(sp, 1, idx, dist) > 0 &&
+                        host_cloud_i->points[idx[0]].intensity >= static_cast<float>(min_intensity_))
+                        hi_cloud->points.push_back(p);
+                }
+                object_cloud = hi_cloud;
             }
 
             unsigned int object_count = object_cloud->size();
@@ -373,7 +400,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
-    double leaf_size_, ground_threshold_, cluster_tolerance_;
+    double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
     int min_cluster_size_, max_cluster_size_;
     std::string lidar_frame_id_;
 };
