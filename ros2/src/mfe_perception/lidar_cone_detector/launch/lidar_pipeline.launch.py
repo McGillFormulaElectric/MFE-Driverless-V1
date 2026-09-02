@@ -42,24 +42,6 @@ def generate_launch_description():
         condition=IfCondition(sliding_window_value)
     )
 
-    # Convert raw Velodyne packets → PointCloud2 (unorganized, no NaN)
-    velodyne_convert_node = Node(
-        package='velodyne_pointcloud',
-        executable='velodyne_transform_node',
-        name='velodyne_convert',
-        output='screen',
-        parameters=[{
-            'calibration': '/opt/ros/humble/share/velodyne_pointcloud/params/VLP16db.yaml',
-            'organize_cloud': False,  # unorganized = no NaN padding
-            'min_range': 0.4,
-            'max_range': 130.0,
-        }],
-        remappings=[
-            ('velodyne_packets', '/velodyne_packets'),
-            ('velodyne_points',  '/velodyne_points'),
-        ],
-    )
-
     # Unified GPU perception pipeline: filter + ground removal + clustering + centroids
     lidar_perception_node = Node(
         package='lidar_cone_detector',
@@ -127,7 +109,6 @@ def generate_launch_description():
         sliding_window_arg,
         file_loader_node,
         sliding_window_preprocessor_node,
-        velodyne_convert_node,
         lidar_perception_node,
         # cone_transformer_node, # FOR SOME REASON THIS LOADS THE FILE. NO IDEA
         # lidar_tf_broadcaster_node,
