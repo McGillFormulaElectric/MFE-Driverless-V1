@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -55,6 +56,10 @@ public:
         pub_centroids_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/perception/cones_uncolored", 10);
 
+        // Output: Bounding box markers for Foxglove visualisation
+        pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/perception/cones_markers", 10);
+
         // Debug: Visualizing what the GPU actually processed
         pub_debug_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/debug/gpu_objects", 10);
@@ -75,6 +80,12 @@ private:
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr debug_object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        visualization_msgs::msg::MarkerArray marker_array;
+        // Clear previous markers
+        visualization_msgs::msg::Marker delete_all;
+        delete_all.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_array.markers.push_back(delete_all);
+        int marker_id = 0;
 
         #if USE_GPU_PIPELINE
             // =========================================================
@@ -242,6 +253,24 @@ private:
                     Eigen::Vector4f c;
                     pcl::compute3DCentroid(*object_cloud, idxs, c);
                     centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
+
+                    // Bounding box marker
+                    visualization_msgs::msg::Marker m;
+                    m.header = msg->header;
+                    m.header.frame_id = lidar_frame_id_;
+                    m.ns = "cones"; m.id = marker_id++;
+                    m.type = visualization_msgs::msg::Marker::CUBE;
+                    m.action = visualization_msgs::msg::Marker::ADD;
+                    m.pose.position.x = c[0];
+                    m.pose.position.y = c[1];
+                    m.pose.position.z = (mn_z + mx_z) * 0.5f;
+                    m.pose.orientation.w = 1.0;
+                    m.scale.x = std::max(mx_x - mn_x, 0.05f);
+                    m.scale.y = std::max(mx_y - mn_y, 0.05f);
+                    m.scale.z = std::max(mx_z - mn_z, 0.05f);
+                    m.color.r = 1.0f; m.color.g = 0.5f; m.color.b = 0.0f; m.color.a = 0.5f;
+                    m.lifetime = rclcpp::Duration::from_seconds(0.3);
+                    marker_array.markers.push_back(m);
                 }
             }
 
@@ -324,6 +353,7 @@ private:
         // Publish
         publish_cloud(pub_centroids_, centroids_cloud, msg->header);
         if(!debug_object_cloud->empty()) publish_cloud(pub_debug_, debug_object_cloud, msg->header);
+        if (pub_markers_->get_subscription_count() > 0) pub_markers_->publish(marker_array);
     }
 
     void publish_cloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
@@ -340,6 +370,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_raw_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_centroids_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
     double leaf_size_, ground_threshold_, cluster_tolerance_;
     int min_cluster_size_, max_cluster_size_;
