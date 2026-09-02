@@ -182,44 +182,64 @@ private:
             extract.setNegative(true);
             extract.filter(*object_cloud);
 
+            // --- 3b. Cone isolation filters ---
+            // Use the fitted ground plane to keep only points at cone height (2–45 cm above ground).
+            // Also apply Y-range filter — track is narrow, no need to look far sideways.
+            if (coefficients->values.size() >= 4) {
+                float a = coefficients->values[0];
+                float b = coefficients->values[1];
+                float c_n = coefficients->values[2];
+                float d = coefficients->values[3];
+                float norm = std::sqrt(a*a + b*b + c_n*c_n);
+
+                pcl::PointCloud<pcl::PointXYZ>::Ptr cone_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+                for (const auto& p : object_cloud->points) {
+                    if (std::abs(p.y) > 6.0f) continue;           // Y range: ±6 m
+                    float h = std::abs((a*p.x + b*p.y + c_n*p.z + d) / norm);
+                    if (h < 0.02f || h > 0.45f) continue;         // cone height band
+                    cone_cloud->points.push_back(p);
+                }
+                object_cloud = cone_cloud;
+            }
+
             unsigned int object_count = object_cloud->size();
-            RCLCPP_INFO(this->get_logger(), "seg: ground=%zu  objects=%u",
+            RCLCPP_INFO(this->get_logger(), "seg: ground=%zu  cone_band=%u",
                         ground_inliers->indices.size(), object_count);
 
             if (object_count == 0) return;
 
             *debug_object_cloud = *object_cloud;
 
-            // Build h_objects for downstream clustering
-            std::vector<float> h_objects;
-            h_objects.reserve(object_count * 4);
-            for (const auto& p : object_cloud->points) {
-                h_objects.push_back(p.x);
-                h_objects.push_back(p.y);
-                h_objects.push_back(p.z);
-                h_objects.push_back(0.0f);
-            }
-
-            // --- 4. Cluster on CPU ---
-            pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-            for (unsigned int i = 0; i < object_count; i++) {
-                filtered_cloud->points.emplace_back(h_objects[i*4], h_objects[i*4+1], h_objects[i*4+2]);
-            }
-
-            if (!filtered_cloud->empty()) {
+            // --- 4. Cluster on CPU + bounding-box cone validation ---
+            if (!object_cloud->empty()) {
                 pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-                tree->setInputCloud(filtered_cloud);
+                tree->setInputCloud(object_cloud);
                 std::vector<pcl::PointIndices> cluster_indices;
                 pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
                 ec.setClusterTolerance(cluster_tolerance_);
                 ec.setMinClusterSize(min_cluster_size_);
                 ec.setMaxClusterSize(max_cluster_size_);
                 ec.setSearchMethod(tree);
-                ec.setInputCloud(filtered_cloud);
+                ec.setInputCloud(object_cloud);
                 ec.extract(cluster_indices);
+
                 for (const auto& idxs : cluster_indices) {
+                    // Bounding box check: FSAE cones are ≤0.28 m wide, ≤0.325 m tall
+                    float mn_x = FLT_MAX, mx_x = -FLT_MAX;
+                    float mn_y = FLT_MAX, mx_y = -FLT_MAX;
+                    float mn_z = FLT_MAX, mx_z = -FLT_MAX;
+                    for (int idx : idxs.indices) {
+                        const auto& p = object_cloud->points[idx];
+                        mn_x = std::min(mn_x, p.x); mx_x = std::max(mx_x, p.x);
+                        mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
+                        mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
+                    }
+                    // Reject clusters too large to be cones (walls, barriers, car body)
+                    if ((mx_x - mn_x) > 0.5f || (mx_y - mn_y) > 0.5f || (mx_z - mn_z) > 0.5f)
+                        continue;
+
                     Eigen::Vector4f c;
-                    pcl::compute3DCentroid(*filtered_cloud, idxs, c);
+                    pcl::compute3DCentroid(*object_cloud, idxs, c);
                     centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
                 }
             }
