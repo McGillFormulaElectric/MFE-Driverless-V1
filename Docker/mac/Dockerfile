@@ -8,7 +8,7 @@ ENV LC_ALL=en_US.UTF-8
 # Base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl gnupg lsb-release ca-certificates software-properties-common \
-    build-essential git python3-pip clang \
+    build-essential git python3-pip clang tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # ROS2 Humble apt repo with fresh key
