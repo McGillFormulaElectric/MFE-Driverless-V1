@@ -412,9 +412,37 @@ class PathPlannerNode(Node):
             f'dir=({self._car_dir[0]:.2f},{self._car_dir[1]:.2f})',
             throttle_duration_sec=2.0)
 
+        if n_left + n_right == 0 and n_unknown > 0:
+            # No colored cones (LiDAR-only mode) — assign UNKNOWN cones geometrically.
+            # Cross product of car heading with cone direction: positive = left, negative = right.
+            for (rx, ry), cone_type in self._cone_map.items():
+                if cone_type != ConeTypes.UNKNOWN:
+                    continue
+                dx = rx - self._car_pos[0]
+                dy = ry - self._car_pos[1]
+                fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
+                if fwd < -CONE_BEHIND_M:
+                    continue
+                cross_z = self._car_dir[0] * dy - self._car_dir[1] * dx
+                if cross_z > 0:
+                    buckets[ConeTypes.LEFT].append([rx, ry])
+                else:
+                    buckets[ConeTypes.RIGHT].append([rx, ry])
+            buckets[ConeTypes.UNKNOWN] = []
+            cones_by_type = [
+                np.array(b, dtype=np.float64).reshape(-1, 2) if b
+                else np.zeros((0, 2), dtype=np.float64)
+                for b in buckets
+            ]
+            n_left  = len(buckets[ConeTypes.LEFT])
+            n_right = len(buckets[ConeTypes.RIGHT])
+            self.get_logger().info(
+                f'LiDAR-only: geometry L/R assignment → left={n_left} right={n_right}',
+                throttle_duration_sec=2.0)
+
         if n_left + n_right == 0:
             self.get_logger().warn(
-                f'No colored cones visible — skipping planner.',
+                'No colored or assignable cones — skipping planner.',
                 throttle_duration_sec=5.0)
             return
 
