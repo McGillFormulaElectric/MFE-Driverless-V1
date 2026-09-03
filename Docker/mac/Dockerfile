@@ -47,9 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-rosdep \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps
+# Python deps (no ultralytics — pulls 2 GB of PyTorch/CUDA, not needed for sim)
 RUN pip3 install --upgrade pip && \
-    pip3 install "numpy<2" ros2-numpy scikit-learn ultralytics icecream
+    pip3 install --ignore-installed "numpy<2" ros2-numpy scikit-learn icecream scipy
 
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 
