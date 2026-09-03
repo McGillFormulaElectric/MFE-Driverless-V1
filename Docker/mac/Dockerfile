@@ -18,11 +18,11 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
       http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
       > /etc/apt/sources.list.d/ros2.list
 
-# ROS2 + Gazebo + all stack deps
+# ROS2 + all stack deps
+# Note: ros-humble-gazebo-* has no ARM64 apt package — Gazebo must be
+# built from source separately using scripts/build_gazebo_from_source.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-desktop \
-    ros-humble-gazebo-ros-pkgs \
-    ros-humble-gazebo-ros \
     ros-humble-ackermann-msgs \
     ros-humble-foxglove-bridge \
     ros-humble-slam-toolbox \
