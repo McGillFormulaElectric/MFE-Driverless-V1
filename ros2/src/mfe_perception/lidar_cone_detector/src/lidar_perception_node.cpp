@@ -219,7 +219,7 @@ private:
                 for (const auto& p : object_cloud->points) {
                     if (std::abs(p.y) > 6.0f) continue;           // Y range: ±6 m
                     float h = std::abs((a*p.x + b*p.y + c_n*p.z + d) / norm);
-                    if (h < 0.005f || h > 0.7f) continue;         // cone height band (0–70 cm above ground)
+                    if (h < 0.005f || h > 0.75f) continue;        // 0–75 cm above ground (covers small 325mm & large 505mm cones + margin)
                     cone_cloud->points.push_back(p);
                 }
                 object_cloud = cone_cloud;
@@ -263,7 +263,10 @@ private:
                 ec.extract(cluster_indices);
 
                 for (const auto& idxs : cluster_indices) {
-                    // Bounding box check: FSAE cones are ≤0.28 m wide, ≤0.325 m tall
+                    // Bounding box check — FSAE Driverless 2026 DD.1.3.2:
+                    //   Small cones (blue/yellow/orange): 228 × 228 × 325 mm
+                    //   Large orange cones (finish gate): 285 × 285 × 505 mm
+                    // Filter sized to accept the large cone envelope with margin.
                     float mn_x = FLT_MAX, mx_x = -FLT_MAX;
                     float mn_y = FLT_MAX, mx_y = -FLT_MAX;
                     float mn_z = FLT_MAX, mx_z = -FLT_MAX;
@@ -274,8 +277,7 @@ private:
                         mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                     }
                     // Reject clusters too large to be cones (walls, barriers, car body)
-                    // FSAE cone: 0.28m base diameter, 0.325m tall
-                    if ((mx_x - mn_x) > 0.35f || (mx_y - mn_y) > 0.35f || (mx_z - mn_z) > 0.4f)
+                    if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
                         continue;
 
                     Eigen::Vector4f c;
