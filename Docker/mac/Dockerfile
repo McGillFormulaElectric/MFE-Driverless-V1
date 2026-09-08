@@ -47,9 +47,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-rosdep \
     && rm -rf /var/lib/apt/lists/*
 
+# uv — fast pip-compatible installer, used for all Python deps below
+RUN pip3 install --upgrade pip && pip3 install uv
+
 # Python deps (no ultralytics — pulls 2 GB of PyTorch/CUDA, not needed for sim)
-RUN pip3 install --upgrade pip && \
-    pip3 install --ignore-installed "numpy<2" ros2-numpy scikit-learn icecream scipy
+RUN uv pip install --system --reinstall "numpy<2" ros2-numpy scikit-learn icecream scipy
 
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 

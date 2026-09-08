@@ -127,11 +127,12 @@ echo "==> [6/10] Installing Python dependencies..."
 # Order matters — numpy must be pinned before scipy/sklearn/pandas to avoid
 # binary incompatibility (system packages compiled for numpy 1.x)
 pip3 install --upgrade pip
-pip3 install "numpy<2"
-pip3 install "scipy>=1.13"
-pip3 install scikit-learn
-pip3 install --upgrade --force-reinstall pandas
-pip3 install icecream
+pip3 install uv
+uv pip install --system "numpy<2"
+uv pip install --system "scipy>=1.13"
+uv pip install --system scikit-learn
+uv pip install --system --upgrade --reinstall pandas
+uv pip install --system icecream
 
 # ft-fsd-path-planning: pip install from git fails due to broken package name
 # Must clone and install directly
@@ -139,7 +140,7 @@ if [ ! -d "$FSD_DIR" ]; then
     echo "==> Cloning ft-fsd-path-planning..."
     git clone $FSD_REPO $FSD_DIR
 fi
-pip3 install $FSD_DIR
+uv pip install --system $FSD_DIR
 # Module installs as 'fsd_path_planning' (not ft_fsd_path_planning)
 python3 -c "import fsd_path_planning; print('fsd_path_planning OK')"
 

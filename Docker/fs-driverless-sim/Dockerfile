@@ -56,13 +56,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # rosdep
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# Python deps — install all together so pip respects the numpy<2 constraint
-RUN pip3 install --upgrade pip && \
-    pip3 install "numpy<2" "scipy>=1.13" scikit-learn icecream pandas
+# uv — fast pip-compatible installer, used for all Python deps below
+RUN pip3 install --upgrade pip && pip3 install uv
+
+# Python deps — install all together so uv respects the numpy<2 constraint
+RUN uv pip install --system "numpy<2" "scipy>=1.13" scikit-learn icecream pandas
 
 # ft-fsd-path-planning (PyPI name is broken; must install from source)
 RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /opt/ft-fsd-path-planning && \
-    pip3 install /opt/ft-fsd-path-planning && \
+    uv pip install --system /opt/ft-fsd-path-planning && \
     python3 -c "import fsd_path_planning; print('fsd_path_planning OK')"
 
 # Shell: source ROS in every bash session inside the container
