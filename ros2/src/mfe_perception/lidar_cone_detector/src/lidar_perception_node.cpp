@@ -371,8 +371,27 @@ private:
                 ec.setInputCloud(object_cloud);
                 ec.extract(cluster_indices);
 
-                // 5. Centroids
+                // 5. Bounding box check + centroids — FSAE Driverless 2026 DD.1.3.2:
+                //   Small cones (blue/yellow/orange): 228 x 228 x 325 mm
+                //   Large orange cones (finish gate): 285 x 285 x 505 mm
+                // Mirrors the GPU pipeline's cone-shape validation (see OPTION A above),
+                // which was never ported to this CPU fallback branch — without it, any
+                // cluster with 3-150 points in the z-band (curbs, walls, car parts) was
+                // accepted as a cone regardless of physical size.
                 for (const auto& indices : cluster_indices) {
+                    float mn_x = FLT_MAX, mx_x = -FLT_MAX;
+                    float mn_y = FLT_MAX, mx_y = -FLT_MAX;
+                    float mn_z = FLT_MAX, mx_z = -FLT_MAX;
+                    for (int idx : indices.indices) {
+                        const auto& p = object_cloud->points[idx];
+                        mn_x = std::min(mn_x, p.x); mx_x = std::max(mx_x, p.x);
+                        mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
+                        mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
+                    }
+                    // Reject clusters too large to be cones (walls, barriers, car body)
+                    if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
+                        continue;
+
                     Eigen::Vector4f centroid_vec;
                     pcl::compute3DCentroid(*object_cloud, indices, centroid_vec);
                     centroids_cloud->points.emplace_back(centroid_vec[0], centroid_vec[1], centroid_vec[2]);
