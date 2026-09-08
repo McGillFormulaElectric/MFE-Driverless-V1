@@ -173,18 +173,22 @@ tmux send-keys -t mfe:0.1 \
     "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0" Enter
 
 # Pane 2 (bottom-left) — MFE Stack
+# pose_topic:=/sim/xsens/state_odom → same map-frame header as raw ground truth
+# (mfe_eufs_sim/xsens_noise_node.py just perturbs the pose/twist values), but noise-
+# corrupted to be representative of the real Xsens MTi-670G instead of perfect GT —
+# see mfe_eufs_sim.launch.py. Do NOT point this back at /ground_truth/state_odom.
+#
 # In no_perception mode:
 #   use_perception:=false  → skip boundary_extractor (bridge owns /planning/cones)
-#   pose_topic:=/ground_truth/state_odom → consistent frame with Gazebo world / TF map
 # In perception mode:
 #   use_perception:=true (default) → boundary_extractor runs, EKF provides pose
 if [ "$MODE" = "no_perception" ]; then
     # GT cones go straight to /planning/cones — no perception, SLAM, or EKF needed.
     # run_perception:=false disables the entire perception group (lidar, vision, evaluators).
-    BRINGUP_EXTRAS="use_perception:=false run_perception:=false pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
+    BRINGUP_EXTRAS="use_perception:=false run_perception:=false pose_topic:=/sim/xsens/state_odom use_slam:=false use_ekf:=false"
 else
-    # Perception sim: use GT odometry, disable SLAM/EKF (EUFS GT TF owns map→odom).
-    BRINGUP_EXTRAS="pose_topic:=/ground_truth/state_odom use_slam:=false use_ekf:=false"
+    # Perception sim: noisy Xsens-representative odometry, disable SLAM/EKF (EUFS GT TF owns map→odom).
+    BRINGUP_EXTRAS="pose_topic:=/sim/xsens/state_odom use_slam:=false use_ekf:=false"
 fi
 
 # Laps: 0 means endless (disable finish detector), otherwise pass num_laps

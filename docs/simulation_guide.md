@@ -92,7 +92,8 @@ If this is false, the car has no idea where it is in the map frame and drives in
 | `mfe_path_planning` | `boundary_extractor` | Fuses LiDAR clusters and vision detections into `/planning/cones` (only runs in `perception` mode). |
 | `mfe_path_planning` | `finish_detector_node` | Detects lap completion via LiDAR point-cloud gate or return-to-start odometry. Publishes brake and signals EUFS state machine. |
 | `mfe_control` | `pure_pursuit_node` | Pure pursuit lateral controller. Tracks `/planning/centerline` using current pose from odometry. Publishes `/control/command`. |
-| `mfe_state_estimation` | `extended_kalman_filter_node` | Fuses IMU + GPS into `/ekf/output`. In simulation, bypassed by using `/ground_truth/state_odom` directly. |
+| `mfe_state_estimation` | `extended_kalman_filter_node` | Fuses IMU + GPS into `/ekf/output`. In simulation, bypassed — `pose_topic:=/sim/xsens/state_odom` (noise-injected ground truth) is used directly instead. |
+| `mfe_eufs_sim` | `xsens_noise_node` | Sim-only. Adds Xsens MTi-670G-representative noise to `/ground_truth/state_odom`, republishing as `/sim/xsens/state_odom` (this is what `pose_topic` should point at in sim). |
 | `mfe_mapping` | SLAM toolbox | Builds occupancy map from LiDAR laser scans. Publishes map→odom TF in perception mode. |
 | `mfe_perception/lidar_cone_detector` | `lidar_perception_node` | C++ node. Voxel filter → RANSAC ground removal → Euclidean clustering. Outputs cone positions as PointCloud2. |
 | `mfe_perception/vision_cone_detector` | `cone_detection_node` | Python/YOLO node. Runs YOLOv8/YOLO11 on `/camera/image_raw`, publishes `mfe_msgs/Track`. |
@@ -188,7 +189,7 @@ By default, the car stops after one lap. To loop indefinitely for Foxglove visua
 # Pass endless:=true to bringup — finish_detector is disabled
 ros2 launch mfe_bringup bringup.launch.py \
   mission:=autocross \
-  pose_topic:=/ground_truth/state_odom \
+  pose_topic:=/sim/xsens/state_odom \
   use_perception:=false \
   endless:=true
 ```
@@ -198,7 +199,7 @@ Or override the BRINGUP_EXTRAS in the launch script before sourcing:
 ```bash
 # In the tmux pane 2 (MFE stack), kill current launch and rerun:
 ros2 launch mfe_bringup bringup.launch.py \
-  mission:=autocross pose_topic:=/ground_truth/state_odom \
+  mission:=autocross pose_topic:=/sim/xsens/state_odom \
   use_perception:=false endless:=true
 ```
 
@@ -207,7 +208,7 @@ ros2 launch mfe_bringup bringup.launch.py \
 | | `no_perception` | `perception` |
 |-|-----------------|--------------|
 | Cone source | Gazebo ground truth → bridge → `/planning/cones` | LiDAR clusters + YOLO camera → boundary_extractor → `/planning/cones` |
-| Pose source | `/ground_truth/state_odom` | `/ekf/output` (IMU + GPS fusion) |
+| Pose source | `/sim/xsens/state_odom` (noise-injected GT, `use_ekf:=false`) | `/sim/xsens/state_odom` — same as no_perception; `launch_sim.sh` sets `use_ekf:=false` in both modes today |
 | `use_perception` arg | `false` | `true` |
 | `use_sim_cones_directly` | `true` | `false` |
 | Speed | Faster to test | Slower, tests real pipeline |

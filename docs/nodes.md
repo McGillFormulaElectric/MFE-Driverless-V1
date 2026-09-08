@@ -272,7 +272,12 @@ Not launched when `use_perception:=false` (no_perception mode).
 **Package**: `mfe_state_estimation`  
 **File**: `ros2/src/mfe_state_estimation/mfe_state_estimation/extended_kalman_filter_node.py`
 
-Fuses IMU and GPS into odometry. Used on hardware. In simulation, use `/ground_truth/state_odom` instead.
+Fuses IMU and GPS into odometry. Used on hardware. In simulation, this node is disabled
+(`use_ekf:=false`) and `pose_topic:=/sim/xsens/state_odom` is used instead — a noise-injected
+copy of ground truth, not raw `/ground_truth/state_odom` (see `mfe_eufs_sim/xsens_noise_node.py`).
+
+On the real car, both inputs come from the Xsens MTi-670G GNSS/INS via
+`mfe_sensors/launch/xsens_mti.launch.py` (launched alongside this node, gated on `use_ekf`).
 
 ### Subscriptions
 

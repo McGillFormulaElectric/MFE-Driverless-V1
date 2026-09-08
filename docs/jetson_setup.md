@@ -8,14 +8,15 @@ Script: `scripts/setup_jetson.sh`
 
 ## Overview
 
-`setup_jetson.sh` runs six steps, each idempotent (safe to re-run):
+`setup_jetson.sh` runs seven steps, each idempotent (safe to re-run):
 
 1. Install ROS 2 Humble base
 2. Install ROS dependencies + CycloneDDS
-3. Install Python dependencies (`fsd_path_planning`, `scipy`, etc.)
-4. Clone or update the MFE-Driverless-V1 repo
-5. Build compute packages with colcon
-6. Configure `~/.bashrc` with ROS environment variables
+3. Clone + build the Xsens MTi-670G GNSS/INS driver (separate workspace overlay)
+4. Install Python dependencies (`fsd_path_planning`, `scipy`, etc.)
+5. Clone or update the MFE-Driverless-V1 repo
+6. Build compute packages with colcon
+7. Configure `~/.bashrc` with ROS environment variables
 
 ---
 
@@ -58,6 +59,26 @@ The script builds **only the packages needed for compute or perception** — no 
 | `perception_evaluator` | No | Sim-only evaluation |
 
 **For a perception Jetson** (Jetson 1), you need to also build `lidar_cone_detector`, `vision_cone_detector`, `mfe_mapping`, and `mfe_state_estimation`. Add them to the `--packages-select` list in the script.
+
+---
+
+## Xsens MTi-670G GNSS/INS driver
+
+Feeds the EKF node's `/imu` and `/gps` inputs on real hardware — see [[nodes]] and
+`ros2/src/mfe_sensors/launch/xsens_mti.launch.py`. Not vendored in this repo; step 3 clones and
+builds it as its own workspace overlay:
+
+```
+~/Develop/xsens_mti_ros2_driver   (github.com/xsenssupport/Xsens_MTi_ROS_Driver_and_Ntrip_Client, ros2 branch)
+```
+
+Built on every Jetson by default (cheap to build even where unused), but only actually launched
+on the perception Jetson — `use_ekf:=true` in `bringup.launch.py`/`perception.launch.py`.
+
+Before first real run, set the actual serial port/baudrate in
+`ros2/src/mfe_sensors/config/xsens_mti.yaml` (default assumes `/dev/ttyUSB0` @ 115200 — add a
+udev rule for a stable `/dev/xsens_mti` symlink so the port survives USB re-enumeration), or
+override at launch: `ros2 launch mfe_sensors xsens_mti.launch.py port:=/dev/ttyUSB1`.
 
 ---
 

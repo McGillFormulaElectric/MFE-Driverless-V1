@@ -63,22 +63,49 @@ rosdep update
 
 # =============================================================================
 echo ""
-echo "── [3/6] Python dependencies ───────────────────────────────────────────"
+echo "── [3/7] Xsens MTi-670G GNSS/INS driver ────────────────────────────────"
+# =============================================================================
+# Not vendored in this repo — cloned + built as its own workspace overlay,
+# same pattern as gazebo_ros_pkgs on ARM (see setup_remote.sh). Publishes
+# imu/data (sensor_msgs/Imu) + gnss (sensor_msgs/NavSatFix), remapped to
+# /imu + /gps by mfe_sensors/launch/xsens_mti.launch.py for the EKF node.
+sudo apt install -y ros-humble-nmea-msgs ros-humble-mavros-msgs
+
+XSENS_WS=$DEVELOP_DIR/xsens_mti_ros2_driver
+if [ ! -d "$XSENS_WS" ]; then
+    git clone --branch ros2 \
+        https://github.com/xsenssupport/Xsens_MTi_ROS_Driver_and_Ntrip_Client.git \
+        "$XSENS_WS"
+else
+    echo "Xsens driver already present — pulling latest..."
+    git -C "$XSENS_WS" pull
+fi
+
+if [ ! -d "$XSENS_WS/install" ]; then
+    cd "$XSENS_WS"
+    rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
+    colcon build --symlink-install --cmake-args -DBUILD_TESTING=OFF
+fi
+
+# =============================================================================
+echo ""
+echo "── [4/7] Python dependencies ───────────────────────────────────────────"
 # =============================================================================
 pip3 install --upgrade pip
-pip3 install "numpy<2" scipy scikit-learn icecream
+pip3 install uv
+uv pip install --system "numpy<2" scipy scikit-learn icecream
 
 # ft-fsd-path-planning (used by path_planner_node)
 FSD_DIR=$DEVELOP_DIR/ft-fsd-path-planning
 if [ ! -d "$FSD_DIR" ]; then
     git clone https://github.com/papalotis/ft-fsd-path-planning.git $FSD_DIR
 fi
-pip3 install $FSD_DIR
+uv pip install --system $FSD_DIR
 python3 -c "import fsd_path_planning; print('  fsd_path_planning OK')"
 
 # =============================================================================
 echo ""
-echo "── [4/6] Clone / update repo ───────────────────────────────────────────"
+echo "── [5/7] Clone / update repo ───────────────────────────────────────────"
 # =============================================================================
 mkdir -p $DEVELOP_DIR
 if [ ! -d "$MFE_DIR" ]; then
@@ -91,12 +118,13 @@ fi
 
 # =============================================================================
 echo ""
-echo "── [5/6] Build compute packages ────────────────────────────────────────"
+echo "── [6/7] Build compute packages ────────────────────────────────────────"
 # =============================================================================
 # Skip: mfe_eufs_sim (Gazebo), lidar_cone_detector, vision_cone_detector,
 #        perception_evaluator, mfe_sensors, mfe_mapping, mfe_state_estimation
 # Build: mfe_msgs, mfe_bringup, mfe_path_planning, mfe_control
 source /opt/ros/humble/setup.bash
+source "$XSENS_WS/install/setup.bash"
 cd $MFE_WS
 
 rosdep install --from-paths src --ignore-src -r -y \
@@ -114,12 +142,13 @@ colcon build --symlink-install \
 
 # =============================================================================
 echo ""
-echo "── [6/6] Shell environment ─────────────────────────────────────────────"
+echo "── [7/7] Shell environment ─────────────────────────────────────────────"
 # =============================================================================
 BASHRC=~/.bashrc
 add_line() { grep -qxF "$1" $BASHRC || echo "$1" >> $BASHRC; }
 
 add_line 'source /opt/ros/humble/setup.bash'
+add_line "source $XSENS_WS/install/setup.bash"
 add_line "source $MFE_WS/install/setup.bash"
 add_line 'export ROS_DOMAIN_ID=42'
 add_line 'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp'
@@ -147,6 +176,6 @@ echo "   ros2 topic list    # should show topics from sim"
 echo ""
 echo " Or let the host launch it via fleet:"
 echo "   ros2 launch mfe_bringup fleet.launch.py \\"
-echo "     pose_topic:=/ground_truth/state_odom \\"
+echo "     pose_topic:=/sim/xsens/state_odom \\"
 echo "     use_slam:=false use_ekf:=false"
 echo "============================================================"

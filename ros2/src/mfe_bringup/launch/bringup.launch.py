@@ -96,8 +96,11 @@ def generate_launch_description():
         default_value='/ekf/output',
         description=(
             'Odometry topic used by path planner and pure pursuit for vehicle pose. '
-            'In simulation pass pose_topic:=/ground_truth/state_odom for a consistent '
-            'frame with the Gazebo world / TF map frame.'
+            'In simulation pass pose_topic:=/sim/xsens/state_odom (same map-frame header as '
+            'ground truth, but noise-corrupted to be representative of the real Xsens '
+            'MTi-670G — see mfe_eufs_sim/xsens_noise_node.py). Do not use raw '
+            '/ground_truth/state_odom as pose_topic — it is noiseless and hides pose error '
+            'the real sensor would introduce.'
         ),
     )
 
@@ -133,7 +136,7 @@ def generate_launch_description():
         default_value='true',
         description=(
             'Launch the GPS+IMU EKF node. '
-            'Set false in sim when using pose_topic:=/ground_truth/state_odom '
+            'Set false in sim when using pose_topic:=/sim/xsens/state_odom '
             '(EKF GPS-origin frame does not align with the Gazebo world/TF map frame).'
         ),
     )
@@ -256,10 +259,24 @@ def generate_launch_description():
     )
 
     # --------------------------------------------------------------------------
+    # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
+    # Publishes: /imu (sensor_msgs/Imu), /gps (sensor_msgs/NavSatFix) — feeds ekf_node below.
+    # Gated on use_ekf since that's the only consumer of these topics.
+    # --------------------------------------------------------------------------
+    xsens_mti_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
+            )
+        ),
+        condition=IfCondition(use_ekf),
+    )
+
+    # --------------------------------------------------------------------------
     # State estimation — Extended Kalman Filter (custom MFE node)
     # Subscribes: /imu/data (Imu), /gps (NavSatFix)
     # Publishes:  /ekf/output (nav_msgs/Odometry)
-    # Disabled in sim (use_ekf:=false) when pose_topic:=/ground_truth/state_odom —
+    # Disabled in sim (use_ekf:=false) when pose_topic:=/sim/xsens/state_odom —
     # EKF GPS origin ≠ Gazebo world frame so EKF pose cannot be used with TF-derived cones.
     # --------------------------------------------------------------------------
     ekf_params_file = os.path.join(
@@ -406,6 +423,7 @@ def generate_launch_description():
             vision_node_action,         # skipped unless vision_model_path is set
             pc2scan_launch,             # PointCloud2 → LaserScan for SLAM
             slam_launch,
+            xsens_mti_launch,           # Xsens MTi-670G GNSS/INS -> /imu, /gps
             ekf_node,
             boundary_extractor_node,
             evaluator_node,
