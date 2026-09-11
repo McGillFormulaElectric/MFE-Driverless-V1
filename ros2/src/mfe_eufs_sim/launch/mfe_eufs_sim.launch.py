@@ -61,33 +61,6 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ---------------------------------------------------------------- #
-        #  Static TF publishers                                              #
-        #                                                                    #
-        #  These connect the EUFS sim TF frames to the frames the           #
-        #  driverless stack expects. Adjust translations/rotations to        #
-        #  match your physical sensor mounting positions.                    #
-        # ---------------------------------------------------------------- #
-
-        # velodyne frame → base_footprint (LiDAR mounted at car origin)
-        # Args: x y z qx qy qz qw parent child
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='lidar_tf_pub',
-            arguments=['0.0', '0.0', '0.3', '0', '0', '0', '1',
-                       'base_footprint', 'velodyne'],
-            output='screen',
-        ),
-
-        # ZED camera frame → base_footprint
-        # D435i sits ~0.3 m ahead of the car centre, ~0.5 m high
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='camera_tf_pub',
-            arguments=['0.3', '0.0', '0.5', '0', '0', '0', '1',
-                       'base_footprint', 'zed_camera_center'],
-            output='screen',
-        ),
+        # The simulator robot_state_publisher owns sensor transforms from URDF.
+        # Publishing approximate duplicate transforms here corrupts projection.
     ])

@@ -1,6 +1,9 @@
 [submodule "ros2/src/fs_msgs"]
 	path = ros2/src/fs_msgs
 	url = https://github.com/FS-Driverless/fs_msgs.git
+[submodule "ros2/src/eufs_msgs"]
+	path = ros2/src/eufs_msgs
+	url = https://gitlab.com/eufs/eufs_msgs.git
 [submodule "src/urinay"]
 	path = src/urinay
 	url = https://github.com/origovi/urinay

@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends locales \
 
 # System deps: Gazebo 11, ROS bridge packages, perception libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget git tmux \
+    curl wget git tmux xvfb x11-utils mesa-utils \
     build-essential cmake \
     python3-colcon-common-extensions \
     python3-rosdep \

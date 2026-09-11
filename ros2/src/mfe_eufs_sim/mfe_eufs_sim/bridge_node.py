@@ -6,7 +6,7 @@ Translates between EUFS simulator topics and the MFE driverless stack topics.
 
 EUFS Sim → Driverless Stack:
   /velodyne_points              (PointCloud2)              → /lidar/points_raw
-  /zed/left/image_rect_color    (Image)                    → /camera/image_raw
+  /d435i/image_raw    (Image)                    → /camera/image_raw
   /ground_truth/cones           (eufs_msgs/ConeArrayWithCovariance) → /ground_truth/cones_colored (mfe_msgs/Track)
                                                                        (accuracy measurement only)
   /ground_truth/state           (eufs_msgs/CarState)       → /ground_truth/state_odom (nav_msgs/Odometry)
@@ -34,7 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from sensor_msgs.msg import Image, PointCloud2, PointField
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Header
 
@@ -178,6 +178,8 @@ class EufsSimBridge(Node):
         self.declare_parameter('max_steering_deg', 25.0)
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
+        self.declare_parameter('camera_topic', '/d435i/image_raw')
+        self.declare_parameter('camera_info_topic', '/d435i/camera_info')
 
         self._map_frame = self.get_parameter('map_frame').value
         self._base_frame = self.get_parameter('base_frame').value
@@ -195,9 +197,13 @@ class EufsSimBridge(Node):
 
         # Camera: just a remap — same Image type
         self.create_subscription(
-            Image, '/zed/left/image_rect_color', self._camera_cb, _QOS_EUFS)
+            Image, self.get_parameter('camera_topic').value, self._camera_cb, _QOS_EUFS)
         self._camera_pub = self.create_publisher(
             Image, '/camera/image_raw', _QOS_MFE)
+        self._camera_info_pub = self.create_publisher(CameraInfo, '/camera/camera_info', _QOS_MFE)
+        self.create_subscription(
+            CameraInfo, self.get_parameter('camera_info_topic').value,
+            self._camera_info_pub.publish, _QOS_EUFS)
 
         # ---------- EUFS → MFE: Cones ----------
         # Ground truth cones (proximity-limited) → /ground_truth/cones_colored
@@ -264,7 +270,7 @@ class EufsSimBridge(Node):
         self._lidar_pub.publish(msg)
 
     def _camera_cb(self, msg: Image) -> None:
-        """Remap /zed/left/image_rect_color → /camera/image_raw."""
+        """Remap /d435i/image_raw → /camera/image_raw."""
         self._camera_pub.publish(msg)
 
     def _sim_cones_cb(self, msg: ConeArrayWithCovariance) -> None:

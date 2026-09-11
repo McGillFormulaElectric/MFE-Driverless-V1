@@ -4,6 +4,8 @@
 # Usage: bash scripts/docker_build.sh
 # =============================================================================
 
+set -euo pipefail
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Building mfe-driverless-sim image..."

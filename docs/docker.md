@@ -43,120 +43,109 @@ docker build -t mfe-driverless-sim Docker/fs-driverless-sim
 
 ---
 
-## Running the sim container
+## Preparing the workspaces
+
+The image supplies system dependencies; source and build artifacts live in the
+mounted host directories. Keep both repositories on compatible branches based
+on the EUFS `humble` layout. Existing branches are never switched automatically.
 
 ```bash
-bash scripts/docker_run.sh [track] [mode] [gui]
+bash scripts/setup_sim_workspaces.sh
+bash scripts/docker_build.sh
 ```
 
-The script runs:
+Setup clones a missing EUFS checkout from `humble`, fetches `eufs_msgs` separately,
+and initializes the MFE `fs_msgs` submodule. An incomplete existing
+EUFS directory is reported instead of being overwritten. The sensor / launch
+fixes must be present in the EUFS branch as well as this repository.
+
+The entrypoint builds EUFS, then **MFE-Driverless-V1/ros2**, incrementally on every
+run. Python executable registration and installed launch files are refreshed.
+CMake caches are cleared to handle source paths that changed between branches.
+Do not build the MFE repository root: the launcher uses `ros2/install`.
+The legacy MFE `eufs_msgs` submodule is excluded from that build; EUFS supplies it.
+
+## Running the simulator
 
 ```bash
-docker run --rm -it \
-  --gpus all \
-  --env NVIDIA_DRIVER_CAPABILITIES=all \
-  --env DISPLAY=$DISPLAY \
-  --env QT_X11_NO_MITSHM=1 \
-  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  --volume ~/Develop:/root/Develop \
-  --network host \
-  --ipc host \
-  --name mfe-sim \
+# Gazebo GUI with perception; 0 means run indefinitely
+bash scripts/docker_run.sh accel perception gui 0
+
+# Headless with real simulated LiDAR and camera streams
+bash scripts/docker_run.sh accel perception nogui 0
+
+# Ground-truth cone bypass without raw perception sensors
+bash scripts/docker_run.sh accel no_perception nogui 0
+```
+
+No temporary wrapper is needed. Startup waits for actual car-state messages and,
+in perception mode, LiDAR and D435i images. Missing data or a launch failure
+returns a nonzero exit status and prints simulator logs; it does not announce
+readiness and launch the remaining stack. `MFE_STARTUP_TIMEOUT` inside the
+container controls the deadline (120 seconds by default).
+
+The mission pane is prefilled. Press Enter there when you want to start driving.
+Detaching tmux exits the foreground launch command; a `--rm` container then stops.
+
+### Rendering and GPU access
+
+`MFE_GPU=auto` uses NVIDIA when a functioning driver and Docker's NVIDIA runtime
+are available; otherwise it uses Mesa software rendering. Software rendering is
+slower. GUI mode uses the host X11 display. Headless mode starts Xvfb inside the
+container, because hiding the Gazebo GUI does not remove the cameras' rendering
+requirements.
+
+```bash
+MFE_GPU=software bash scripts/docker_run.sh accel perception gui 0
+MFE_GPU=nvidia bash scripts/docker_run.sh accel perception gui 0
+```
+
+The NVIDIA option first tests container GPU access. Install and configure
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+on the host if this fails. The run script does not install drivers or restart
+Docker. GUI mode temporarily grants X11 access to the container's root user and
+revokes the grant it added on exit.
+
+### Direct Docker command
+
+The original headless command continues to work with the updated image and
+prepared workspaces:
+
+```bash
+docker run --rm -it --init \
+  --volume "$HOME/Develop":/root/Develop \
+  --publish 8765:8765 --ipc host --name mfe-sim \
   mfe-driverless-sim \
-  bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh "$EVENT" "$MODE" "$GUI"
+  bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh accel perception nogui 0
 ```
 
-### Key flags
+For GUI mode use the helper above, which handles the display mount and GPU check.
+Port 8765 exposes Foxglove. The default helper uses Docker's bridge network so
+other host ROS processes are isolated; no host network is required for nodes
+communicating inside this container. Concurrent runs need different container
+names and published Foxglove ports.
 
-| Flag | Why |
-|------|-----|
-| `--gpus all` | GPU access for YOLO inference and OpenGL rendering |
-| `--network host` | ROS 2 DDS (UDP multicast) works without bridge |
-| `--ipc host` | Shared memory for ROS 2 zero-copy |
-| `--volume ~/Develop:/root/Develop` | Bind mount so code changes on host are immediately visible inside |
-| `--volume /tmp/.X11-unix` | Gazebo GUI display passthrough |
-| `--env DISPLAY` | X11 display forwarding |
+## Diagnostics and smoke check
 
----
-
-## Multi-container setup
-
-Two containers can run simultaneously on the same host — useful for running a second perception-only eval session alongside the main sim.
-
-### Port conflict problem
-
-Both containers use `--network host`. If both try to bind `GAZEBO_MASTER_URI=http://localhost:11350`, gzserver exits immediately with code 255.
-
-### Solution: GAZEBO_PORT env var
-
-`launch_sim.sh` reads `${GAZEBO_PORT:-11350}`. Override it when starting the second container:
-
-```bash
-# Container 1 — mfe-sim, port 11355
-docker run --rm -it \
-  --gpus all --network host --ipc host \
-  --volume ~/Develop:/root/Develop \
-  --env DISPLAY=$DISPLAY \
-  --volume /tmp/.X11-unix:/tmp/.X11-unix \
-  --name mfe-sim \
-  mfe-driverless-sim \
-  bash -c "GAZEBO_PORT=11355 bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh peanut no_perception nogui 5"
-
-# Container 2 — mfe-sim-2, port 11350 (default), isolated ROS domain
-docker run --rm -it \
-  --gpus all --network host --ipc host \
-  --volume ~/Develop:/root/Develop \
-  --env DISPLAY=$DISPLAY \
-  --env ROS_DOMAIN_ID=1 \
-  --volume /tmp/.X11-unix:/tmp/.X11-unix \
-  --name mfe-sim-2 \
-  mfe-driverless-sim \
-  bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh small_track no_perception nogui 0
-```
-
-### ROS domain isolation
-
-`ROS_DOMAIN_ID` controls DDS topic namespacing. Different domain IDs prevent topic bleed-through between containers:
-- mfe-sim: `ROS_DOMAIN_ID=0` (default)
-- mfe-sim-2: `ROS_DOMAIN_ID=1`
-
----
-
-## Gazebo lock directory
-
-Gazebo writes a lock file at `~/.gazebo/server-<port>/` when gzserver starts. If gzserver crashes without cleanup, the lock persists. The next gzserver instance finds the lock and exits immediately with code 255.
-
-**Fix**:
-```bash
-rm -rf ~/.gazebo/server-11350   # or your port
-```
-
----
-
-## Bind mounts
-
-The `~/Develop` directory is bind-mounted into the container at `/root/Develop`. This means:
-
-- Code edits on the host are immediately reflected inside the container.
-- No rebuild required for Python node changes.
-- C++ nodes still require `colcon build` inside the container after changes.
-- EUFS sim workspace and MFE workspace are both live-mounted.
-
----
-
-## Entering a running container
+While the container is running:
 
 ```bash
 docker exec -it mfe-sim bash
+source /opt/ros/humble/setup.bash
+source /root/Develop/MFE26-eufs-sim/install/setup.bash
+source /root/Develop/MFE-Driverless-V1/ros2/install/setup.bash
+python3 /root/Develop/MFE-Driverless-V1/scripts/check_sim.py --mode perception
 ```
 
-Inside, the workspace is pre-sourced via the entrypoint. You can run ROS 2 commands directly:
+The smoke check requires live bridge odometry, nonempty LiDAR/images, matching
+camera calibration, and URDF sensor transforms. It does not certify driving or
+perception accuracy. EUFS uses the MFE LiDAR and D435i definitions. Its
+robot_state_publisher owns sensor TF; the bridge must not publish competing
+approximate transforms. The bridge forwards `/d435i/image_raw` and
+`/d435i/camera_info` to `/camera/image_raw` and `/camera/camera_info`.
 
-```bash
-ros2 topic list
-ros2 topic echo /planning/laps_completed
-ros2 service call /ros_can/set_mission eufs_msgs/srv/SetCanState '{ami_state: 13, as_state: 1}'
-```
+A `load_yaml` deprecation or audio warning is not itself a spawn failure. Read
+the simulator pane or its `/tmp/mfe-launch-*/simulator.log` for the actual error.
 
 ---
 

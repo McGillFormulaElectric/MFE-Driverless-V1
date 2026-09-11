@@ -187,8 +187,8 @@ def generate_launch_description():
     run_compute = LaunchConfiguration('run_compute')
     max_speed = LaunchConfiguration('max_speed')
 
-    # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
-    # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
+    # The simulator robot_state_publisher owns sensor transforms from its URDF.
+    # Hardware bringup must provide the physical car's sensor transforms separately.
 
     # --------------------------------------------------------------------------
     # Perception — LiDAR cone detector (C++)

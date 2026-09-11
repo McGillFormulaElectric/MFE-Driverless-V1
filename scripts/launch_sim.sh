@@ -12,6 +12,9 @@
 #                   Use 0 to run indefinitely (same as endless mode).
 # =============================================================================
 
+set -eo pipefail
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
 GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
 EUFS_WS=~/Develop/MFE26-eufs-sim
 MFE_WS=~/Develop/MFE-Driverless-V1/ros2
@@ -94,6 +97,11 @@ esac
 
 # Parse laps (0 = endless)
 LAPS=${4:-1}
+[[ "$LAPS" =~ ^[0-9]+$ ]] || { echo "laps must be a nonnegative integer" >&2; exit 1; }
+if [ "$GAZEBO_GUI" = true ] && { [ -z "${DISPLAY:-}" ] || [ "${MFE_VIRTUAL_DISPLAY:-0}" = 1 ]; }; then
+    echo "GUI needs a host display. Use scripts/docker_run.sh with gui, or select nogui." >&2
+    exit 1
+fi
 
 echo "==> Launching event: $TRACK (ami_state=$AMI_STATE) | mode: $MODE | gazebo_gui: $GAZEBO_GUI | laps: $LAPS"
 
@@ -112,20 +120,15 @@ SOURCE_ALL="export EUFS_MASTER=$EUFS_WS && \
             source $EUFS_WS/install/setup.bash && \
             source $MFE_WS/install/setup.bash"
 
-# Kill any existing session and stale ROS/Gazebo processes
-tmux kill-session -t mfe 2>/dev/null || true
-pkill -f gzserver 2>/dev/null || true
-pkill -f gzclient 2>/dev/null || true
-pkill -f ros2 2>/dev/null || true
-pkill -f path_planner_node 2>/dev/null || true
-pkill -f lidar_perception_node 2>/dev/null || true
-pkill -f static_transform_publisher 2>/dev/null || true
-sleep 1
-
-# Restart ROS2 daemon cleanly after killing all ros2 processes
+# Keep other simulations/processes intact; this session must have a unique name.
+if tmux has-session -t mfe 2>/dev/null; then
+    echo "tmux session mfe already exists. Stop it before starting another run." >&2
+    exit 1
+fi
+RUN_DIR=$(mktemp -d /tmp/mfe-launch-XXXXXX)
 source /opt/ros/humble/setup.bash
-ros2 daemon stop 2>/dev/null || true
-ros2 daemon start
+source "$EUFS_WS/install/setup.bash"
+source "$MFE_WS/install/setup.bash"
 
 # Create new session
 tmux new-session -d -s mfe -x 220 -y 50
@@ -137,36 +140,19 @@ tmux split-window -v -t mfe:0.0      # mid-left | bottom-left
 tmux split-window -v -t mfe:0.1      # top-right | mid-right
 tmux split-window -v -t mfe:0.3      # mid-right | bottom-right
 
-# Pane 0 (top-left) — EUFS Sim (gzserver + gzclient only; car spawned separately below)
+# Pane 0 (top-left) — EUFS world, car spawning, and optional Gazebo GUI.
 # Pass x/y/yaw so eufs_launcher uses the correct start position for this track.
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW" Enter
+    "($SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK vehicleModelConfig:=configDry.yaml gazebo_gui:=$GAZEBO_GUI show_rqt_gui:=false rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW) 2>&1 | tee $RUN_DIR/simulator.log; touch $RUN_DIR/simulator.exited" Enter
 
-# Wait for gzserver + plugins to fully initialize.
-# complex tracks (small_track, peanut) take ~15 s; simple tracks (acceleration) ~5 s.
-echo "==> Waiting 25 s for Gazebo to initialize..."
-sleep 25
-
-# If the EUFS state machine isn't up yet (car not spawned), do it manually.
-source /opt/ros/humble/setup.bash
-source $EUFS_WS/install/setup.bash
-if ! timeout 3 ros2 topic echo /ros_can/state_str --once 2>/dev/null | grep -q AS:; then
-    echo "==> Car not spawned by eufs_launcher — spawning manually at ($SPAWN_X, $SPAWN_Y, yaw=$SPAWN_YAW)..."
-    ros2 run gazebo_ros spawn_entity.py \
-        -entity eufs \
-        -file $EUFS_WS/install/eufs_racecar/share/eufs_racecar/robots/eufs/robot.urdf \
-        -x $SPAWN_X -y $SPAWN_Y -z 0.1 -R 0.0 -P 0.0 -Y $SPAWN_YAW \
-        -timeout 30.0 --ros-args --log-level warn 2>/dev/null &
-    SPAWN_PID=$!
-    # Wait up to 20 s for state machine to appear
-    for i in $(seq 10); do
-        sleep 2
-        timeout 2 ros2 topic echo /ros_can/state_str --once 2>/dev/null | grep -q AS: && break
-        echo "==> Waiting for spawn... ($i/10)"
-    done
-    wait $SPAWN_PID 2>/dev/null || true
+echo "==> Waiting for car state and required sensor messages..."
+if ! python3 "$SCRIPT_DIR/wait_for_sim.py" --mode "$MODE" \
+    --timeout "${MFE_STARTUP_TIMEOUT:-120}" --exit-marker "$RUN_DIR/simulator.exited"; then
+    echo "==> Launch failed. Simulator output:" >&2
+    tail -n 80 "$RUN_DIR/simulator.log" >&2
+    tmux kill-session -t mfe 2>/dev/null || true
+    exit 1
 fi
-echo "==> Gazebo ready."
 
 # Pane 1 (mid-left) — MFE Bridge
 tmux send-keys -t mfe:0.1 \
