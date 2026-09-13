@@ -31,3 +31,6 @@
 /CMakeFiles
 **/resource
 # rosbags and database instances
+
+# mac 
+.DS_Store
