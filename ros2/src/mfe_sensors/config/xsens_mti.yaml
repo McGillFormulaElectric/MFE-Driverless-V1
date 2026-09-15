@@ -1,0 +1,27 @@
+# Xsens MTi-670G GNSS/INS — driver parameter overrides.
+#
+# Loaded on top of the xsens_mti_ros2_driver node's built-in defaults (see
+# https://github.com/xsenssupport/Xsens_MTi_ROS_Driver_and_Ntrip_Client, ros2 branch).
+# Only the keys we actually need to change from the driver's defaults are listed here —
+# consult that repo's own param/xsens_mti_node.yaml for the full parameter set
+# (magnetic declination, lever arm, filter profile, high-rate IMU topics, etc).
+#
+# port/baudrate below are placeholders — set to match how the MTi-670G is actually
+# wired on the car (USB shows up as /dev/ttyUSB*, add a udev rule for a stable
+# /dev/xsens_mti symlink so the port survives USB re-enumeration).
+xsens_mti_node:
+  ros__parameters:
+    scan_for_devices: false
+    port: /dev/ttyUSB0
+    baudrate: 115200
+
+    # Standard sensor_msgs/Imu on 'imu/data' — orientation + angular_velocity +
+    # linear_acceleration, consumed by mfe_state_estimation's EKF node.
+    pub_imu: true
+
+    # Raw GNSS receiver fix as sensor_msgs/NavSatFix on 'gnss' — consumed by the
+    # EKF node's /gps input. (The device also produces a higher-quality GNSS/INS
+    # fused position on 'filter/positionlla', but that topic is geometry_msgs/Vector3Stamped,
+    # not NavSatFix — switch to it later via a small conversion node if the raw
+    # GNSS fix isn't accurate enough on its own.)
+    pub_gnss: true

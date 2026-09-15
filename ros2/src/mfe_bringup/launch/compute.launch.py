@@ -6,15 +6,15 @@ Starts: path planner, pure pursuit, finish detector.
 Does NOT start: LiDAR, vision, SLAM, EKF — those run on the perception machine.
 
 Expects to receive over the network:
-  /planning/cones          (mfe_msgs/ConeArray)  — from boundary_extractor
-  /ekf/output              (nav_msgs/Odometry)   — from EKF, or remap to ground truth in sim
-  /ground_truth/state_odom (nav_msgs/Odometry)   — sim only
+  /planning/cones          (mfe_msgs/ConeArray)   — from boundary_extractor
+  /ekf/output              (nav_msgs/Odometry)    — from EKF, or remap to noisy sim odom below
+  /sim/xsens/state_odom    (nav_msgs/Odometry)    — sim only, Xsens-noise-representative
 
 Usage (sim — compute on Jetson, perception on host):
   export ROS_DOMAIN_ID=42
   export CYCLONEDDS_URI=file://$HOME/cyclone_tailscale.xml
   ros2 launch mfe_bringup compute.launch.py \\
-    pose_topic:=/ground_truth/state_odom \\
+    pose_topic:=/sim/xsens/state_odom \\
     mission:=autocross
 
 Usage (real car — Jetson 2):

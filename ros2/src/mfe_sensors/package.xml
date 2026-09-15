@@ -16,6 +16,11 @@
   <depend>nav2_lifecycle_manager</depend>
   <depend>velodyne_pointcloud</depend>
 
+  <!-- Xsens MTi-670G GNSS/INS driver — not on rosdep, built as a separate
+       workspace overlay by scripts/setup_jetson.sh. Declared here for
+       documentation; rosdep install will warn and skip it, which is expected. -->
+  <exec_depend>xsens_mti_ros2_driver</exec_depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 

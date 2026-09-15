@@ -70,7 +70,9 @@ The bridge reads ALL track cones directly from Gazebo world state and forwards t
 
 - `use_sim_cones_directly:=true` → bridge publishes `/planning/cones` directly
 - `use_perception:=false` → boundary_extractor not launched (prevents dual publishing)
-- `pose_topic:=/ground_truth/state_odom` → uses Gazebo ground truth pose
+- `pose_topic:=/sim/xsens/state_odom` → Gazebo ground truth pose, noise-corrupted to be
+  representative of the real Xsens MTi-670G (see `mfe_eufs_sim/xsens_noise_node.py`) — do not
+  use raw `/ground_truth/state_odom`, it's noiseless
 
 ### perception mode
 
@@ -147,7 +149,8 @@ Useful topics to add as panels:
 
 | Topic | Panel type | Notes |
 |-------|-----------|-------|
-| `/ground_truth/state_odom` | 3D or plot | Car position and speed |
+| `/ground_truth/state_odom` | 3D or plot | Perfect car position/speed (debugging reference) |
+| `/sim/xsens/state_odom` | 3D or plot | Noisy pose actually fed to the planner (pose_topic) |
 | `/planning/centerline` | 3D | Path waypoints |
 | `/planning/cones` | 3D | Cone map fed to planner |
 | `/planning/laps_completed` | Gauge | Current lap count |

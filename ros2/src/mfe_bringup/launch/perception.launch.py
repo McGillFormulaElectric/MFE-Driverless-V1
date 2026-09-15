@@ -6,13 +6,13 @@ Starts: LiDAR cone detector, vision (YOLO), boundary extractor, SLAM, EKF.
 Does NOT start: path planner, pure pursuit, finish detector.
 
 The compute machine runs compute.launch.py and receives processed cone detections
-(/planning/cones) and pose (/ekf/output or /ground_truth/state_odom) over the network.
+(/planning/cones) and pose (/ekf/output or /sim/xsens/state_odom) over the network.
 
 Usage (sim — perception on host, raw data stays local):
   export ROS_DOMAIN_ID=42
   export CYCLONEDDS_URI=file://$HOME/cyclone_tailscale.xml   # if using Tailscale
   ros2 launch mfe_bringup perception.launch.py \\
-    pose_topic:=/ground_truth/state_odom \\
+    pose_topic:=/sim/xsens/state_odom \\
     use_slam:=false use_ekf:=false
 
 Usage (real car — Jetson 1, sensors connected locally):

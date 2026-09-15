@@ -78,12 +78,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get clean
 
 RUN pip3 -V
-RUN pip3 install --upgrade pip
+RUN pip3 install --upgrade pip && pip3 install uv
 
-RUN pip3 install -U \
+RUN uv pip install --system -U \
     ros2-numpy \
-    scikit-learn \ 
-    ultralytics    
+    scikit-learn \
+    ultralytics
 
 WORKDIR /ros2_ws
 

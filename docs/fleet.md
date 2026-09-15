@@ -42,7 +42,7 @@ Only processed topics cross the network link — raw LiDAR / camera data stays l
 ```bash
 # Runs inside the Docker container (source ROS env first if not using Docker)
 ros2 launch mfe_bringup fleet.launch.py \
-  pose_topic:=/ground_truth/state_odom \
+  pose_topic:=/sim/xsens/state_odom \
   use_slam:=false \
   use_ekf:=false
 ```

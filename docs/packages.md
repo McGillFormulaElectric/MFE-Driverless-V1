@@ -16,7 +16,7 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 |----------|---------|-------------|
 | `mission` | `autocross` | `autocross`, `trackdrive`, `acceleration`, `skidpad` |
 | `vision_model_path` | `~/mfe_models/yolo/yolov8s/weights/best.pt` | Path to YOLO weights; empty = skip |
-| `pose_topic` | `/ekf/output` | Odometry source; use `/ground_truth/state_odom` in sim |
+| `pose_topic` | `/ekf/output` | Odometry source; use `/sim/xsens/state_odom` in sim (not raw ground truth) |
 | `use_perception` | `true` | Set `false` in no_perception sim mode |
 | `endless` | `false` | Set `true` to disable finish detector |
 | `num_laps` | `1` | Stop after this many lap crossings |
@@ -45,7 +45,7 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 |-----------|-----------|-----------|
 | `/velodyne_points` | → | `/lidar/points_raw` |
 | `/zed/left/image_rect_color` | → | `/camera/image_raw` |
-| `/ground_truth/state` | → | `/ground_truth/state_odom` |
+| `/ground_truth/state` | → | `/ground_truth/state_odom` (perfect; `xsens_noise_node` further maps this to `/sim/xsens/state_odom`, the actual `pose_topic`) |
 | `/ground_truth/cones` | → | `/ground_truth/cones_colored` |
 | `/ground_truth/track` | → | `/planning/cones` (no_perception only) |
 | `/control/command` | → | `/cmd` (AckermannDriveStamped) |
@@ -94,11 +94,13 @@ On finish: publishes full brake at 50 Hz, signals EUFS state machine, latches `/
 
 ## mfe_state_estimation
 
-**Purpose**: Extended Kalman Filter fusing IMU and GPS into a consistent odometry estimate. Used on hardware; in simulation use `/ground_truth/state_odom` instead.
+**Purpose**: Extended Kalman Filter fusing IMU and GPS into a consistent odometry estimate. Used on hardware; in simulation, use `/sim/xsens/state_odom` (noise-injected ground truth, see `mfe_eufs_sim`) as `pose_topic` instead — the EKF's own GPS-origin frame doesn't align with the Gazebo world/TF map frame.
 
 **Node**: `extended_kalman_filter_node`
 
-**Subscribes**: `/imu` (sensor_msgs/Imu), `/gps` (sensor_msgs/NavSatFix)
+**Subscribes**: `/imu` (sensor_msgs/Imu), `/gps` (sensor_msgs/NavSatFix) — both published by the
+Xsens MTi-670G GNSS/INS via `mfe_sensors/launch/xsens_mti.launch.py` on real hardware (see the
+`mfe_sensors` section above).
 
 **Publishes**: `/ekf/output` (nav_msgs/Odometry)
 
@@ -168,12 +170,20 @@ Color constants on `Cone`: `BLUE=0`, `YELLOW=1`, `ORANGE_BIG=2`, `ORANGE_SMALL=3
 
 ## mfe_sensors
 
-Hardware sensor drivers (not used in simulation). Contains ROS 2 node interfaces for:
-- Velodyne VLP-16 LiDAR (`velodyne_lidar_node`)
-- Intel RealSense D435 camera (`realsense_camera_node`)
-- Simulation stubs (`sim_camera_node`, `sim_lidar_node`)
+Hardware sensor drivers (not used in simulation). Contains:
+- `CameraInterface`/`LidarInterface` (`include/mfe_sensors/interfaces/`) — abstract lifecycle-node
+  base classes for future Velodyne VLP-16 / RealSense D435 hardware drivers. No concrete hardware
+  node exists yet (earlier `velodyne_lidar_node`/`realsense_camera_node`/`sim_camera_node` stub
+  files were empty placeholders with no CMakeLists build target — removed as dead code).
+- Xsens MTi-670G GNSS/INS (`launch/xsens_mti.launch.py`, wraps the external
+  `xsens_mti_ros2_driver` package — see [[jetson_setup]]).
+  Publishes `/imu` (sensor_msgs/Imu) + `/gps` (sensor_msgs/NavSatFix), consumed by
+  `mfe_state_estimation`'s EKF node.
+- Simulation stub (`sim_lidar_node`) — built and wired into `sensors.launch.py`
 
-**Launch file**: `launch/sensors.launch.py`
+**Launch files**: `launch/sensors.launch.py` (LiDAR/camera lifecycle-managed nodes),
+`launch/xsens_mti.launch.py` (GNSS/INS, plain node — included from `mfe_bringup/bringup.launch.py`
+under `use_ekf`, not lifecycle-managed)
 
 ---
 
