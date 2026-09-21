@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'pure_pursuit_node = mfe_control.pure_pursuit_node:main',
+            'mpc_lateral_node = mfe_control.mpc_lateral_node:main',
         ],
     },
 )
