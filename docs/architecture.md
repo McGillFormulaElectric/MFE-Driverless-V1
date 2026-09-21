@@ -21,7 +21,7 @@ McGill Formula Electric Driverless V1 — system overview, data-flow, TF frames,
                 └──┬──────────┬─────┘
                    │          │
     /lidar/points_raw    /camera/image_raw
-    /ground_truth/state_odom
+    /ground_truth/state_odom  →  xsens_noise_node  →  /sim/xsens/state_odom (pose_topic)
     /planning/cones  (no_perception mode only)
                    │          │
      ┌─────────────▼──┐   ┌───▼──────────────────┐
@@ -102,7 +102,10 @@ map
 | `/ground_truth/track` | eufs_msgs/ConeArrayWithCovariance | EUFS sim | bridge |
 | `/ground_truth/cones` | eufs_msgs/ConeArrayWithCovariance | EUFS sim | bridge |
 | `/ground_truth/state` | eufs_msgs/CarState | EUFS sim | bridge |
-| `/ground_truth/state_odom` | nav_msgs/Odometry | bridge | path_planner (sim), finish_detector (sim) |
+| `/imu` | sensor_msgs/Imu | Xsens MTi-670G (hardware only) | ekf_node |
+| `/gps` | sensor_msgs/NavSatFix | Xsens MTi-670G (hardware only) | ekf_node |
+| `/ground_truth/state_odom` | nav_msgs/Odometry | bridge | xsens_noise_node |
+| `/sim/xsens/state_odom` | nav_msgs/Odometry | xsens_noise_node | path_planner (sim), finish_detector (sim) — via pose_topic |
 | `/ground_truth/cones_colored` | mfe_msgs/Track | bridge | perception_evaluator |
 | `/planning/cones` | mfe_msgs/Track | bridge (no_perception) / boundary_extractor | path_planner |
 | `/perception/cones_uncolored` | PointCloud2 | lidar_cone_detector | boundary_extractor |

@@ -52,9 +52,9 @@ docker run ... mfe-driverless-sim bash launch_sim.sh ...
 
 **Fix**: Ensure `publish_gt_tf:=true` (this is the default in `launch_sim.sh`).
 
-**Root cause B**: `pose_topic` mismatch. In sim, path planner must use `/ground_truth/state_odom`; if it's set to `/ekf/output` and the EKF has no GPS signal in sim, the car has no pose.
+**Root cause B**: `pose_topic` mismatch. In sim, path planner must use `/sim/xsens/state_odom`; if it's set to `/ekf/output` and the EKF has no GPS signal in sim, the car has no pose.
 
-**Fix**: Pass `pose_topic:=/ground_truth/state_odom` (set automatically in no_perception mode by `launch_sim.sh`).
+**Fix**: Pass `pose_topic:=/sim/xsens/state_odom` (set automatically by `launch_sim.sh`). Don't use raw `/ground_truth/state_odom` as pose_topic — see [[simulation_guide]] on why it was replaced with the noise-injected topic.
 
 ---
 

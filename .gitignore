@@ -31,3 +31,4 @@
 /CMakeFiles
 **/resource
 # rosbags and database instances
+ros2/src/eufs_*/

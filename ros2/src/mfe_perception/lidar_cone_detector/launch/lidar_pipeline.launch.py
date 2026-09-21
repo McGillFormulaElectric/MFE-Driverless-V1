@@ -42,32 +42,25 @@ def generate_launch_description():
         condition=IfCondition(sliding_window_value)
     )
 
-    # RANSAC Ground Plane Removal after downsampling in preprocessor 
-    ground_plane_removal_node = Node(
+    # Unified GPU perception pipeline: filter + ground removal + clustering + centroids
+    lidar_perception_node = Node(
         package='lidar_cone_detector',
-        namespace='lidar',
-        name='ground_plane_removal_node',
-        executable='ground_plane_removal',
+        executable='lidar_perception_node',
+        name='lidar_perception_node',
         output='screen',
         emulate_tty=True,
         parameters=[
-            {"run_visualization": False},
-            {'lidar_frame': 'lidar_base'}, # basic lidar frame
+            {'lidar_frame_id': 'velodyne'},
+            {'ground_threshold': 0.1},
+            {'leaf_size': 0.05},
+            {'cluster_tolerance': 0.2},
+            {'min_cluster_size': 5},
+            {'max_cluster_size': 50},
+            {'min_intensity': 0.0},   # set to ~100.0 on real VLP-16 (retroreflective tape); keep 0 in sim
         ],
-        # Old remapping: ('pcl/input', '/mfe_sensors/lidar/data'), # Remap to pcl/acc_cloud if using sliding win.
-    )
-
-    # DBSCAN Unsupervised Point Clustering for Cone Detection
-    cone_detector_node = Node(
-        package='lidar_cone_detector',
-        namespace='lidar',
-        name='cone_detector_node',
-        executable='detected_cones',
-        output='screen',
-        emulate_tty=True,
-        arguments=[
-            '--verbose'
-        ]
+        remappings=[
+            ('/lidar/points_raw', '/velodyne_points'),
+        ],
     )
 
     # Convert to LaserScan for use in 2D Ceres Solver slam_toolbox (Graph-SLAM based)
@@ -116,9 +109,8 @@ def generate_launch_description():
         load_file_arg,
         sliding_window_arg,
         file_loader_node,
-        sliding_window_preprocessor_node, 
-        ground_plane_removal_node,
-        cone_detector_node,
+        sliding_window_preprocessor_node,
+        lidar_perception_node,
         # cone_transformer_node, # FOR SOME REASON THIS LOADS THE FILE. NO IDEA
         # lidar_tf_broadcaster_node,
         # launch_pc_to_ls,

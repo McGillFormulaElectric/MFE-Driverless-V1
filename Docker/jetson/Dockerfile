@@ -67,7 +67,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ────────────────────────────────────────────────────────
-RUN pip3 install --no-cache-dir \
+RUN pip3 install --upgrade pip && pip3 install uv
+
+RUN uv --no-cache pip install --system \
     ft-fsd-path-planning \
     ultralytics \
     numpy \

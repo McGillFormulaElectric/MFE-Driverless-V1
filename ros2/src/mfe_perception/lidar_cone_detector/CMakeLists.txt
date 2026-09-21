@@ -18,10 +18,6 @@ ament_auto_find_build_dependencies()
 
 ament_auto_generate_code()
 
-ament_auto_add_library(${PROJECT_NAME}
-  DIRECTORY src
-)
-
 ament_auto_add_executable(lidar_preprocessor
   src/lidar_preprocessor.cpp
 )
@@ -112,6 +108,7 @@ install(TARGETS
   lidar_preprocessor
   ground_plane_removal
   file_loader
+  detected_cones
   lidar_perception_node
   DESTINATION lib/${PROJECT_NAME}
 )

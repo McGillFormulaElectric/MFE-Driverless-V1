@@ -46,6 +46,22 @@ def generate_launch_description():
         ),
 
         # ---------------------------------------------------------------- #
+        #  Xsens MTi-670G noise injector                                      #
+        #                                                                    #
+        #  /ground_truth/state_odom (perfect) -> /sim/xsens/state_odom       #
+        #  (noise-corrupted, representative of the real MTi-670G). Point     #
+        #  pose_topic at the noisy topic instead of raw ground truth so sim  #
+        #  runs actually exercise the stack against sensor-realistic pose    #
+        #  estimates. See mfe_eufs_sim/xsens_noise_node.py for the model.    #
+        # ---------------------------------------------------------------- #
+        Node(
+            package='mfe_eufs_sim',
+            executable='xsens_noise_node',
+            name='xsens_noise_node',
+            output='screen',
+        ),
+
+        # ---------------------------------------------------------------- #
         #  Static TF publishers                                              #
         #                                                                    #
         #  These connect the EUFS sim TF frames to the frames the           #

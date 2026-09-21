@@ -16,7 +16,7 @@ Prerequisites on each Jetson:
 
 Usage (sim — one Jetson for compute):
   ros2 launch mfe_bringup fleet.launch.py \\
-    pose_topic:=/ground_truth/state_odom \\
+    pose_topic:=/sim/xsens/state_odom \\
     use_slam:=false use_ekf:=false
 
 Usage (real car — two Jetsons):

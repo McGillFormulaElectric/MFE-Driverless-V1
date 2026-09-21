@@ -35,14 +35,14 @@ The host must be on the same `/26` subnet as the LiDAR (`10.37.1.192/26`).
 
 ### One-shot (not persistent across reboots)
 ```bash
-sudo ip addr add 10.37.1.195/26 dev enP8p1s0
+sudo ip addr add 10.37.1.193/26 dev enP8p1s0
 sudo ip link set enP8p1s0 up
 ```
 
 ### Persistent via NetworkManager (nmcli)
 ```bash
 sudo nmcli con add type ethernet ifname enP8p1s0 con-name lidar-eth \
-  ip4 10.37.1.195/26
+  ip4 10.37.1.193/26
 
 sudo nmcli con up lidar-eth
 ```
@@ -96,11 +96,10 @@ After freeing space, retry `git pull`.
 
 | Address           | Role                |
 |-------------------|---------------------|
-| `10.37.1.192`     | Network address     |
-| `10.37.1.193`     | Gateway             |
-| `10.37.1.194`     | LiDAR sensor        |
-| `10.37.1.195–254` | Available for host  |
-| `10.37.1.255`     | Broadcast           |
+| `10.37.1.192`     | Network address          |
+| `10.37.1.193`     | Host (`mfe-driverless-2`) |
+| `10.37.1.194`     | LiDAR sensor (VLP-16)    |
+| `10.37.1.255`     | Broadcast                |
 
 ---
 

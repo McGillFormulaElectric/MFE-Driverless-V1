@@ -1,0 +1,68 @@
+name: Unit Tests (Algorithms + Gazebo)
+
+on:
+  push:
+    branches: [ main, neil-* ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  algorithm-tests:
+    name: Algorithm Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-timeout rosbags scipy numpy
+
+      - name: Run algorithm unit tests
+        run: |
+          cd MFE-V1-unit-tests
+          python -m pytest ros2/src/mfe_state_estimation/test/test_ekf_filter.py \
+                           ros2/src/mfe_path_planning/test/test_speed_profile.py \
+                           ros2/src/mfe_path_planning/test/test_finish_detector.py \
+                           ros2/src/mfe_path_planning/test/test_cone_tracking.py \
+                           ros2/src/mfe_control/test/test_mpc_lateral.py \
+                           ros2/src/mfe_control/test/test_supervisor_obb.py \
+                           -v --tb=short --timeout=300
+
+  rosbag-tests:
+    name: RosBag Integration Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-timeout rosbags scipy numpy
+
+      - name: Run rosbag tests
+        run: |
+          cd MFE-V1-unit-tests
+          python -m pytest ros2/src/mfe_perception/test/test_rosbag_lidar.py \
+                           ros2/src/mfe_state_estimation/test/test_rosbag_ekf.py \
+                           ros2/src/mfe_path_planning/test/test_rosbag_path_planning.py \
+                           -v --tb=short --timeout=300
