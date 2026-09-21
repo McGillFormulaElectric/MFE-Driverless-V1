@@ -20,30 +20,22 @@ class ExtendedKalmanFilterNode(Node):
     def __init__(self):
         super().__init__("ekf_node")
 
-        self.declare_parameter("imu_frequency", value=20)
-        self.declare_parameter("gps_frequency", value=2)
-        self.imu_freq = self.get_parameter("imu_frequency").get_parameter_value().integer_value
-        self.gps_freq = self.get_parameter("gps_frequency").get_parameter_value().integer_value
+        self.declare_parameter("imu_frequency", 20)
+        self.declare_parameter("gps_frequency", 2)
+        self.declare_parameter("imu_topic", "/imu/data")
+        self.declare_parameter("gps_topic", "/gps")
+        self.declare_parameter("var_imu_acc", [0.02, 0.02])
+        self.declare_parameter("var_imu_w", 0.01)
+        self.declare_parameter("var_gps", [1.0, 1.0, 1.0])
+        self.declare_parameter("output_topic", "/ekf/output")
 
-        # Configure necessary topics names to subscribe to
-        self.declare_parameter("imu_topic", value="/imu/data")
-        self.declare_parameter("gps_topic", value="/gps")
-
-        self.imu_topic_name = self.get_parameter("imu_topic").get_parameter_value().string_value
-        self.gps_topic_name = self.get_parameter("gps_topic").get_parameter_value().string_value
-
-        # Declare and configure covariance matrices (which indicate noise) in the EKF
-        self.declare_parameter("var_imu_acc")
-        self.declare_parameter("var_imu_w")
-        self.declare_parameter("var_gps")
-
-        self.var_imu_acc = self.get_parameter("var_imu_acc").get_parameter_value().double_array_value
-        self.var_imu_w = self.get_parameter("var_imu_w").get_parameter_value().double_value
-
-        self.var_gps_param = self.get_parameter("var_gps").get_parameter_value().double_array_value
-        self.var_gps = np.array(self.var_gps_param)
-
-        self.declare_parameter("output_topic", value="/ekf/output")
+        self.imu_freq = self.get_parameter("imu_frequency").value
+        self.gps_freq = self.get_parameter("gps_frequency").value
+        self.imu_topic_name = self.get_parameter("imu_topic").value
+        self.gps_topic_name = self.get_parameter("gps_topic").value
+        self.var_imu_acc = self.get_parameter("var_imu_acc").value
+        self.var_imu_w = self.get_parameter("var_imu_w").value
+        self.var_gps = np.array(self.get_parameter("var_gps").value)
         self.output_topic_name = self.get_parameter("output_topic")
 
         self.create_subscription(

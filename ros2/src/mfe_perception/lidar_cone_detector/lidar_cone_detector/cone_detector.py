@@ -157,56 +157,22 @@ class LiDARConeNode(Node):
             # Remove NaNs
             points = points[~np.isnan(points).any(axis=1)]
 
-            if points.size == 0 or len(points) == 0:
-                self.get_logger().warn("No valid points received")
+            if points.size == 0:
                 return
 
-            # FILTER: Remove points that are outside of lidar range or min range
-            # point_norms = np.linalg.norm(points, axis=1)  # axis=1 -> row-wise norm
-            # TODO: tune better range values, these were chosen visually
-            # mask = (point_norms < 8) & (point_norms > 2)  # keep points within range
-            # points = points[mask]
-            # NO FILTERING FOR NOW - PARAMETERS MUST BE TUNED
-
-            # run cluster detection
             objects, object_centres = self.find_clusters(points)
 
             if object_centres.size == 0:
-                self.get_logger().debug("No clusters found")
                 return
 
-            # FILTER: removes the non-cone clusters
-            # OPTIONAL: further filter clusters to cones
             cone_clusters, cone_locations = self.filter_cones(objects, object_centres)
-            # cone_clusters, cone_locations = objects, object_centres # no filtering for now for dev, parameters must be tuned
 
-            if cone_locations.size != 0:
-                centres_msg = self.make_pointcloud2_from_xyz(np.asarray(cone_locations), msg.header.frame_id, msg.header.stamp)
-                
             if len(cone_locations) == 0:
                 return
 
-            # TODO: Draw cylinders from the raw PointCloud and bring extra points back
-            # Create cone message types and chain them into an array 
-            # detected_cones: list = [self.create_cone_msg(cone[0], cone[1], cone[2]) for cone in cone_locations]
-
+            centres_msg = self.make_pointcloud2_from_xyz(np.asarray(cone_locations), msg.header.frame_id, msg.header.stamp)
+            track = [self.create_cone_msg(float(c[0]), float(c[1]), float(c[2]), 0) for c in cone_locations]
             track_msg = Track()
-            track = []
-
-            # Publish each cone individually, create Track message
-            for centre in cone_locations:
-                # TODO: determine cone color/type
-                cone_msg = self.create_cone_msg(float(centre[0]), float(centre[1]), float(centre[2]), 0)
-
-                # if Cone type needs header/frame, add that here (depends on message definition)
-                # cone_msg_header = Header()
-                # cone_msg_header.stamp = self.get_clock().now().to_msg()
-                # cone_msg_header.frame_id = msg.header.frame_id
-                # cone_msg = Cone(header=cone_msg_header, cones=rnp.msgify())
-
-                track.append(cone_msg)
-
-                self.get_logger().info(f"Publishing {cone_locations.shape[0]} centres to pcl/cone_centres")
                 self.cone_publisher.publish(cone_msg)
 
             # publish locs
