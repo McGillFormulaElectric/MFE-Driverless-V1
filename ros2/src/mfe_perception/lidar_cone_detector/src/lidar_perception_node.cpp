@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -8,6 +9,8 @@
 #include <pcl/filters/filter.h>
 #include <cfloat>
 #include <pcl/kdtree/kdtree_flann.h>
+#include <Eigen/Dense>
+#include "lidar_cone_detector/motion_distortion.hpp"
 
 // =================================================================================
 // 1. CONDITIONAL HEADERS (The Switch)
@@ -34,14 +37,17 @@
 class LidarPerceptionNode : public rclcpp::Node {
 public:
     LidarPerceptionNode() : Node("lidar_perception_node") {
-        // --- Parameters ---
-        this->declare_parameter("leaf_size", 0.05f); 
+        this->declare_parameter("leaf_size", 0.05f);
         this->declare_parameter("ground_threshold", 0.1f);
         this->declare_parameter("cluster_tolerance", 0.4f);
         this->declare_parameter("min_cluster_size", 3);
         this->declare_parameter("max_cluster_size", 150);
         this->declare_parameter("lidar_frame_id", "velodyne");
-        this->declare_parameter("min_intensity", 0.0);  // 0 = disabled; try 100.0 for real VLP-16
+        this->declare_parameter("min_intensity", 0.0);
+        this->declare_parameter("enable_motion_distortion", true);
+        this->declare_parameter("motion_scan_duration_sec", 0.1);
+        this->declare_parameter("high_intensity_threshold", 150.0);
+        this->declare_parameter("low_intensity_threshold", 50.0);
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -49,12 +55,23 @@ public:
         min_cluster_size_ = this->get_parameter("min_cluster_size").as_int();
         max_cluster_size_ = this->get_parameter("max_cluster_size").as_int();
         lidar_frame_id_ = this->get_parameter("lidar_frame_id").as_string();
-        min_intensity_  = this->get_parameter("min_intensity").as_double();
+        min_intensity_ = this->get_parameter("min_intensity").as_double();
+        enable_motion_distortion_ = this->get_parameter("enable_motion_distortion").as_bool();
+        motion_scan_duration_sec_ = this->get_parameter("motion_scan_duration_sec").as_double();
 
-        // --- Communication ---
+        distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>();
+        intensity_classifier_ = std::make_shared<perception::IntensityClassifier>(
+            this->get_parameter("high_intensity_threshold").as_double(),
+            this->get_parameter("low_intensity_threshold").as_double()
+        );
+
         sub_raw_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/lidar/points_raw", rclcpp::SensorDataQoS(),
             std::bind(&LidarPerceptionNode::cloud_callback, this, std::placeholders::_1));
+
+        sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "/ekf/output", rclcpp::SensorDataQoS(),
+            std::bind(&LidarPerceptionNode::odom_callback, this, std::placeholders::_1));
 
         // Output: List of 3D Cone Centroids (Uncolored) -> Goes to Fusion Node
         pub_centroids_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -73,8 +90,14 @@ public:
     }
 
 private:
+    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        last_vx_ = msg->twist.twist.linear.x;
+        last_vy_ = msg->twist.twist.linear.y;
+        last_omega_ = msg->twist.twist.angular.z;
+        distortion_corrector_->setEgoMotion(last_vx_, last_vy_, last_omega_);
+    }
+
     void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::fromROSMsg(*msg, *host_cloud);
         std::vector<int> nan_indices;
@@ -82,12 +105,17 @@ private:
 
         if (host_cloud->empty()) return;
 
-        // Load PointXYZI in parallel — used for intensity filtering after geometric pipeline
+        if (enable_motion_distortion_) {
+            host_cloud = distortion_corrector_->correctMotionDistortion(host_cloud, motion_scan_duration_sec_);
+        }
+
         pcl::PointCloud<pcl::PointXYZI>::Ptr host_cloud_i(new pcl::PointCloud<pcl::PointXYZI>);
         if (min_intensity_ > 0.0) {
             pcl::fromROSMsg(*msg, *host_cloud_i);
             std::vector<int> nan_i;
             pcl::removeNaNFromPointCloud(*host_cloud_i, *host_cloud_i, nan_i);
+
+            auto classified = intensity_classifier_->classify(host_cloud_i);
         }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -417,6 +445,7 @@ private:
     }
 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_raw_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_centroids_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
@@ -424,6 +453,12 @@ private:
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
     int min_cluster_size_, max_cluster_size_;
     std::string lidar_frame_id_;
+
+    bool enable_motion_distortion_;
+    double motion_scan_duration_sec_;
+    double last_vx_, last_vy_, last_omega_;
+    std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
+    std::shared_ptr<perception::IntensityClassifier> intensity_classifier_;
 };
 
 int main(int argc, char * argv[]) {
