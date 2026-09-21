@@ -4,7 +4,8 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
+
+QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
 from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFilter
 
@@ -49,13 +50,13 @@ class ExtendedKalmanFilterNode(Node):
             Imu,
             self.imu_topic_name,
             self.imu_callback,
-            SensorDataQoS()
+            QOS
         )
         self.create_subscription(
             NavSatFix,
             self.gps_topic_name,
             self.gps_callback,
-            SensorDataQoS()
+            QOS
         )
 
         self.odom_pub_ = self.create_publisher(Odometry, self.output_topic_name.value, 10)

@@ -7,8 +7,6 @@
 
 import numpy as np
 
-import time
-
 class ExtendedKalmanFilter:
 
 	def __init__(self, initial_state, initial_covariance, motion_model, observation_model, **kwargs) -> None :
@@ -28,35 +26,18 @@ class ExtendedKalmanFilter:
 		self.obs_noise_std = np.array(obs_noise_std)
 		self.Q = np.diag(self.obs_noise_std ** 2)
 
-		self.exec_times_pred = []
-		self.exec_times_upd = []
 
 		
 	def predict(self, u, dt):
 		"""Prediction step: propagate state and covariance via motion model."""
-		start_time = time.time()
 		self.mu = self.g(self.mu, u, dt)
 		self.Sigma = self.G(self.mu, u, dt) @ self.Sigma @ self.G(self.mu, u, dt).T + self.R
-
-		execution_time = time.time() - start_time
-		self.exec_times_pred.append(execution_time)
-		print(f"Execution time prediction: {execution_time} seconds")
-		print("Average exec time pred: ", sum(self.exec_times_pred) / len(self.exec_times_pred))
-
 		return self.mu, self.Sigma
 
 	def update(self, z, dt):
 		"""Correction step: fuse measurement via Kalman gain."""
-		start_time = time.time()
-
 		K = self.Sigma @ self.H(self.mu).T @ np.linalg.inv(self.H(self.mu) @ self.Sigma @ self.H(self.mu).T + self.Q)
 		innovation = z - self.h(self.mu)
 		self.mu = self.mu + (K @ innovation).reshape((self.mu.shape[0],))
 		self.Sigma = (np.eye(len(K)) - K @ self.H(self.mu)) @ self.Sigma
-
-		execution_time = time.time() - start_time
-		self.exec_times_upd.append(execution_time)
-		print(f"Execution time update: {execution_time} seconds")
-		print("Average exec time update: ", sum(self.exec_times_upd) / len(self.exec_times_upd))
-
 		return self.mu, self.Sigma

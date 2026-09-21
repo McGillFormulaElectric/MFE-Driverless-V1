@@ -61,7 +61,7 @@ class LiDARConeNode(Node):
 
     def find_clusters(self, points):
         """Return (cluster_list, centres) from DBSCAN on points (Nx3)."""
-        if points is None or len(points) == 0:
+        if not points or len(points) == 0:
             return [], np.empty((0, 3))
 
         pts = np.asarray(points)
@@ -71,24 +71,16 @@ class LiDARConeNode(Node):
 
         db = DBSCAN(eps=float(self.epsilon), min_samples=int(self.cluster_min_samples),
                     metric="euclidean", n_jobs=2).fit(pts)
-        labels = db.labels_
 
-        unique_labels = [lab for lab in np.unique(labels) if lab != -1]
-        objects = []
-        centres = []
-
-        for lab in unique_labels:
-            cluster_pts = pts[labels == lab]
-            if cluster_pts.size == 0:
+        objects, centres = [], []
+        for lab in np.unique(db.labels_):
+            if lab == -1:
                 continue
-
+            cluster_pts = pts[db.labels_ == lab]
             objects.append(cluster_pts)
             centres.append(np.mean(cluster_pts, axis=0))
 
-        if len(centres) == 0:
-            return objects, np.empty((0, 3))
-
-        return objects, np.vstack(centres)
+        return objects, np.vstack(centres) if centres else np.empty((0, 3))
 
     
 
