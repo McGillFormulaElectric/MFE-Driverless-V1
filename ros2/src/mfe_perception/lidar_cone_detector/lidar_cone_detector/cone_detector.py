@@ -29,23 +29,15 @@ class LiDARConeNode(Node):
             durability=DurabilityPolicy.VOLATILE
         )
 
-        # subscribe to the outputs of the ground removal script
-        # should be the pointcloud with the ground removed
         self.create_subscription(PointCloud2, "pcl/objects", self.callback, qos_profile)
-
-        # publishers - probably point cloud for debugging, then cones
-        self.point_cloud_publisher = self.create_publisher(PointCloud2, "pcl/objects2", qos_profile) # the pointcloud of detected cone clusters
-        self.cone_publisher = self.create_publisher(Cone, "pcl/cones", qos_profile) # the cone locations (can be visualized in rviz)
-        self.track_publisher = self.create_publisher(Track, "pcl/track", qos_profile) # all cones in an array
-
-        # publish centres as a small pointcloud (one point per cone)
+        self.point_cloud_publisher = self.create_publisher(PointCloud2, "pcl/objects2", qos_profile)
+        self.cone_publisher = self.create_publisher(Cone, "pcl/cones", qos_profile)
+        self.track_publisher = self.create_publisher(Track, "pcl/track", qos_profile)
         self.centres_cloud_publisher = self.create_publisher(PointCloud2, "pcl/cone_centres", qos_profile)
 
 
     def init_params(self):
-        """
-        Initializes the parameters of the node using rclpy
-        """
+        """Load DBSCAN hyperparameters from config."""
         self.declare_parameter("dbscan_cluster_min_samples", value=3)
         self.cluster_min_samples = self.get_parameter("dbscan_cluster_min_samples").value
 
@@ -56,13 +48,10 @@ class LiDARConeNode(Node):
     
     
     def create_cone_msg(self, x: float, y: float, z: float, cone_color: int):
-        """
-        Creates a message of type Cone given a location
-
-        """
+        """Create a Cone message from (x,y,z) and color enum."""
         if (cone_color not in [0, 1, 2, 3, 4]):
             raise Exception("MessageCreationException")
-        
+
         location = Point()
         location.x = x
         location.y = y
@@ -71,35 +60,23 @@ class LiDARConeNode(Node):
     
 
     def find_clusters(self, points):
-        """
-        Applies DBSCAN clustering algorithm to an np array of points (N x 3) - the point cloud received.
-        Returns: (objects_list, object_centres_array)
-        objects_list: list of (M_i x 3) numpy arrays
-        object_centres_array: (K x 3) numpy array of cluster centres
-        """
-
+        """Return (cluster_list, centres) from DBSCAN on points (Nx3)."""
         if points is None or len(points) == 0:
             return [], np.empty((0, 3))
-        
-        # ensure shape (N,3)
+
         pts = np.asarray(points)
         if pts.ndim != 2 or pts.shape[1] != 3:
             self.get_logger().warn("Unexpected point shape for clustering")
             return [], np.empty((0, 3))
 
-        # apply DBSCAN clustering
         db = DBSCAN(eps=float(self.epsilon), min_samples=int(self.cluster_min_samples),
                     metric="euclidean", n_jobs=2).fit(pts)
         labels = db.labels_
 
-        # gets clusters by only getting unique labels
         unique_labels = [lab for lab in np.unique(labels) if lab != -1]
-        # self.get_logger().info(f"Unique Labels: {unique_labels}")
-
         objects = []
-        centres = [] # arrays for objects and their centres
+        centres = []
 
-        # iterate over each cluster and calculate mean 
         for lab in unique_labels:
             cluster_pts = pts[labels == lab]
             if cluster_pts.size == 0:
@@ -107,7 +84,6 @@ class LiDARConeNode(Node):
 
             objects.append(cluster_pts)
             centres.append(np.mean(cluster_pts, axis=0))
-            # self.get_logger().info(f"Cluster {lab} centre: {centres[-1]}")
 
         if len(centres) == 0:
             return objects, np.empty((0, 3))
@@ -117,34 +93,23 @@ class LiDARConeNode(Node):
     
 
     def filter_cones(self, objects, object_centres):
-        """
-        Filters the cones using data validation of measuring diameter.
-        Placeholder filter — keep as-is or refine later. Expects objects list and centres array.
-        """
-
+        """Filter clusters by size and spatial extent."""
         if len(objects) == 0:
             return [], np.empty((0, 3))
-        
-        # Ensure object_centres is a numpy array for easy indexing
+
         if isinstance(object_centres, list):
             object_centres = np.array(object_centres)
 
-        mask = np.zeros(len(objects),dtype=bool)
+        mask = np.zeros(len(objects), dtype=bool)
 
         for i, cluster in enumerate(objects):
-
-            # Skip clusters that are too large or too small
-            if cluster.shape[0] < 5 or cluster.size > 70: # TODO: tune these thresholds
+            if cluster.shape[0] < 5 or cluster.size > 70:
                 continue
-                
-            # Compute distances from cluster points to its centroid
+
             dists = np.linalg.norm(cluster - object_centres[i][:3], axis=1)
-
-            # Skip clusters that are too wide
-            if np.max(dists) > 150:  # TODO: tune cone size threshold if needed
+            if np.max(dists) > 150:
                 continue
 
-            # Cluster passes all filters
             mask[i] = True
 
         # Extract filtered clusters
