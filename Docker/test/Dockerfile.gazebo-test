@@ -1,0 +1,48 @@
+FROM mfe/a2:humble
+
+# Add Gazebo (Fortress/11) and common ROS2 packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-gazebo-ros \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-plugins \
+    ros-humble-pointcloud-to-laserscan \
+    ros-humble-slam-toolbox \
+    ros-humble-nav2-bringup \
+    xvfb \
+    x11-utils \
+    mesa-utils \
+    libgl1-mesa-glx \
+    libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# EUFS sim dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    cmake \
+    libeigen3-dev \
+    libboost-all-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# EUFS sim will be cloned and built at runtime (not in Dockerfile)
+# This is more reliable than building in Docker RUN command
+
+# Python test deps (use pytest 7.x compatible with launch-testing from ROS2 Humble)
+RUN pip3 install 'pytest<8' pytest-timeout rosbags scipy numpy
+
+# Source both ROS base and workspace on every command
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
+    echo "[ -f /ws/install/setup.bash ] && source /ws/install/setup.bash" >> /root/.bashrc
+
+WORKDIR /ws
+
+# Headless Gazebo env vars (no display needed)
+ENV DISPLAY=
+ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV GAZEBO_HEADLESS=1
+ENV GAZEBO_MODEL_DATABASE_URI=
+ENV GAZEBO_MASTER_URI=http://localhost:11345
+ENV IGN_GAZEBO_RESOURCE_PATH=/usr/share/gazebo-11
+
+# Simple bash entrypoint
+CMD ["bash"]

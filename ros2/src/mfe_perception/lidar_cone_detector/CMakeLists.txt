@@ -39,7 +39,14 @@ target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 ament_auto_add_executable(lidar_perception_node
   src/lidar_perception_node.cpp
 )
-target_link_libraries(lidar_perception_node ${PCL_LIBRARIES})
+target_include_directories(lidar_perception_node PRIVATE
+  include
+  ${Eigen3_INCLUDE_DIRS}
+)
+target_link_libraries(lidar_perception_node
+  ${PCL_LIBRARIES}
+  Eigen3::Eigen
+)
 
 # GPU path: auto-detect CUDA toolkit + cuda-pcl, fall back to CPU PCL if either is missing.
 find_package(CUDA QUIET)
