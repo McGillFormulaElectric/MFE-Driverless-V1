@@ -51,7 +51,7 @@ import numpy as np
 from std_msgs.msg import Bool, String
 from sensor_msgs.msg import PointCloud2, NavSatFix
 from nav_msgs.msg import Odometry
-from mfe_msgs.msg import Cone, Track
+from mfe_msgs.msg import Track
 
 
 # ---------------------------------------------------------------------------

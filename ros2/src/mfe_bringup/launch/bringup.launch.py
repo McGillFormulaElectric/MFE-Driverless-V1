@@ -26,7 +26,7 @@ from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, GroupAction, IncludeLaunchDescription, LogInfo,
     OpaqueFunction,
 )
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -198,15 +198,12 @@ def generate_launch_description():
     )
 
     mission = LaunchConfiguration('mission')
-    vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
-    endless = LaunchConfiguration('endless')
     use_slam = LaunchConfiguration('use_slam')
     use_ekf = LaunchConfiguration('use_ekf')
     run_perception = LaunchConfiguration('run_perception')
     run_compute = LaunchConfiguration('run_compute')
-    max_speed = LaunchConfiguration('max_speed')
     record_bag = LaunchConfiguration('record_bag')
     bag_output_dir = LaunchConfiguration('bag_output_dir')
 
