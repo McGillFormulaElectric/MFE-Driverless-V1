@@ -10,7 +10,7 @@ SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, hi
 import tf2_ros
 from tf2_ros import TransformException
 
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import PointCloud2
 from mfe_msgs.msg import Cone, Track
 from std_msgs.msg import Header
 
@@ -49,7 +49,6 @@ def pointcloud2_to_xyz(msg: PointCloud2) -> np.ndarray:
 
 def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
     """Apply a geometry_msgs/TransformStamped to an Nx3 float32 array."""
-    import math
     t = transform.transform
     tx, ty, tz = t.translation.x, t.translation.y, t.translation.z
     qx, qy, qz, qw = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w

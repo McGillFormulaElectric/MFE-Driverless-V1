@@ -7,7 +7,6 @@ without a ROS2 environment (plain `pytest` or `colcon test`).
 
 import sys
 import types
-import pytest
 
 
 def _install_ros_mocks():
