@@ -404,7 +404,6 @@ class MPCLateralNode(Node):
         # ------------------------------------------------------------------
         Q = np.diag([self._Q_ey, self._Q_eyaw])
         P = self._P_scale * Q
-        R = self._R_delta * np.eye(1)
 
         # Q̄: stage costs on steps 1..N−1 use Q; step N uses P
         Q_bar = np.zeros((2 * N, 2 * N))
@@ -549,14 +548,6 @@ class MPCLateralNode(Node):
         # Build bounds list for scipy: list of (lb_i, ub_i) per variable
         # Box constraints (first N rows of A_con = I_N) are already per-variable bounds
         bounds = [(-self._max_steer_rad, self._max_steer_rad)] * N
-
-        # Rate constraints: linear inequalities via scipy LinearConstraint
-        from scipy.optimize import LinearConstraint
-        rate_constraint = LinearConstraint(
-            A_con[N:, :],       # D matrix
-            lb[N:],             # lower bounds on D·u
-            ub[N:],             # upper bounds on D·u
-        )
 
         def objective(u):
             return 0.5 * float(u @ H @ u) + float(f @ u)
