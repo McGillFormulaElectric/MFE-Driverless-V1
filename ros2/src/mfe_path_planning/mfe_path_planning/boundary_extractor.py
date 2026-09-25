@@ -8,12 +8,16 @@ from scipy.optimize import linear_sum_assignment
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
+
+
+def SensorDataQoS():
+    return QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
+
 
 import tf2_ros
 from tf2_ros import TransformException
 
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import PointCloud2
 from mfe_msgs.msg import Cone, Track
 from std_msgs.msg import Header
 
@@ -104,11 +108,20 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
 
 class BoundaryExtractor(Node):
 
-    MATCH_RADIUS = 0.5   # meters — max distance to associate LiDAR centroid with camera cone
-    GT_MATCH_RADIUS = 2.0  # meters — looser match for GT color fallback
+    MATCH_RADIUS    = 0.5   # m — max distance to associate LiDAR centroid with camera cone
+    GT_MATCH_RADIUS = 2.0   # m — looser match for GT color fallback
+    GRID_STEP       = 0.3   # m — spatial bin size for confidence tracking
 
     def __init__(self):
         super().__init__('boundary_extractor')
+
+        self.declare_parameter('min_observations', 3)   # frames a cone must appear before publishing
+        self.declare_parameter('confidence_decay', 1)   # how much to subtract each frame it's not seen
+        self._min_obs     = int(self.get_parameter('min_observations').value)
+        self._conf_decay  = int(self.get_parameter('confidence_decay').value)
+
+        # confidence_map: grid key -> [count, color, x, y, z]
+        self._confidence_map: dict = {}
 
         self._lidar_pts: np.ndarray = np.zeros((0, 3), dtype=np.float32)   # Nx3
         self._camera_cones: list = []   # list of mfe_msgs/Cone
@@ -412,8 +425,12 @@ class BoundaryExtractor(Node):
         # --- Step 3: Hungarian + Kalman tracking ---
         confirmed = self._update_tracks(fused)
 
-        # Build stable cone list from confirmed tracks
-        stable_cones: list[Cone] = []
+        # Build cone list from confirmed (Kalman-smoothed) tracks. This feeds
+        # the temporal confidence filter below rather than the final publish
+        # list directly, so both persistency mechanisms genuinely combine:
+        # Hungarian+Kalman confirms track identity/position, and the grid
+        # confidence filter adds a second, coarser persistency gate on top.
+        tracked_cones: list[Cone] = []
         for t in confirmed:
             c = Cone()
             c.header.stamp = now
@@ -422,11 +439,11 @@ class BoundaryExtractor(Node):
             c.location.y = float(t.state[1])
             c.location.z = 0.0
             c.color = t.color
-            stable_cones.append(c)
+            tracked_cones.append(c)
 
         # Diagnostics
         color_counts: dict = {}
-        for c in stable_cones:
+        for c in tracked_cones:
             color_counts[c.color] = color_counts.get(c.color, 0) + 1
         self.get_logger().info(
             f'detections={len(fused)} '
@@ -434,6 +451,53 @@ class BoundaryExtractor(Node):
             f'tracks_confirmed={len(confirmed)} '
             f'| lidar={len(lidar_pts)} gt_src={len(self._gt_cones)} '
             f'cam={len(camera_cones)} colors={color_counts}',
+            throttle_duration_sec=2.0)
+
+        # ---- Temporal confidence filtering ----
+        # Accumulate confidence for each Kalman-confirmed cone seen this frame;
+        # decay unseen cones. Only publish cones that have been consistently
+        # observed (min_observations).
+        step = self.GRID_STEP
+        seen_keys: set = set()
+        for cone in tracked_cones:
+            gx = round(cone.location.x / step) * step
+            gy = round(cone.location.y / step) * step
+            key = (gx, gy)
+            seen_keys.add(key)
+            if key in self._confidence_map:
+                entry = self._confidence_map[key]
+                entry[0] = min(entry[0] + 1, 20)   # cap at 20
+                entry[1] = cone.color               # update color with latest
+            else:
+                self._confidence_map[key] = [1, cone.color,
+                                             cone.location.x, cone.location.y, cone.location.z]
+
+        # Decay unseen cones; remove if confidence drops to zero
+        to_remove = []
+        for key, entry in self._confidence_map.items():
+            if key not in seen_keys:
+                entry[0] -= self._conf_decay
+                if entry[0] <= 0:
+                    to_remove.append(key)
+        for key in to_remove:
+            del self._confidence_map[key]
+
+        # Publish only cones with sufficient confidence
+        stable_cones: list[Cone] = []
+        for key, (count, color, x, y, z) in self._confidence_map.items():
+            if count >= self._min_obs:
+                c = Cone()
+                c.header.stamp    = now
+                c.header.frame_id = 'map'
+                c.location.x = x
+                c.location.y = y
+                c.location.z = z
+                c.color      = color
+                stable_cones.append(c)
+
+        self.get_logger().info(
+            f'temporal filter: raw={len(fused)} stable={len(stable_cones)} '
+            f'tracked={len(self._confidence_map)}',
             throttle_duration_sec=2.0)
 
         track_msg = Track()

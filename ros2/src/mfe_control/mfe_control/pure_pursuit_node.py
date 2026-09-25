@@ -13,10 +13,14 @@ from std_msgs.msg import Bool, Header, Float64MultiArray
 
 class PurePursuitNode(Node):
     """
-    Pure pursuit lateral controller with lookahead velocity profile.
+    Pure pursuit lateral controller with adaptive look-ahead and velocity profile.
 
-    Steering:  pure pursuit geometry (classic) + PT2 feedforward anticipator
-               to compensate ~50ms actuator lag.
+    Steering:  pure pursuit geometry (classic) with adaptive look-ahead distance
+               (ld = K_v * v * sqrt(1 + κ²), where κ is local path curvature,
+               clamped to [ld_min, ld_max]; this formula increases ld on curves,
+               improving anticipation and reducing oscillation on curvy sections)
+               plus a PT2 feedforward anticipator applied to the resulting steering
+               command to compensate ~50ms actuator lag.
     Speed:     scan upcoming path curvature → compute corner speed targets
                → brake hard if within stopping distance, full throttle otherwise.
                PI closed-loop velocity controller converts v_target to throttle.
@@ -33,7 +37,12 @@ class PurePursuitNode(Node):
         super().__init__('pure_pursuit_node')
 
         # --- Parameters ---
-        self.declare_parameter('lookahead_distance', 5.0)
+        # K_v: look-ahead gain (m per m/s). Base ld = K_v * v.
+        # At 10 m/s this gives ld=5.0 m (same as the old fixed default).
+        self.declare_parameter('K_v', 0.5)
+        # Adaptive look-ahead clamp bounds (metres)
+        self.declare_parameter('ld_min', 0.5)
+        self.declare_parameter('ld_max', 15.0)
         self.declare_parameter('max_speed', 10.0)
         self.declare_parameter('wheelbase', 1.56)
         self.declare_parameter('max_steering_deg', 25.0)
@@ -55,7 +64,9 @@ class PurePursuitNode(Node):
         self.declare_parameter('speed_kp', 0.5)
         self.declare_parameter('speed_ki', 0.1)
 
-        self._lookahead_distance   = self.get_parameter('lookahead_distance').value
+        self._K_v                  = self.get_parameter('K_v').value
+        self._ld_min               = self.get_parameter('ld_min').value
+        self._ld_max               = self.get_parameter('ld_max').value
         self._max_speed            = self.get_parameter('max_speed').value
         self._wheelbase            = self.get_parameter('wheelbase').value
         self._max_steering_rad     = math.radians(self.get_parameter('max_steering_deg').value)
@@ -108,7 +119,8 @@ class PurePursuitNode(Node):
 
         self.get_logger().info(
             f'pure_pursuit_node started | '
-            f'lookahead={self._lookahead_distance} m  max_speed={self._max_speed} m/s  '
+            f'K_v={self._K_v}  ld=[{self._ld_min},{self._ld_max}] m  '
+            f'max_speed={self._max_speed} m/s  '
             f'a_lat={self._max_lateral_accel} m/s²  a_brake={self._max_deceleration} m/s²  '
             f'scan={self._lookahead_waypoints} wp  '
             f'PT2 tau={self._pt2_tau} zeta={self._pt2_zeta}  '
@@ -156,7 +168,15 @@ class PurePursuitNode(Node):
             self._publish_command(0.0, 0.0, 0.0)
             return
 
-        lookahead_point = self._find_lookahead_point()
+        # --- Adaptive look-ahead: ld = K_v * v * sqrt(1 + κ²) ---
+        # κ is sampled from the waypoints near the vehicle's current position
+        # so ld is determined before searching for the lookahead point.
+        v = self._car_speed if self._car_speed is not None else 0.0
+        kappa = self._local_curvature_at_idx(self._path_idx)
+        ld = self._K_v * v * math.sqrt(1.0 + kappa ** 2)
+        ld = max(self._ld_min, min(self._ld_max, ld))
+
+        lookahead_point = self._find_lookahead_point(ld)
         if lookahead_point is None:
             self._reset_controller_state()
             self._publish_command(0.0, 0.0, 0.0)
@@ -168,7 +188,7 @@ class PurePursuitNode(Node):
         alpha = math.atan2(dy, dx) - self._car_yaw
         alpha = math.atan2(math.sin(alpha), math.cos(alpha))
 
-        steering_rad  = math.atan2(2.0 * self._wheelbase * math.sin(alpha), self._lookahead_distance)
+        steering_rad  = math.atan2(2.0 * self._wheelbase * math.sin(alpha), ld)
         steering_norm = max(-1.0, min(1.0, steering_rad / self._max_steering_rad))
 
         # Apply PT2 feedforward anticipator to compensate steering actuator lag
@@ -242,14 +262,7 @@ class PurePursuitNode(Node):
                 and self._path_idx < len(self._target_speeds)):
             v_target = float(self._target_speeds[self._path_idx])
             v_target = max(0.5, min(v_target, self._max_speed))
-            # Still apply the PI controller (or ramp logic) with this v_target
-            # ... (keep the existing d_brake / ramp_dist block below, just skip the curvature scan)
-            d_brake = max(0.0, (v_now**2 - v_target**2) / (2.0 * self._max_deceleration))
-            ramp_dist = max(20.0, d_brake * 5.0)
-            dist_to_target = 0.0   # already at the constraint point
-            if v_target < self._max_speed:
-                return (max(0.1, v_target / self._max_speed), 0.0)
-            return (1.0, 0.0)
+            return v_target
         # else: fall through to existing curvature scan
 
         path     = self._path
@@ -327,15 +340,44 @@ class PurePursuitNode(Node):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _local_curvature_at_idx(self, idx: int) -> float:
+        """
+        Estimate the Menger curvature κ at `idx` from the surrounding waypoints.
+
+        Uses a window of ±2 waypoints averaged to reduce noise from sparse
+        waypoints. Returns 0.0 when there are not enough points.
+        """
+        path = self._path
+        if path is None or len(path) < 3:
+            return 0.0
+
+        n = len(path)
+        kappas = []
+        # Sample a few triplets centred near idx
+        for centre in range(max(1, idx - 2), min(n - 1, idx + 3)):
+            p0 = path[centre - 1]
+            p1 = path[centre]
+            p2 = path[centre + 1] if centre + 1 < n else path[centre]
+            dx1 = p1[0] - p0[0];  dy1 = p1[1] - p0[1]
+            dx2 = p2[0] - p1[0];  dy2 = p2[1] - p1[1]
+            cross = abs(dx1 * dy2 - dy1 * dx2)
+            l1 = math.hypot(dx1, dy1)
+            l2 = math.hypot(dx2, dy2)
+            if l1 < 0.01 or l2 < 0.01:
+                continue
+            # Menger curvature κ = |cross| / (l1 · l2 · (l1+l2)/2)
+            kappas.append(cross / (l1 * l2 * (l1 + l2) / 2.0))
+
+        return sum(kappas) / len(kappas) if kappas else 0.0
+
     def _reset_controller_state(self):
         self._steer_prev1    = 0.0
         self._steer_prev2    = 0.0
         self._speed_integral = 0.0
 
-    def _find_lookahead_point(self):
+    def _find_lookahead_point(self, ld: float):
         path = self._path
         car_x, car_y = self._car_x, self._car_y
-        ld = self._lookahead_distance
 
         n = len(path)
         search_end = min(n, self._path_idx + 60)
