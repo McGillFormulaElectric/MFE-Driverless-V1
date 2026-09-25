@@ -63,17 +63,16 @@ class ExtendedKalmanFilter:
 		Executes the prediction step of the Extended Kalman Filter
 		"""
 		start_time = time.time()
-		# Predict state estimate (mu) 
+		# Predict state estimate (mu)
+		mu_prior = self.mu.copy()
 		self.mu = self.g(self.mu, u, dt)
-		# Predict covariance (Sigma)
-		self.Sigma = self.G(self.mu, u, dt) @ self.Sigma @ self.G(self.mu, u, dt).T + self.R 
+		# Predict covariance (Sigma) — G evaluated at prior mu, before state update
+		G = self.G(mu_prior, u, dt)
+		self.Sigma = G @ self.Sigma @ G.T + self.R
 
 		end_time = time.time()
 		execution_time = end_time - start_time
 		self.exec_times_pred.append(execution_time)
-		print(f"Execution time prediction: {execution_time} seconds")
-
-		print("Average exec time pred: ", sum(self.exec_times_pred) / len(self.exec_times_pred))
 
 
 		return self.mu, self.Sigma
@@ -84,22 +83,20 @@ class ExtendedKalmanFilter:
 		"""
 		start_time = time.time()
 
-		# Compute the Kalman gain (K)
-		K = self.Sigma @ self.H(self.mu).T @ np.linalg.inv(self.H(self.mu) @ self.Sigma @ self.H(self.mu).T + self.Q)
-		
-		# Update state estimate (mu) 
+		# Compute the Kalman gain (K) — H evaluated at pre-update mu
+		H = self.H(self.mu)
+		K = self.Sigma @ H.T @ np.linalg.inv(H @ self.Sigma @ H.T + self.Q)
+
+		# Update state estimate (mu)
 		innovation = z - self.h(self.mu)
 		self.mu = self.mu + (K @ innovation).reshape((self.mu.shape[0],))
 
-		# Update covariance (Sigma)
-		I = np.eye(len(K))
-		self.Sigma = (I - K @ self.H(self.mu)) @ self.Sigma
+		# Update covariance (Sigma) — Joseph form for numerical stability
+		IKH = np.eye(len(K)) - K @ H
+		self.Sigma = IKH @ self.Sigma @ IKH.T + K @ self.Q @ K.T
 
 		end_time = time.time()
 		execution_time = end_time - start_time
 		self.exec_times_upd.append(execution_time)
-		print(f"Execution time update: {execution_time} seconds")
-
-		print("Average exec time update: ", sum(self.exec_times_upd) / len(self.exec_times_upd))
 
 		return self.mu, self.Sigma

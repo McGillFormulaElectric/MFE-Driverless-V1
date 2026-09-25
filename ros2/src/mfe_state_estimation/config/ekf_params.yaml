@@ -13,6 +13,10 @@ ekf_node:
     # ------------------------------------------------------------------ #
     imu_topic: "/imu"
     gps_topic: "/gps"
+    # Wheelspeed proxy topic (nav_msgs/Odometry).
+    # In sim: /ground_truth/state_odom (twist.linear.x used as forward speed).
+    # On hardware: remap to a real wheel encoder / CAN speed topic.
+    wheelspeed_topic: "/ground_truth/state_odom"
 
     # Expected message rates (Hz) — used to set the EKF predict timestep
     # and GPS update interval.  Match the URDF <update_rate> values.

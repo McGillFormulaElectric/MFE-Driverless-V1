@@ -40,6 +40,7 @@ setup(
     entry_points={
         'console_scripts': [
             'extended_kalman_filter_node = mfe_state_estimation.extended_kalman_filter_node:main',
+            'ekf_slam_node = mfe_state_estimation.ekf_slam_node:main',
         ],
     },
 )
