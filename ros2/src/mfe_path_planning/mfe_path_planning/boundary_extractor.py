@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 
+from dataclasses import dataclass, field
+
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
+
+
+def SensorDataQoS():
+    return QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
+
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -14,6 +21,39 @@ from sensor_msgs.msg import PointCloud2
 from mfe_msgs.msg import Cone, Track
 from std_msgs.msg import Header
 
+
+# ---------------------------------------------------------------------------
+# ConeTrack dataclass + Kalman model constants
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConeTrack:
+    id: int
+    color: int                          # mfe_msgs/Cone color enum
+    x: float                            # map-frame position (convenience copy of state[0])
+    y: float                            # map-frame position (convenience copy of state[1])
+    # 4-state Kalman: [x, y, vx, vy]
+    state: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    cov: np.ndarray   = field(default_factory=lambda: np.eye(4) * 1.0)
+    hits: int   = 0   # confirmed observations
+    misses: int = 0   # consecutive frames without a match
+
+
+# Constant-velocity Kalman model at 10 Hz
+_DT = 0.1
+_F  = np.array([[1, 0, _DT, 0],
+                [0, 1, 0,  _DT],
+                [0, 0, 1,   0],
+                [0, 0, 0,   1]], dtype=float)
+_H  = np.array([[1, 0, 0, 0],
+                [0, 1, 0, 0]], dtype=float)
+_Q  = np.diag([0.01, 0.01, 0.1, 0.1])   # process noise
+_R  = np.diag([0.04, 0.04])              # observation noise (2 cm std)
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
 
 def pointcloud2_to_xyz(msg: PointCloud2) -> np.ndarray:
     """
@@ -62,6 +102,10 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
     return (pts_xyz @ R.T) + t_vec
 
 
+# ---------------------------------------------------------------------------
+# BoundaryExtractor node
+# ---------------------------------------------------------------------------
+
 class BoundaryExtractor(Node):
 
     MATCH_RADIUS    = 0.5   # m — max distance to associate LiDAR centroid with camera cone
@@ -89,6 +133,17 @@ class BoundaryExtractor(Node):
         # TF2 buffer and listener for frame transformations
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+
+        # Per-cone Kalman tracks
+        self._tracks: list[ConeTrack] = []
+        self._next_track_id: int = 0
+
+        self.declare_parameter('min_hits', 3)
+        self.declare_parameter('max_misses', 5)
+        self.declare_parameter('match_radius', 1.0)
+        self._min_hits   = int(self.get_parameter('min_hits').value)
+        self._max_misses = int(self.get_parameter('max_misses').value)
+        self._match_r    = float(self.get_parameter('match_radius').value)
 
         self.sub_lidar = self.create_subscription(
             PointCloud2,
@@ -118,7 +173,15 @@ class BoundaryExtractor(Node):
         # Publish at 10 Hz regardless of sensor rate
         self.timer = self.create_timer(0.1, self._publish_fused)
 
-        self.get_logger().info('BoundaryExtractor started. Fusing LiDAR + camera cones.')
+        self.get_logger().info(
+            f'BoundaryExtractor started. '
+            f'Fusing LiDAR + camera cones with Hungarian+Kalman tracking '
+            f'(min_hits={self._min_hits}, max_misses={self._max_misses}, '
+            f'match_radius={self._match_r} m).')
+
+    # ------------------------------------------------------------------
+    # Sensor callbacks
+    # ------------------------------------------------------------------
 
     def _lidar_callback(self, msg: PointCloud2) -> None:
         self._lidar_pts = pointcloud2_to_xyz(msg)
@@ -131,6 +194,10 @@ class BoundaryExtractor(Node):
 
     def _gt_callback(self, msg: Track) -> None:
         self._gt_cones = msg.track
+
+    # ------------------------------------------------------------------
+    # Frame transforms
+    # ------------------------------------------------------------------
 
     def _transform_lidar_pts_to_map(self, pts: np.ndarray, src_frame: str) -> tuple:
         """
@@ -176,6 +243,110 @@ class BoundaryExtractor(Node):
                 f'Could not transform camera cones from {src_frame!r} to map: {e}',
                 throttle_duration_sec=2.0)
             return cam_xyz, False
+
+    # ------------------------------------------------------------------
+    # Hungarian + Kalman track management
+    # ------------------------------------------------------------------
+
+    def _update_tracks(self, fused_cones: list[Cone]) -> list[ConeTrack]:
+        """
+        Run one predict-update cycle of Hungarian data association + per-track
+        Kalman filter.
+
+        Args:
+            fused_cones: raw fused cone detections for this frame (map frame).
+
+        Returns:
+            List of confirmed tracks (hits >= min_hits) after update.
+        """
+        # --- Predict all existing tracks ---
+        for t in self._tracks:
+            t.state = _F @ t.state
+            t.cov   = _F @ t.cov @ _F.T + _Q
+            # Sync convenience x/y with prediction
+            t.x = float(t.state[0])
+            t.y = float(t.state[1])
+
+        if not fused_cones:
+            # No detections this frame — increment misses for all tracks
+            for t in self._tracks:
+                t.misses += 1
+            self._tracks = [t for t in self._tracks if t.misses <= self._max_misses]
+            return [t for t in self._tracks if t.hits >= self._min_hits]
+
+        det_xy = np.array([[c.location.x, c.location.y] for c in fused_cones], dtype=float)
+
+        matched_track_ids: set[int] = set()
+        matched_det_indices: set[int] = set()
+
+        if self._tracks:
+            track_xy = np.array([[t.x, t.y] for t in self._tracks], dtype=float)
+
+            # Build N_tracks x N_detections cost matrix (Euclidean distance)
+            dx = track_xy[:, 0:1] - det_xy[:, 0]   # (N, M) broadcast
+            dy = track_xy[:, 1:2] - det_xy[:, 1]
+            cost = np.sqrt(dx**2 + dy**2)
+
+            row_ind, col_ind = linear_sum_assignment(cost)
+
+            for r, c in zip(row_ind, col_ind):
+                if cost[r, c] <= self._match_r:
+                    track = self._tracks[r]
+                    det   = fused_cones[c]
+
+                    # Kalman update
+                    z = np.array([det.location.x, det.location.y], dtype=float)
+                    S = _H @ track.cov @ _H.T + _R
+                    K = track.cov @ _H.T @ np.linalg.inv(S)
+                    track.state = track.state + K @ (z - _H @ track.state)
+                    track.cov   = (np.eye(4) - K @ _H) @ track.cov
+
+                    # Sync convenience fields
+                    track.x = float(track.state[0])
+                    track.y = float(track.state[1])
+
+                    # Accumulate hits; reset misses
+                    track.hits  += 1
+                    track.misses = 0
+
+                    # Refine color if currently UNKNOWN and detection has a known color
+                    if track.color == Cone.UNKNOWN and det.color != Cone.UNKNOWN:
+                        track.color = det.color
+
+                    matched_track_ids.add(id(track))
+                    matched_det_indices.add(c)
+
+        # --- Unmatched tracks: increment misses ---
+        for t in self._tracks:
+            if id(t) not in matched_track_ids:
+                t.misses += 1
+
+        # --- Unmatched detections: spawn new tentative tracks ---
+        for j, det in enumerate(fused_cones):
+            if j not in matched_det_indices:
+                init_state = np.array(
+                    [det.location.x, det.location.y, 0.0, 0.0], dtype=float)
+                new_track = ConeTrack(
+                    id=self._next_track_id,
+                    color=det.color,
+                    x=det.location.x,
+                    y=det.location.y,
+                    state=init_state,
+                    cov=np.eye(4) * 1.0,
+                    hits=1,
+                    misses=0,
+                )
+                self._tracks.append(new_track)
+                self._next_track_id += 1
+
+        # --- Delete stale tracks ---
+        self._tracks = [t for t in self._tracks if t.misses <= self._max_misses]
+
+        return [t for t in self._tracks if t.hits >= self._min_hits]
+
+    # ------------------------------------------------------------------
+    # Main publish callback
+    # ------------------------------------------------------------------
 
     def _publish_fused(self) -> None:
         now = self.get_clock().now().to_msg()
@@ -251,21 +422,44 @@ class BoundaryExtractor(Node):
                 cone.color = cam_cone.color
                 fused.append(cone)
 
-        # Count colors for diagnostics
-        color_counts = {}
-        for c in fused:
+        # --- Step 3: Hungarian + Kalman tracking ---
+        confirmed = self._update_tracks(fused)
+
+        # Build cone list from confirmed (Kalman-smoothed) tracks. This feeds
+        # the temporal confidence filter below rather than the final publish
+        # list directly, so both persistency mechanisms genuinely combine:
+        # Hungarian+Kalman confirms track identity/position, and the grid
+        # confidence filter adds a second, coarser persistency gate on top.
+        tracked_cones: list[Cone] = []
+        for t in confirmed:
+            c = Cone()
+            c.header.stamp = now
+            c.header.frame_id = 'map'
+            c.location.x = float(t.state[0])   # Kalman-filtered position
+            c.location.y = float(t.state[1])
+            c.location.z = 0.0
+            c.color = t.color
+            tracked_cones.append(c)
+
+        # Diagnostics
+        color_counts: dict = {}
+        for c in tracked_cones:
             color_counts[c.color] = color_counts.get(c.color, 0) + 1
         self.get_logger().info(
-            f'fused {len(fused)} cones | lidar={len(lidar_pts)} gt_src={len(self._gt_cones)} '
+            f'detections={len(fused)} '
+            f'tracks_total={len(self._tracks)} '
+            f'tracks_confirmed={len(confirmed)} '
+            f'| lidar={len(lidar_pts)} gt_src={len(self._gt_cones)} '
             f'cam={len(camera_cones)} colors={color_counts}',
             throttle_duration_sec=2.0)
 
         # ---- Temporal confidence filtering ----
-        # Accumulate confidence for each cone seen this frame; decay unseen cones.
-        # Only publish cones that have been consistently observed (min_observations).
+        # Accumulate confidence for each Kalman-confirmed cone seen this frame;
+        # decay unseen cones. Only publish cones that have been consistently
+        # observed (min_observations).
         step = self.GRID_STEP
         seen_keys: set = set()
-        for cone in fused:
+        for cone in tracked_cones:
             gx = round(cone.location.x / step) * step
             gy = round(cone.location.y / step) * step
             key = (gx, gy)
