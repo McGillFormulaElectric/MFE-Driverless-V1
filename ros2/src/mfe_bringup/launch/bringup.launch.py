@@ -23,9 +23,10 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo, OpaqueFunction
+    DeclareLaunchArgument, ExecuteProcess, GroupAction, IncludeLaunchDescription, LogInfo,
+    OpaqueFunction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -176,6 +177,26 @@ def generate_launch_description():
         description='Override pure pursuit max_speed (m/s). 0 = use mission default.',
     )
 
+    record_bag_arg = DeclareLaunchArgument(
+        'record_bag',
+        default_value='false',
+        description=(
+            'Record a ROS2 bag in MCAP format to ~/mfe_bags/<timestamp>/. '
+            'MCAP is preferred over SQLite3: it is append-only (crash-safe), '
+            'produces ~1/3 the file size, and supports browser-based replay via Foxglove. '
+            'Set record_bag:=true on the perception machine to capture a full run.'
+        ),
+    )
+
+    bag_output_dir_arg = DeclareLaunchArgument(
+        'bag_output_dir',
+        default_value=os.path.expanduser('~/mfe_bags'),
+        description=(
+            'Parent directory for MCAP bag files.  A timestamped subdirectory '
+            'is created automatically by ros2 bag record.'
+        ),
+    )
+
     mission = LaunchConfiguration('mission')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
@@ -186,6 +207,8 @@ def generate_launch_description():
     run_perception = LaunchConfiguration('run_perception')
     run_compute = LaunchConfiguration('run_compute')
     max_speed = LaunchConfiguration('max_speed')
+    record_bag = LaunchConfiguration('record_bag')
+    bag_output_dir = LaunchConfiguration('bag_output_dir')
 
     # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
     # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
@@ -414,6 +437,70 @@ def generate_launch_description():
     )
 
     # --------------------------------------------------------------------------
+    # Data recording — MCAP format (opt-in via record_bag:=true)
+    #
+    # Why MCAP instead of the default SQLite3 backend?
+    #   • Crash-safe: MCAP is append-only; a power cut mid-run leaves a valid,
+    #     readable file.  SQLite3 requires a clean COMMIT — a crash corrupts the
+    #     whole database.
+    #   • Compressed: MCAP with LZ4 compression produces ~1/3 the file size of
+    #     uncompressed SQLite3 bags for typical sensor workloads.
+    #   • Foxglove-ready: MCAP bags can be loaded directly in the Foxglove Studio
+    #     browser app (foxglove.dev) without any conversion step.
+    #
+    # Topics recorded:
+    #   /lidar/points_raw     — raw VLP-16 pointcloud (main debugging artifact)
+    #   /gps                  — NavSatFix from Xsens MTi-670G
+    #   /imu                  — Imu from Xsens MTi-670G
+    #   /ekf/output           — fused pose estimate
+    #   /planning/cones       — detected cone array (boundary extractor output)
+    #   /control/command      — actuator commands sent to ACU
+    #   /as/supervisor/status — failsafe supervisor status
+    #   /mfe/emergency_brake  — emergency brake signal
+    # --------------------------------------------------------------------------
+    mcap_bag_record = ExecuteProcess(
+        cmd=[
+            'ros2', 'bag', 'record',
+            '--storage-id', 'mcap',          # MCAP: crash-safe, compressed, Foxglove-ready
+            '--compression-mode', 'file',     # compress the whole MCAP file with LZ4
+            '--compression-format', 'lz4',
+            '--output', bag_output_dir,
+            '/lidar/points_raw',
+            '/gps',
+            '/imu',
+            '/ekf/output',
+            '/planning/cones',
+            '/control/command',
+            '/as/supervisor/status',
+            '/mfe/emergency_brake',
+        ],
+        output='screen',
+        name='mcap_bag_record',
+        condition=IfCondition(record_bag),
+    )
+
+    # --------------------------------------------------------------------------
+    # Failsafe Supervisor Node
+    #
+    # Chalmers-style watchdog that monitors LiDAR, GPS, and control loop health.
+    # Publishes /mfe/emergency_brake (Bool) and /as/supervisor/status (String).
+    # All thresholds are ROS2 params — override at launch with e.g.:
+    #   lidar_timeout_ms:=300  gps_jump_threshold_m:=3.0
+    # --------------------------------------------------------------------------
+    supervisor_node = Node(
+        package='mfe_control',
+        executable='supervisor_node',
+        name='supervisor_node',
+        output='screen',
+        parameters=[{
+            'lidar_timeout_ms':             200,
+            'gps_jump_threshold_m':         2.0,
+            'gps_cov_threshold':           25.0,
+            'control_latency_threshold_ms': 100,
+        }],
+    )
+
+    # --------------------------------------------------------------------------
     # Assemble description
     # --------------------------------------------------------------------------
     perception_group = GroupAction(
@@ -461,8 +548,16 @@ def generate_launch_description():
         run_perception_arg,
         run_compute_arg,
         max_speed_arg,
+        record_bag_arg,
+        bag_output_dir_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,
         compute_group,
+
+        # always-on safety supervisor
+        supervisor_node,
+
+        # optional MCAP bag recorder (opt-in: record_bag:=true)
+        mcap_bag_record,
     ])
