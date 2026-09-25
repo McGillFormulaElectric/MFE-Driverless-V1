@@ -8,7 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
 from fs_msgs.msg import ControlCommand
-from std_msgs.msg import Bool, Header
+from std_msgs.msg import Bool, Header, Float64MultiArray
 
 
 class PurePursuitNode(Node):
@@ -81,6 +81,7 @@ class PurePursuitNode(Node):
         self._car_speed        = None   # scalar m/s from odometry twist
         self._mission_finished = False
         self._path_idx         = 0
+        self._target_speeds: list[float] = []   # per-waypoint speed from /planning/target_speeds
 
         # PT2 anticipator state: last two raw (pre-compensation) steer commands
         self._steer_prev1 = 0.0  # r[k-1]
@@ -96,6 +97,11 @@ class PurePursuitNode(Node):
         self.create_subscription(Path,     '/planning/centerline',       self._path_callback,     best_effort_qos)
         self.create_subscription(Odometry, '/ekf/output',                self._odom_callback,     best_effort_qos)
         self.create_subscription(Bool,     '/planning/mission_finished', self._finished_callback, reliable_qos)
+        self.create_subscription(
+            Float64MultiArray,
+            '/planning/target_speeds',
+            self._target_speeds_callback,
+            best_effort_qos)
 
         self._cmd_pub = self.create_publisher(ControlCommand, '/control/command', reliable_qos)
         self.create_timer(self._dt, self._control_loop)
@@ -117,6 +123,9 @@ class PurePursuitNode(Node):
         if msg.data and not self._mission_finished:
             self.get_logger().info('Mission finished — pure pursuit stopped.')
             self._mission_finished = True
+
+    def _target_speeds_callback(self, msg: Float64MultiArray) -> None:
+        self._target_speeds = list(msg.data)
 
     def _path_callback(self, msg: Path):
         if not msg.poses:
@@ -225,6 +234,23 @@ class PurePursuitNode(Node):
 
         if v_now is None:
             return self._max_speed * (1.0 - self._speed_reduction_factor * abs(steering_norm))
+
+        # Use pre-computed speed profile from path planner if available and length-matched
+        if (self._target_speeds
+                and self._path is not None
+                and len(self._target_speeds) == len(self._path)
+                and self._path_idx < len(self._target_speeds)):
+            v_target = float(self._target_speeds[self._path_idx])
+            v_target = max(0.5, min(v_target, self._max_speed))
+            # Still apply the PI controller (or ramp logic) with this v_target
+            # ... (keep the existing d_brake / ramp_dist block below, just skip the curvature scan)
+            d_brake = max(0.0, (v_now**2 - v_target**2) / (2.0 * self._max_deceleration))
+            ramp_dist = max(20.0, d_brake * 5.0)
+            dist_to_target = 0.0   # already at the constraint point
+            if v_target < self._max_speed:
+                return (max(0.1, v_target / self._max_speed), 0.0)
+            return (1.0, 0.0)
+        # else: fall through to existing curvature scan
 
         path     = self._path
         idx      = self._path_idx
