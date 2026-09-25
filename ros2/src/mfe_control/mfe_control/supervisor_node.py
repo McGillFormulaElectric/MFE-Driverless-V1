@@ -51,7 +51,7 @@ import numpy as np
 from std_msgs.msg import Bool, String
 from sensor_msgs.msg import PointCloud2, NavSatFix
 from nav_msgs.msg import Odometry
-from mfe_msgs.msg import Cone, Track
+from mfe_msgs.msg import Track
 
 
 # ---------------------------------------------------------------------------
@@ -93,13 +93,17 @@ class SupervisorNode(Node):
         self.declare_parameter('gps_jump_threshold_m',         2.0)
         self.declare_parameter('gps_cov_threshold',           25.0)
         self.declare_parameter('control_latency_threshold_ms', 100)
-        self.declare_parameter('cone_hit_radius_m',            0.5)   # car centre to cone centre
+        self.declare_parameter('cone_hit_radius_m',            0.5)   # kept for backwards compat
+        self.declare_parameter('car_half_length',              1.5)   # half of ~3m wheelbase+bumpers
+        self.declare_parameter('car_half_width',               0.8)   # half of ~1.6m track width
 
         self._lidar_timeout_s    = self.get_parameter('lidar_timeout_ms').value / 1000.0
         self._gps_jump_thr_m    = float(self.get_parameter('gps_jump_threshold_m').value)
         self._gps_cov_thr       = float(self.get_parameter('gps_cov_threshold').value)
         self._ctrl_lat_thr_s    = self.get_parameter('control_latency_threshold_ms').value / 1000.0
         self._cone_hit_r        = float(self.get_parameter('cone_hit_radius_m').value)
+        self._car_half_length   = float(self.get_parameter('car_half_length').value)
+        self._car_half_width    = float(self.get_parameter('car_half_width').value)
 
         # ---------------------------------------------------------------
         # State
@@ -115,9 +119,10 @@ class SupervisorNode(Node):
         self._control_latency_s  = 0.0
         self._control_late       = False
 
-        # Cone proximity: car position + latest fused cone map
+        # Cone proximity: car pose + latest fused cone map
         self._car_x              = 0.0
         self._car_y              = 0.0
+        self._car_yaw            = 0.0                                  # radians, from EKF quaternion
         self._cone_xy            = np.zeros((0, 2), dtype=np.float32)  # Nx2 map-frame
         self._cone_hit           = False
 
@@ -194,6 +199,11 @@ class SupervisorNode(Node):
     def _odom_callback(self, msg: Odometry) -> None:
         self._car_x = msg.pose.pose.position.x
         self._car_y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+        self._car_yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
 
     def _cones_callback(self, msg: Track) -> None:
         """Cache latest fused cone positions as Nx2 numpy array for proximity checks."""
@@ -289,20 +299,39 @@ class SupervisorNode(Node):
                 throttle_duration_sec=1.0,
             )
 
-        # ---- Cone proximity check ----------------------------------------
-        # Fused LiDAR+camera cones from /planning/cones. A cone within
-        # cone_hit_radius_m of the car centre means the car has hit or is
-        # about to hit it — trigger emergency brake immediately.
+        # ---- Cone OBB check ----------------------------------------------
+        # Transform all fused cones into the car-local frame and test against
+        # an oriented bounding box (OBB).  This catches side-swipe hits that
+        # the old point-radius check missed (cone exactly beside the car at
+        # ~0.5 m offset was inside the radius even on a straight) and avoids
+        # false positives when a cone is ahead at 1.2 m but outside the track
+        # half-width.
+        #
+        # Car-local axes (ENU map → car body):
+        #   local_x =  dx·cos(yaw) + dy·sin(yaw)   (forward)
+        #   local_y = -dx·sin(yaw) + dy·cos(yaw)   (left)
+        #
+        # Hit condition: |local_x| < car_half_length  AND  |local_y| < car_half_width
         self._cone_hit = False
         if self._cone_xy.shape[0] > 0:
-            diff = self._cone_xy - np.array([self._car_x, self._car_y], dtype=np.float32)
-            dists = np.linalg.norm(diff, axis=1)
-            min_dist = float(dists.min())
-            if min_dist < self._cone_hit_r:
+            dx = self._cone_xy[:, 0] - self._car_x   # shape (N,)
+            dy = self._cone_xy[:, 1] - self._car_y
+            cos_y = math.cos(self._car_yaw)
+            sin_y = math.sin(self._car_yaw)
+            local_x =  dx * cos_y + dy * sin_y       # forward axis, shape (N,)
+            local_y = -dx * sin_y + dy * cos_y       # left axis,    shape (N,)
+            inside = (
+                (np.abs(local_x) < self._car_half_length)
+                & (np.abs(local_y) < self._car_half_width)
+            )
+            if inside.any():
                 self._cone_hit = True
+                hit_idx = int(np.argmax(inside))
                 self.get_logger().error(
-                    f'CONE HIT detected: nearest cone {min_dist:.3f} m from car centre '
-                    f'(threshold {self._cone_hit_r:.2f} m) — EMERGENCY BRAKE',
+                    f'CONE HIT (OBB): cone at local '
+                    f'({local_x[hit_idx]:.2f} m fwd, {local_y[hit_idx]:.2f} m lat) '
+                    f'inside box {self._car_half_length:.2f}×{self._car_half_width:.2f} m '
+                    f'— EMERGENCY BRAKE',
                     throttle_duration_sec=0.5,
                 )
 
