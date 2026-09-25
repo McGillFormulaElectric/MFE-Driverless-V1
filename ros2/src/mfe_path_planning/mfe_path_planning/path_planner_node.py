@@ -179,6 +179,193 @@ def _make_skidpad_path() -> np.ndarray:
     return np.vstack([entry[:-1], left_circ, right_circ, exit_pts])
 
 
+# ---------------------------------------------------------------------------
+# MFE25 vehicle physical constants (from vehicle.yaml)
+# ---------------------------------------------------------------------------
+_M             = 268.0     # kg  total mass (vehicle + driver)
+_G             = 9.81      # m/s²
+_RHO           = 1.225     # kg/m³ air density
+_CD            = 1.77      # drag coefficient
+_CL            = 4.26      # downforce coefficient
+_AREF          = 1.106     # m² frontal area
+_MU            = 1.6       # tyre friction coefficient (slicks, dry)
+_CRR           = 0.012     # rolling resistance coefficient
+_P_MAX         = 66700.0   # W  max pack power
+_F_ENGINE_MAX  = 7676.0    # N  peak tractive force
+
+
+# ---------------------------------------------------------------------------
+# Physics helpers for PSO lap-time fitness
+# ---------------------------------------------------------------------------
+
+def _menger_kappa(path):
+    """Menger curvature at each waypoint of path (N, 2)."""
+    N = len(path)
+    kappa = np.zeros(N)
+    for i in range(1, N - 1):
+        a, b, c = path[i - 1], path[i], path[i + 1]
+        ab = np.linalg.norm(b - a)
+        bc = np.linalg.norm(c - b)
+        ca = np.linalg.norm(a - c)
+        cross = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        denom = ab * bc * ca
+        kappa[i] = (2 * cross / denom) if denom > 1e-9 else 0.0
+    kappa[0] = kappa[1]
+    kappa[-1] = kappa[-2]
+    return kappa
+
+
+def _grip_speed(kappa):
+    """Lateral-grip speed limit (m/s) at each point, aero-corrected."""
+    r = np.where(kappa > 1e-4, 1.0 / kappa, 1e6)
+    denom = _M - _MU * 0.5 * _RHO * _CL * _AREF * r
+    denom = np.maximum(denom, 1.0)
+    v2 = _MU * _M * _G * r / denom
+    return np.sqrt(np.clip(v2, 0, 900))   # cap at 30 m/s
+
+
+def _backward_pass(v_lat, ds):
+    """Backward deceleration pass: ensure car can brake to each corner speed."""
+    v = v_lat.copy()
+    for i in range(len(v) - 2, -1, -1):
+        f_drag = 0.5 * _RHO * _CD * _AREF * v[i + 1] ** 2
+        f_net_brake = (_MU * (_M * _G + 0.5 * _RHO * _CL * _AREF * v[i + 1] ** 2)
+                       - f_drag - _CRR * _M * _G)
+        a_max_brake = f_net_brake / _M
+        v_reachable = math.sqrt(v[i + 1] ** 2 + 2 * a_max_brake * ds[i])
+        v[i] = min(v[i], v_reachable)
+    return v
+
+
+def _forward_pass(v_after_backward, ds):
+    """Forward acceleration pass with pack-power and force limits."""
+    v = v_after_backward.copy()
+    for i in range(len(v) - 1):
+        f_drag = 0.5 * _RHO * _CD * _AREF * v[i] ** 2
+        f_engine = min(_F_ENGINE_MAX, _P_MAX / max(v[i], 0.1))
+        f_net = f_engine - f_drag - _CRR * _M * _G
+        a = max(f_net / _M, 0.0)
+        v_next = math.sqrt(v[i] ** 2 + 2 * a * ds[i])
+        v[i + 1] = min(v[i + 1], v_next)
+    return v
+
+
+def _lap_time(v, ds):
+    """Estimated lap time (s) from velocity profile and arc-lengths."""
+    v_avg = 0.5 * (v[:-1] + v[1:])
+    v_avg = np.maximum(v_avg, 0.1)
+    return float(np.sum(ds / v_avg))
+
+
+# ---------------------------------------------------------------------------
+# PSO race-line optimizer
+# ---------------------------------------------------------------------------
+
+def _pso_raceline(centerline_xy, left_xy, right_xy, safety=0.8,
+                  n_particles=30, n_iter=200, penalty_weight=5.0):
+    """
+    PSO race line optimizer. Finds lateral offsets alpha_i from centerline
+    that minimise physics-simulated lap time.
+
+    Returns optimised path (N, 2) array. Falls back to centerline on failure.
+    """
+    import random  # noqa: F401 — kept for spec compliance; np.random used internally
+    N = len(centerline_xy)
+    if N < 4 or len(left_xy) == 0 or len(right_xy) == 0:
+        return centerline_xy
+
+    # Unit tangents and left-pointing normals (same as _min_curvature_path)
+    tg = np.zeros_like(centerline_xy)
+    tg[1:-1] = centerline_xy[2:] - centerline_xy[:-2]
+    tg[0] = centerline_xy[1] - centerline_xy[0]
+    tg[-1] = centerline_xy[-1] - centerline_xy[-2]
+    norm_mag = np.linalg.norm(tg, axis=1, keepdims=True).clip(1e-9)
+    tg /= norm_mag
+    nrm = np.column_stack([-tg[:, 1], tg[:, 0]])
+
+    def _hw(boundary):
+        w = np.empty(N)
+        for i in range(N):
+            w[i] = np.linalg.norm(boundary - centerline_xy[i], axis=1).min()
+        return w * safety
+
+    w_l = _hw(left_xy)
+    w_r = _hw(right_xy)
+
+    def fitness(alpha):
+        path = centerline_xy + alpha[:, None] * nrm
+        # Boundary penalty
+        penalty = float(np.sum(
+            np.maximum(0, alpha - w_l) ** 2 + np.maximum(0, -alpha - w_r) ** 2
+        ))
+        # Arc lengths
+        diff = np.diff(path, axis=0)
+        ds = np.linalg.norm(diff, axis=1).clip(1e-6)
+        # Physics
+        kappa = _menger_kappa(path)
+        v_lat = _grip_speed(kappa)
+        v = _backward_pass(v_lat, ds)
+        v = _forward_pass(v, ds)
+        t = _lap_time(v, ds)
+        return t + penalty_weight * penalty
+
+    # Initialise particles; first particle starts at centerline (alpha=0)
+    pos = np.zeros((n_particles, N))
+    pos[1:] = (np.random.uniform(-1, 1, (n_particles - 1, N))
+               * np.minimum(w_l, w_r) * 0.3)
+    vel = np.zeros_like(pos)
+    pbest = pos.copy()
+    pbest_fit = np.array([fitness(p) for p in pos])
+    gbest_idx = int(np.argmin(pbest_fit))
+    gbest = pbest[gbest_idx].copy()
+    gbest_fit = pbest_fit[gbest_idx]
+
+    stagnant = 0
+    for it in range(n_iter):
+        # Dynamic PSO coefficients (Negura et al. 2025)
+        frac = it / max(n_iter - 1, 1)
+        w_inertia = 0.8 - 0.7 * frac   # 0.8 → 0.1
+        c1 = 1.5 - 1.0 * frac          # 1.5 → 0.5
+        c2 = 1.5 + 1.0 * frac          # 1.5 → 2.5
+
+        r1 = np.random.rand(n_particles, N)
+        r2 = np.random.rand(n_particles, N)
+        vel = (w_inertia * vel
+               + c1 * r1 * (pbest - pos)
+               + c2 * r2 * (gbest - pos))
+        pos = pos + vel
+        # Clamp to track bounds
+        pos = np.clip(pos, -w_r, w_l)
+
+        improved = False
+        for i, p in enumerate(pos):
+            f = fitness(p)
+            if f < pbest_fit[i]:
+                pbest[i] = p.copy()
+                pbest_fit[i] = f
+                if f < gbest_fit:
+                    gbest = p.copy()
+                    gbest_fit = f
+                    improved = True
+
+        if not improved:
+            stagnant += 1
+        else:
+            stagnant = 0
+
+        # Escape local optima: perturb worst 20 % of swarm near gbest
+        if stagnant >= 10:
+            n_perturb = max(1, n_particles // 5)
+            worst_idx = np.argsort(pbest_fit)[-n_perturb:]
+            for idx in worst_idx:
+                noise = np.random.randn(N) * np.minimum(w_l, w_r) * 0.1
+                pos[idx] = np.clip(gbest + noise, -w_r, w_l)
+                vel[idx] = 0.0
+            stagnant = 0
+
+    return centerline_xy + gbest[:, None] * nrm
+
+
 def _min_curvature_path(
         centerline_xy: np.ndarray,
         left_xy: np.ndarray,
@@ -261,9 +448,11 @@ class PathPlannerNode(Node):
         # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad
+        self.declare_parameter('use_pso_optimizer', True)
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
+        self._use_pso_optimizer = self.get_parameter('use_pso_optimizer').value
         self._mission = mission_str
 
         _HARDCODED_MISSIONS = {'skidpad', 'peanut'}
@@ -480,17 +669,32 @@ class PathPlannerNode(Node):
                     and right_xy is not None and len(right_xy) > 3):
                 left   = np.array(left_xy)[:, :2]
                 right  = np.array(right_xy)[:, :2]
-                try:
-                    optimized = _min_curvature_path(centerline, left, right, safety=0.7)
-                    self.get_logger().info(
-                        'Racing line optimizer applied.',
-                        throttle_duration_sec=5.0)
-                except Exception as opt_e:
-                    self.get_logger().warn(
-                        f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
-                        'falling back to raw centerline.',
-                        throttle_duration_sec=5.0)
-                    optimized = centerline
+                if self._use_pso_optimizer:
+                    try:
+                        optimized = _pso_raceline(centerline, left, right, safety=0.7)
+                        self.get_logger().info(
+                            'PSO race line optimizer applied.',
+                            throttle_duration_sec=5.0)
+                    except Exception as opt_e:
+                        self.get_logger().warn(
+                            f'PSO optimizer failed: {opt_e} — falling back to curvature minimizer',
+                            throttle_duration_sec=5.0)
+                        try:
+                            optimized = _min_curvature_path(centerline, left, right, safety=0.7)
+                        except Exception:
+                            optimized = centerline
+                else:
+                    try:
+                        optimized = _min_curvature_path(centerline, left, right, safety=0.7)
+                        self.get_logger().info(
+                            'Racing line optimizer applied.',
+                            throttle_duration_sec=5.0)
+                    except Exception as opt_e:
+                        self.get_logger().warn(
+                            f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
+                            'falling back to raw centerline.',
+                            throttle_duration_sec=5.0)
+                        optimized = centerline
             else:
                 optimized = centerline
 
