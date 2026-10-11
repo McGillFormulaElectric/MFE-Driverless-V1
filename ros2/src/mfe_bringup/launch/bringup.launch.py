@@ -197,6 +197,12 @@ def generate_launch_description():
         ),
     )
 
+    lookahead_arg = DeclareLaunchArgument(
+        'lookahead',
+        default_value='0.0',
+        description='Override pure pursuit lookahead_distance (m). 0 = use mission default.',
+    )
+
     mission = LaunchConfiguration('mission')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
@@ -365,6 +371,9 @@ def generate_launch_description():
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:
             params['max_speed'] = max_speed_override
+        lookahead_override = float(context.launch_configurations.get('lookahead', '0.0'))
+        if lookahead_override > 0.0:
+            params['lookahead_distance'] = lookahead_override
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -547,6 +556,7 @@ def generate_launch_description():
         max_speed_arg,
         record_bag_arg,
         bag_output_dir_arg,
+        lookahead_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,
