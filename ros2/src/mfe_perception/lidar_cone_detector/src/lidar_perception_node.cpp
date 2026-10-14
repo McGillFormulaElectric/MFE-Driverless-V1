@@ -12,23 +12,22 @@
 // =================================================================================
 // 1. CONDITIONAL HEADERS (The Switch)
 // =================================================================================
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/extract_clusters.h>
+
+// GPU filters (CUDA) are compiled only when a CUDA compiler was found at build time.
+// They are used at runtime only if a CUDA device is present and use_gpu is true.
 #if defined(PLATFORM_JETSON) || defined(PLATFORM_DESKTOP_GPU)
     #define USE_GPU_PIPELINE 1
     #include <cuda_runtime.h>
     #include <vector>
-    #include "cudaFilter.h"
-    #include <pcl/search/kdtree.h>
-    #include <pcl/segmentation/sac_segmentation.h>
-    #include <pcl/filters/extract_indices.h>
-    #include <pcl/segmentation/extract_clusters.h>
+    #include "lidar_cone_detector/cuda_filter.hpp"
 #else
     #define USE_GPU_PIPELINE 0
-    #include <pcl/filters/voxel_grid.h>
-    #include <pcl/filters/passthrough.h>
-    #include <pcl/segmentation/sac_segmentation.h>
-    #include <pcl/filters/extract_indices.h>
-    #include <pcl/search/kdtree.h>
-    #include <pcl/segmentation/extract_clusters.h>
 #endif
 
 class LidarPerceptionNode : public rclcpp::Node {
@@ -48,6 +47,8 @@ public:
         // On hardware, set these from the real sensor mounting height.
         this->declare_parameter("cone_z_min", -1.10f);
         this->declare_parameter("cone_z_max", -0.50f);
+        // Use the CUDA filters when a CUDA device is present (ignored if built without CUDA).
+        this->declare_parameter("use_gpu", true);
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -58,6 +59,18 @@ public:
         min_intensity_  = this->get_parameter("min_intensity").as_double();
         cone_z_min_ = this->get_parameter("cone_z_min").as_double();
         cone_z_max_ = this->get_parameter("cone_z_max").as_double();
+        use_gpu_ = false;
+#if USE_GPU_PIPELINE
+        if (this->get_parameter("use_gpu").as_bool()) {
+            int device_count = 0;
+            if (cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0) {
+                use_gpu_ = true;
+            } else {
+                RCLCPP_WARN(this->get_logger(), "use_gpu requested but no CUDA device found; using CPU PCL");
+                cudaGetLastError();  // clear the sticky error from the failed query
+            }
+        }
+#endif
 
         // --- Communication ---
         sub_raw_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -76,8 +89,8 @@ public:
         pub_debug_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/debug/gpu_objects", 10);
 
-        RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s", 
-            USE_GPU_PIPELINE ? "CUDA-PCL (Jetson/GPU)" : "Standard PCL (CPU)");
+        RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s",
+            use_gpu_ ? "CUDA filters (GPU) + CPU PCL" : "Standard PCL (CPU)");
     }
 
 private:
@@ -108,8 +121,9 @@ private:
         int marker_id = 0;
 
         #if USE_GPU_PIPELINE
+        if (use_gpu_) {
             // =========================================================
-            // OPTION A: GPU PIPELINE (Using cuFilter, cuSegmentation, cuCluster)
+            // OPTION A: GPU PIPELINE (CUDA filters: ROI passthrough + voxel grid)
             // =========================================================
             
             cudaStream_t stream = NULL;
@@ -312,11 +326,13 @@ private:
                 }
             }
 
-        #else
+        } else
+        #endif
+        {
             // =========================================================
-            // OPTION B: CPU FALLBACK (Standard PCL)
+            // OPTION B: CPU PIPELINE (Standard PCL)
             // =========================================================
-            
+
             // 1. Downsample
             pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled(new pcl::PointCloud<pcl::PointXYZ>);
             pcl::VoxelGrid<pcl::PointXYZ> vg;
@@ -386,7 +402,7 @@ private:
                     centroids_cloud->points.emplace_back(centroid_vec[0], centroid_vec[1], centroid_vec[2]);
                 }
             }
-        #endif
+        }
 
         // Publish
         publish_cloud(pub_centroids_, centroids_cloud, msg->header);
@@ -410,6 +426,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
+    bool use_gpu_ = false;
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
     double cone_z_min_, cone_z_max_;
     int min_cluster_size_, max_cluster_size_;

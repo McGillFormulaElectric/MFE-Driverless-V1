@@ -183,9 +183,10 @@ force CPU-only PCL path. Build succeeded; binary `install/lidar_cone_detector/li
 
 **Key findings / gotchas for future GPU attempts:**
 
-1. **Blackwell compute capability**: RTX 5060 Ti is Blackwell (sm_90) per NVIDIA docs. If
-   rebuilding cuda-pcl from source, would need `-gencode arch=compute_90,code=sm_90` flags or
-   CUDA_ARCH=90 in Makefiles — the pre-built Makefile defaults (30-72) would not include Blackwell.
+1. **Blackwell compute capability** (CORRECTED 2026-10-14: this entry originally said sm_90, which
+   is wrong): RTX 5060 Ti is compute capability 12.0, i.e. `sm_120`. It needs CUDA 12.8 or newer
+   (`-gencode arch=compute_120,code=sm_120`); CUDA 12.6 cannot target it. The pre-built Makefile
+   defaults (30-72) would not include Blackwell either.
 
 2. **No cuda-pcl source in repo**: Unlike most vendored deps, cuda-pcl.git has only pre-compiled
    lib/*.so files, no .cu/.cpp sources. The Makefiles (`cuFilter/Makefile`, etc.) build demo
@@ -208,7 +209,7 @@ Would require either:
 - Obtain pre-built CUDA 12.6 compatible cuda-pcl binaries from NVIDIA (check releases/artifacts
   on GitHub), OR
 - Clone NVIDIA-AI-IOT/cuda-pcl, compile cuFilter/cuSegmentation/cuCluster for Blackwell
-  (`sm_90`) from scratch, link against CUDA 12.6, and replace the incompatible vendored
+  (`sm_120`, CUDA >= 12.8) from scratch, and replace the incompatible vendored
   binaries (latter restricted by repo policy; would need approval to relax constraints).
 
 **Container state**: `mfe-sim-gpu-test` remains running with CUDA 12.6 + CUDNN + CPU-compiled
@@ -264,3 +265,89 @@ approach to any cone (excellent safety margin).
   preserve this margin.
 
 Commit: `6ce6f30`
+
+## 2026-10-14 — Own CUDA filters for Blackwell (sm_120) replace cuda-pcl in lidar_perception_node
+
+**Correction to the entry above:** the RTX 5060 Ti is `sm_120`, not `sm_90`. Also confirmed:
+the vendored `lib/cuda-pcl` `.so` files are ARM aarch64 (Jetson) binaries, so they cannot link on
+x86_64 at any CUDA version. The fix is our own implementation, not a rebuild.
+
+**What the node actually used from cuda-pcl:** only `cudaFilter` (PASSTHROUGH on x in [-1, 15] m,
+then VOXELGRID). `cudaSegmentation` and `cudaCluster` are NOT used. Ground RANSAC and Euclidean
+clustering run on the CPU (PCL) in the GPU branch too. The GPU branch's downstream also differs
+from the CPU branch: a plane-height band (0.005-0.75 m, |y| < 6 m) and a bbox validation, versus
+the CPU branch's z-passthrough band and no bbox check. So the two branches are not the same
+algorithm, and this comparison measures the filter stages plus the same downstream.
+
+**What was built:**
+- `include/lidar_cone_detector/cuda_filter.hpp` and `src/gpu/cuda_filter.cu`: a `cudaFilter` class
+  with the same API as cuda-pcl's (`set`/`filter`, `FilterParam_t`, `checkCudaErrors`). PASSTHROUGH
+  is flag, scan and scatter (stable). VOXELGRID is packed voxel key, `sort_by_key`,
+  `reduce_by_key` with double (x, y, z, count), then centroids. The output matches PCL VoxelGrid's
+  centroids. Scratch buffers are grow-only per instance.
+- CMake: `find_package(CUDA)` and the `find_library` of the cuda-pcl libs are replaced by
+  `check_language(CUDA)` plus `enable_language(CUDA)`. Architecture is `LIDAR_CUDA_ARCH` (default
+  120 on desktop, 87 on Jetson). If nvcc is older than 12.8 and the arch is 120, CMake warns and
+  builds CPU-only. Without nvcc it is CPU-only as before.
+- Node: `use_gpu` parameter (default true). The GPU path is used only if a CUDA device is found at
+  startup (`cudaGetDeviceCount`); otherwise it warns and runs the PCL CPU path. Both branches stay
+  compiled. The node's GPU branch still does cudaMalloc per frame, as before.
+- Bench: `bench/lidar_gpu_bench.cpp` (target `lidar_gpu_bench`, not installed) replicates both
+  node branches stage by stage on recorded frames. `bench/dump_frames.py` dumps
+  `/lidar/points_raw` from a bag to raw float32 files. `bench/node_smoke.sh` replays a bag through
+  the node.
+
+**Environment:** `mfe-sim-gpu-test` got `cuda-nvcc-12-8` and `cuda-cudart-dev-12-8` from NVIDIA's
+apt repo (nvcc 12.8.93, at `/usr/local/cuda-12.8`). A smoke kernel built with `-arch=sm_120` runs
+on the RTX 5060 Ti. The container still has an aarch64 cuda-pcl set in `/usr/local/lib`, which
+broke the old CMake's `find_library` link (pre-existing).
+
+**Correctness (accel bag, 172 frames; peanut bag, 246 frames):**
+- Filter: CUDA ROI+voxel vs PCL PassThrough+VoxelGrid gives identical point counts (accel mean 5041,
+  peanut 5056). Every point matches within 1 mm, and the worst nearest-neighbour distance is float
+  precision (0.000000 m at 6 decimal places).
+- Cones: the same GPU-branch downstream on each filter's output gives identical cone count and
+  centroids within 5 cm on every frame (accel 172/172, peanut 246/246). Worst matched centroid
+  offset is 0.018 m (peanut). Re-running the same downstream on the same input gives an identical
+  result, so RANSAC is not a source of variation here.
+
+**Latency (per frame, medians after 10 warm-up frames; host<->device copies and per-frame
+cudaMalloc included, as in the node):**
+
+| Stage | accel median (p95) | peanut median (p95) |
+|---|---|---|
+| CPU: VoxelGrid (full cloud) | 0.214 (0.220) ms | 0.214 (0.222) ms |
+| CPU: RANSAC | 0.309 (0.319) ms | 0.311 (0.324) ms |
+| CPU: extract + z band | 0.042 (0.043) ms | 0.043 (0.048) ms |
+| CPU: cluster | 0.149 (0.178) ms | 0.108 (0.187) ms |
+| **CPU end-to-end** | **0.718 (0.754) ms** | **0.687 (0.786) ms** |
+| GPU: H2D + ROI passthrough | 0.149 (0.156) ms | 0.151 (0.161) ms |
+| GPU: VoxelGrid | 0.246 (0.283) ms | 0.253 (0.283) ms |
+| GPU: D2H + build cloud | 0.068 (0.074) ms | 0.069 (0.074) ms |
+| GPU: RANSAC (100 iters, CPU) | 0.236 (0.244) ms | 0.238 (0.247) ms |
+| GPU: extract + band | 0.033 (0.038) ms | 0.033 (0.039) ms |
+| GPU: cluster + bbox | 0.151 (0.188) ms | 0.071 (0.154) ms |
+| **GPU end-to-end** | **0.971 (1.010) ms** | **0.884 (0.987) ms** |
+
+Filter-stage scaling (ROI + voxel only, K consecutive accel frames concatenated, 30 reps):
+
+| Points | CPU PCL | CUDA | Speed-up |
+|---|---|---|---|
+| 6,884 | 0.155 ms | 0.493 ms | 0.31x |
+| 27,536 (one frame) | 0.749 ms | 0.685 ms | 1.09x |
+| 110,144 | 2.836 ms | 1.318 ms | 2.15x |
+| 440,576 | 13.009 ms | 2.336 ms | 5.57x |
+
+**Findings:**
+- At the node's real size (about 30k raw points per VLP-16 frame, about 5k after the ROI), the
+  CUDA filters only break even, and the GPU branch is slower end-to-end (about 0.9 ms against
+  0.7 ms). Launch, sync and transfer overhead is most of the GPU filter time.
+- The GPU branch's downstream is still CPU, and the CPU RANSAC and clustering are now the largest
+  stages. Moving those to GPU is where a real speed-up would come from, not the filters.
+- Node replay of the accel bag (`bench/node_smoke.sh`): at 1x both modes process every frame. At
+  10x (about 87 Hz input) GPU mode outputs about 92 Hz and CPU about 94 Hz. Neither path is near
+  its limit at this sensor rate, so this is not a throughput comparison.
+- The runtime fallback works: with `CUDA_VISIBLE_DEVICES=-1` the node warns and runs the CPU path.
+- Not done: the sim-based end-to-end run (the node was replayed from the bag only).
+- Recorded frames live in `/home/neil/Develop/simws_gpu/` (outside the repo). The accel and
+  peanut bags came from `mfe-sim-local-test:/tmp/local_docker_*_bag`, copied out read-only.
