@@ -14,6 +14,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('min_obs', default_value='3'),
         DeclareLaunchArgument('skidpad', default_value='false'),     # true: skidpad_planner fits the known layout to the landmarks (landmarks go to /skidpad/cones)
+        DeclareLaunchArgument('registration_mode', default_value='library'),   # skidpad only: library (ft-fsd SkidpadRelocalizer) | custom (Kabsch/ICP)
         DeclareLaunchArgument('cones_topic', default_value='/planning/cones'),
         DeclareLaunchArgument('freeze', default_value='true'),   # publish each landmark once, at a fixed position
         DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | unknown (no colour; planner infers sides)
@@ -24,5 +25,6 @@ def generate_launch_description():
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
              parameters=[{'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
                           'freeze': ParameterValue(LC('freeze'), value_type=bool)}]),
-        Node(package='mfe_validation', executable='skidpad_planner', name='skidpad_planner', output='screen', condition=IfCondition(LC('skidpad'))),
+        Node(package='mfe_validation', executable='skidpad_planner', name='skidpad_planner', output='screen', condition=IfCondition(LC('skidpad')),
+             parameters=[{'registration_mode': LC('registration_mode')}]),
     ])

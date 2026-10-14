@@ -264,3 +264,55 @@ approach to any cone (excellent safety margin).
   preserve this margin.
 
 Commit: `6ce6f30`
+<!-- Subagents: append your own entry below this line when you finish a task. Use the same
+     format — date, task title, what you did, key findings/gotchas (especially anything that
+     cost you time or that a future agent should know before repeating your work), commit hash
+     if applicable. Keep entries factual and specific; skip filler. -->
+
+## 2026-10-14 — Skidpad registration via ft-fsd SkidpadRelocalizer (library), custom Kabsch as fallback
+
+Replaced the hand-rolled ICP/Kabsch fit in `skidpad_planner.py` with `fsd_path_planning`'s
+`SkidpadRelocalizer` (AMZ ft-fsd-path-planning, https://github.com/papalotis/ft-fsd-path-planning).
+`registration_mode` ROS param / `lidar_only.launch.py` arg: `library` (default) or `custom`. Path
+geometry is unchanged (`_make_skidpad_path()`, same windowed `self.idx`/`self.window` publish).
+
+**Calling convention (read from source, `relocalization/relocalization_base_class.py` and
+`skidpad/skidpad_relocalizer.py`)**:
+- `SkidpadRelocalizer()` takes no args; `reference_centers` = circle centres of its own
+  `BASE_SKIDPAD_PATH` (approx (0.05, -9.14) and (0.05, +9.12)).
+- Per cone message: `attempt_relocalization_calculation(cones, vehicle_position_2d, vehicle_direction_2d)`.
+  `cones` is a list of 2D arrays, `direction` is a unit 2D vector (NOT a yaw). It returns None, and
+  `is_relocalized` flips True once a fit is found. It returns early once relocalized, so it latches.
+  The first call also latches `_original_vehicle_position/_direction` (used to decide which circle is
+  left/right), so do not call it before odometry arrives.
+- Two transforms are produced: `_original_to_known_map_transformer` (SLAM -> library frame) and
+  `_known_map_to_original_transformer` (library -> SLAM). Each is `(pos2d, yaw) -> (pos2d, yaw)`.
+  **To place the template path in the car frame you need the known->original one.** The first draft of
+  this integration used the wrong direction.
+- Its `circle_fit_powerset` runs over the 20 closest cones (combinatorial up to 5-subsets), so it is
+  the expensive step; it runs only until the first success.
+- Gotcha: the library's known frame is NOT `_make_skidpad_path()`'s frame. Its circles are at x~0,
+  y=+/-9.1, while the template has them at x=14.4, y=+/-9.3. The planner bridges them with a fixed
+  offset `lib_offset` (about (-14.35, -0.01) m) from the two sets of circle centres, computed at init.
+
+**Test results** (sim container, `run_local_docker_test.sh skidpad 240`, `ROS_DOMAIN_ID=12`):
+- Run 1 (library): no valid result. Car never spawned (`ros2 run gazebo_ros spawn_entity.py` failed);
+  root cause was the test workspace install lacking the `eufs_*` install dirs. Fixed by linking them
+  from `simws_local/install`. Run 1 retry: same failure, before the fix.
+- Run 2 (library): MISSION_COMPLETED, 70 s wall / 58 s sim, 0 cones within 0.3 m, closest 0.39 m.
+  Plot: clean left circle, then right circle, then exit.
+- Run 3 (library): NOT completed. 239 s, car looped through the field, cones hit (22 within 0.3 m).
+  Relocalized on 22 landmarks at the same transform as run 2 (14.57 vs 14.59 m), so the registration was
+  not the difference. Cause not isolated.
+- Run 4 (custom): MISSION_COMPLETED reported at 22 s, but the plot shows the car looped a wrong circle
+  and left the track toward (-5, 25). False positive in finish detection, not a clean run.
+- Run 5 (library): MISSION_COMPLETED, 70 s wall, 0 cones within 0.3 m, closest 0.50 m. Clean, like run 2.
+- Run 6 (custom): MISSION_COMPLETED, 70 s wall, 0 cones within 0.3 m, closest 0.35 m. Clean.
+- Summary: library 2 of 3 clean; custom 1 of 2 clean. Too few runs to call either more consistent.
+
+**Harness fixes made along the way** (in `simws_relocalizer`, not the repo): the test script now passes
+`REG_MODE` to `registration_mode`, and its cleanup SIGINTs the `ros2 bag record` process, which runs in
+its own session. Without that, `metadata.yaml` was never written and `plot_trajectory.py` could not read
+the bag. Plot with the workspace sourced (`install/setup.bash`), or `mfe_msgs` is missing.
+
+Commit: `8ab6812` (integration + CLAUDE.md). Branch `skidpad-relocalizer-compare`.
