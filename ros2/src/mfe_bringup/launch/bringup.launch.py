@@ -378,9 +378,14 @@ def generate_launch_description():
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
         # Closed-loop tracks use return-to-start lap counting.
-        # Linear tracks (acceleration, skidpad) keep x-position logic — num_laps ignored.
+        # Linear tracks keep x-position logic as a fallback only — num_laps ignored.
         if mission_str in ('autocross', 'trackdrive', 'peanut'):
             extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
+        elif mission_str == 'acceleration':
+            # Perception-based: one orange-gate pass finishes the run. finish_x stays
+            # wired above as the emergency fallback only (fires if the gate is never
+            # perceived) — gate_crossings=1 makes that the PRIMARY path, not x-position.
+            extra = {'gate_crossings': 1}
         else:
             extra = {}
         return [Node(
