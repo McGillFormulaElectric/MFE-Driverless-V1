@@ -217,6 +217,17 @@ def generate_launch_description():
         ),
     )
 
+    steer_pt2_tau_arg = DeclareLaunchArgument(
+        'steer_pt2_tau',
+        default_value='0.05',
+        description=(
+            'Pure pursuit PT2 steering anticipator time constant (s). The anticipator '
+            'pre-emphasises steering changes to cancel actuator lag; at the 20 Hz control '
+            'rate tau=0.05 multiplies each change in the steering request by 3.4x. '
+            'The EUFS sim steering has no such lag, so the sim scripts pass 0.0 (pass-through).'
+        ),
+    )
+
     lookahead_arg = DeclareLaunchArgument(
         'lookahead',
         default_value='0.0',
@@ -399,6 +410,7 @@ def generate_launch_description():
         lookahead_override = float(context.launch_configurations.get('lookahead', '0.0'))
         if lookahead_override > 0.0:
             params['lookahead_distance'] = lookahead_override
+        params['steer_pt2_tau'] = float(context.launch_configurations.get('steer_pt2_tau', '0.05'))
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -593,6 +605,7 @@ def generate_launch_description():
         record_bag_arg,
         bag_output_dir_arg,
         lookahead_arg,
+        steer_pt2_tau_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,
