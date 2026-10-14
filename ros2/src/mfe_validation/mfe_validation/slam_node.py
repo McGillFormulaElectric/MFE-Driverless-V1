@@ -35,11 +35,12 @@ class SlamNode(Node):
         super().__init__('slam_node')
         for k, v in dict(track_csv='', keyframe_m=1.5, gate=1.0, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
                          min_obs_publish=3, publish_radius=25.0, color_radius=2.0,
-                         cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5).items():
+                         cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6).items():
             self.declare_parameter(k, v)
         p = lambda k: self.get_parameter(k).value
         self.keyframe_m, self.gate, self.max_range = p('keyframe_m'), p('gate'), p('max_range')
         self.color_mode, self.keyframe_dt = p('color_mode'), p('keyframe_dt')
+        self.p_freeze, self.p_dup = p('freeze'), p('dup_radius')
         self.min_obs, self.pub_radius, self.color_radius = p('min_obs_publish'), p('publish_radius'), p('color_radius')
         self.obs_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345),
             gtsam.noiseModel.Diagonal.Sigmas(np.array([p('brg_sigma'), p('rng_sigma')])))
@@ -55,6 +56,7 @@ class SlamNode(Node):
         self.keys = []                  # keyframe index list
         self.samples = []               # (sim_t, yaw, vx) since last keyframe
         self.kf_pose = gtsam.Pose2(0, 0, 0)   # current estimate of the last keyframe
+        self.frozen = {}                # landmark id -> position first published (the planner's cone map is append-only)
         self.kf_t = None
         self.lms, self.lm_obs, self.tent, self.nxt = {}, {}, [], 0
         self.gt_pose = None
@@ -172,6 +174,13 @@ class SlamNode(Node):
         for j, lm in self.lms.items():
             if self.lm_obs[j] < self.min_obs or math.hypot(lm[0] - c.x(), lm[1] - c.y()) > self.pub_radius:
                 continue
+            if self.p_freeze:
+                # planner never forgets a cone and keys it on a 0.5 m grid, so a moving estimate leaves ghosts: publish each landmark once, at a fixed position
+                if j not in self.frozen:
+                    if any(np.hypot(*(f - lm)) < self.p_dup for f in self.frozen.values()):
+                        continue
+                    self.frozen[j] = lm.copy()
+                lm = self.frozen[j]
             cone = Cone(); cone.header.stamp = now; cone.header.frame_id = 'map'
             cone.location.x, cone.location.y = float(lm[0]), float(lm[1])
             cone.color = Cone.UNKNOWN

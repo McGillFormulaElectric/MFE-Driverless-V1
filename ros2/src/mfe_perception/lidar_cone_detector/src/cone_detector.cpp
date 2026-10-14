@@ -19,6 +19,8 @@ ConeDetectorNode::ConeDetectorNode(const rclcpp::NodeOptions &options)
 
     pub_debug_clusters_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "pcl/debug_clusters", 10);
+
+    pub_track_ = this->create_publisher<mfe_msgs::msg::Track>("cones", 10);
 }
 
 void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -43,12 +45,12 @@ void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::Share
 
     // 3. Process Clusters
     pcl::PointCloud<pcl::PointXYZ>::Ptr debug_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    
-    // mfe_msgs::msg::Track track_msg; // Your custom message
-    
+
+    mfe_msgs::msg::Track track_msg;
+
     for (const auto& indices : cluster_indices) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr cluster(new pcl::PointCloud<pcl::PointXYZ>);
-        
+
         // Extract points for this specific cluster
         for (const auto& index : indices.indices) {
             cluster->points.push_back(cloud->points[index]);
@@ -61,16 +63,19 @@ void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::Share
 
         // TODO: Add your filtering logic here (check width/height of 'cluster')
 
-        // Create Cone Message
-        // mfe_msgs::msg::Cone cone;
-        // cone.location.x = centroid[0];
-        // cone.location.y = centroid[1];
-        // cone.location.z = centroid[2];
-        // track_msg.track.push_back(cone);
+        // Create Cone Message — LiDAR alone cannot classify color, so UNKNOWN;
+        // color is assigned downstream by camera/GT fusion.
+        mfe_msgs::msg::Cone cone;
+        cone.header = msg->header;
+        cone.location.x = centroid[0];
+        cone.location.y = centroid[1];
+        cone.location.z = centroid[2];
+        cone.color = mfe_msgs::msg::Cone::UNKNOWN;
+        track_msg.track.push_back(cone);
     }
 
     // 4. Publish
-    // pub_track_->publish(track_msg);
+    pub_track_->publish(track_msg);
 
     // Publish visual debug cloud
     sensor_msgs::msg::PointCloud2 debug_msg;

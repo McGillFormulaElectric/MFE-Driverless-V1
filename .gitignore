@@ -29,5 +29,7 @@
 # folders
 /log
 /CMakeFiles
-**/resource
 # rosbags and database instances
+
+# Obsidian workspace state — churns on every open
+docs/.obsidian/

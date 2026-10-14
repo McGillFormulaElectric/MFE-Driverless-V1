@@ -18,7 +18,8 @@ from mfe_msgs.msg import Track
 from mfe_path_planning.path_planner_node import _make_skidpad_path
 
 QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
-CSV = os.path.join(os.environ.get('EUFS_MASTER', os.path.expanduser('~/Develop/MFE26-eufs-sim')), 'eufs_sim/eufs_tracks/csv/skidpad.csv')
+_EUFS_MASTER = os.environ.get('EUFS_MASTER', os.path.expanduser('~/Develop/MFE26-eufs-sim'))
+CSV = f'{_EUFS_MASTER}/eufs_sim/eufs_tracks/csv/skidpad.csv'
 
 
 def rigid(a, b):

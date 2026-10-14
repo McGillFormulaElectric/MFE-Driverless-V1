@@ -105,8 +105,8 @@ class PurePursuitNode(Node):
         reliable_qos    = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         best_effort_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
-        self.create_subscription(Path,     '/planning/centerline',       self._path_callback,     best_effort_qos)
-        self.create_subscription(Odometry, '/ekf/output',                self._odom_callback,     best_effort_qos)
+        self.create_subscription(Path,     '/planning/centerline',     self._path_callback,     reliable_qos)
+        self.create_subscription(Odometry, '/ekf/output',              self._odom_callback,     reliable_qos)
         self.create_subscription(Bool,     '/planning/mission_finished', self._finished_callback, reliable_qos)
         self.create_subscription(
             Float64MultiArray,

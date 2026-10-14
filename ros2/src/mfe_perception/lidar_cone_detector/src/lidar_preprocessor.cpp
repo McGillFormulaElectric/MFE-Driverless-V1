@@ -3,7 +3,7 @@
 namespace lidar_cone_detector {
 
 LidarPreprocessor::LidarPreprocessor(const rclcpp::NodeOptions &options)
-: Node("ground_plane_removal_node", options) {
+: Node("lidar_preprocessor", options) {
     rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(10)).reliability(rclcpp::ReliabilityPolicy::Reliable);
 
     scans_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -28,8 +28,8 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
     // Add to sliding window
     for (auto &p: *pcl_cloud) {
         full_scan_->points.push_back(p);
-        // Obtain the azimuth of the scan
-        double theta = std::atan2(p.x, p.y) * 180.0 / M_PI;
+        // Obtain the azimuth of the scan (atan2(y, x) — angle from +X axis)
+        double theta = std::atan2(p.y, p.x) * 180.0 / M_PI;
 
         if (theta < last_theta) {
             // Down-sample for performance concerns on Jetson Nano
@@ -44,7 +44,8 @@ void LidarPreprocessor::scanCallback(const sensor_msgs::msg::PointCloud2::Shared
             full_scan_->clear();    // clear the buffer
             full_scan_->width = 0;
             full_scan_->height = 0;
-            out_cloud.header.frame_id = "map";
+            // Accumulated cloud is still in the sensor frame — preserve it
+            out_cloud.header.frame_id = scan->header.frame_id;
             out_cloud.header.stamp = scan->header.stamp;
             acc_pub_->publish(out_cloud);
         }

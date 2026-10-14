@@ -48,6 +48,12 @@ public:
         this->declare_parameter("motion_scan_duration_sec", 0.1);
         this->declare_parameter("high_intensity_threshold", 150.0);
         this->declare_parameter("low_intensity_threshold", 50.0);
+        // Cone-body height band in the sensor frame, applied after ground removal.
+        // Defaults match the EUFS sim VLP-16: sensor origin ~1.0 m above the track,
+        // FSAE cones are 0.325 m tall (see comment at the passthrough below).
+        // On hardware, set these from the real sensor mounting height.
+        this->declare_parameter("cone_z_min", -1.10f);
+        this->declare_parameter("cone_z_max", -0.50f);
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -64,6 +70,8 @@ public:
             this->get_parameter("high_intensity_threshold").as_double(),
             this->get_parameter("low_intensity_threshold").as_double()
         );
+        cone_z_min_ = this->get_parameter("cone_z_min").as_double();
+        cone_z_max_ = this->get_parameter("cone_z_max").as_double();
 
         sub_raw_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/lidar/points_raw", rclcpp::SensorDataQoS(),
@@ -98,6 +106,7 @@ private:
     }
 
     void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+        // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::fromROSMsg(*msg, *host_cloud);
         std::vector<int> nan_indices;
@@ -109,6 +118,7 @@ private:
             host_cloud = distortion_corrector_->correctMotionDistortion(host_cloud, motion_scan_duration_sec_);
         }
 
+        // Load PointXYZI in parallel — used for intensity filtering after geometric pipeline
         pcl::PointCloud<pcl::PointXYZI>::Ptr host_cloud_i(new pcl::PointCloud<pcl::PointXYZI>);
         if (min_intensity_ > 0.0) {
             pcl::fromROSMsg(*msg, *host_cloud_i);
@@ -378,7 +388,7 @@ private:
                 pcl::PassThrough<pcl::PointXYZ> pt;
                 pt.setInputCloud(object_cloud);
                 pt.setFilterFieldName("z");
-                pt.setFilterLimits(-1.10f, -0.50f);
+                pt.setFilterLimits(static_cast<float>(cone_z_min_), static_cast<float>(cone_z_max_));
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cone_body(new pcl::PointCloud<pcl::PointXYZ>);
                 pt.filter(*cone_body);
                 object_cloud = cone_body;
@@ -451,6 +461,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
+    double cone_z_min_, cone_z_max_;
     int min_cluster_size_, max_cluster_size_;
     std::string lidar_frame_id_;
 
