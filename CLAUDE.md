@@ -38,6 +38,8 @@ Key files:
 | `ros2/src/mfe_path_planning/mfe_path_planning/path_planner_node.py` | ft-fsd path planner; hardcoded path for skidpad only |
 | `ros2/src/mfe_control/mfe_control/pure_pursuit_node.py` | Pure pursuit + lookahead velocity profile |
 | `ros2/src/mfe_bringup/launch/bringup.launch.py` | All node launch config, mission-specific params |
+| `ros2/src/mfe_validation/mfe_validation/slam_node.py` | GTSAM cone-landmark SLAM (LiDAR-only validation stack) |
+| `ros2/src/mfe_validation/mfe_validation/skidpad_planner.py` | Fits the known skidpad layout to SLAM landmarks, publishes `/planning/centerline` |
 | `scripts/docker_run.sh` | Host-side launcher (run this) |
 | `scripts/launch_sim.sh` | In-container tmux launcher (called by docker_run.sh) |
 | `docs/` | Full reference: nodes.md, simulation.md, architecture.md, etc. |
@@ -122,7 +124,9 @@ The peanut track is a crossing figure-8 (verified from lap traces: the car cross
 
 ### lib/
 - `lib/gtsam` — git submodule, `borglab/gtsam` pinned to tag `4.2.0`. Reference/build-version pin only — the actual runtime dependency is the `gtsam==4.2` pip wheel (`pip install --user --no-deps gtsam`), installed separately in whatever environment runs `slam_node.py`. This submodule is not built or imported from; don't assume it needs compiling.
-- `lib/cudaPCL` — the LiDAR+GTSAM-SLAM validation/testing harness (`slam_node.py`, `skidpad_planner.py`, `score_run.py`, `render_video.py`, `run_slam_headless.sh`, etc.), vendored in as plain tracked files (not a submodule — it's this team's own code, no separate remote). Scripts that load a track's cone CSV now resolve the EUFS tracks directory from the `EUFS_MASTER` env var (same variable the launch scripts already export) instead of a hardcoded absolute path — falls back to `~/Develop/MFE26-eufs-sim` if unset.
+- `lib/cudaPCL` — the LiDAR+GTSAM-SLAM validation/testing harness (`eval/score_run.py`, `eval/render_video.py`, `scripts/run_slam_headless.sh`, etc.), vendored in as plain tracked files (not a submodule — it's this team's own code, no separate remote). Scripts that load a track's cone CSV resolve the EUFS tracks directory from the `EUFS_MASTER` env var (same variable the launch scripts already export) instead of a hardcoded absolute path — falls back to `~/Develop/MFE26-eufs-sim` if unset.
+  - `lib/cudaPCL/validation/` (the `mfe_validation` ROS2 package: `slam_node.py`, `skidpad_planner.py`) is now a **stale duplicate** — the real copy lives at `ros2/src/mfe_validation/` and is built automatically by the normal `colcon build` over `ros2/src`, same as every other package. The old `lib/cudaPCL/validation/` copy still exists because other in-flight work may still be using the separately-merged `simws_local` workspace that symlinks to it; clean it up once that's no longer needed. Don't maintain both in parallel — fix bugs in `ros2/src/mfe_validation/`, not here.
+  - `gtsam` is installed in `Docker/fs-driverless-sim/Dockerfile` (`pip3 install gtsam==4.2`) — no longer a manual `pip install --user --no-deps gtsam` step in a running container.
 - Not to be confused with `ros2/src/mfe_perception/lidar_cone_detector/lib/cuda-pcl` — a separate, unrelated submodule (NVIDIA's `cuda-pcl` GPU point-cloud library), pre-existing, different purpose, different name (no capital P/no hyphen distinguishes `cudaPCL` from `cuda-pcl`).
 
 ---

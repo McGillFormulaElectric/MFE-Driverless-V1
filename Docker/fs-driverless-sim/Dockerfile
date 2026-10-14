@@ -65,6 +65,12 @@ RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /o
     pip3 install /opt/ft-fsd-path-planning && \
     python3 -c "import fsd_path_planning; print('fsd_path_planning OK')"
 
+# gtsam — GTSAM cone-landmark SLAM (mfe_validation/slam_node.py). x86_64 wheel only;
+# no aarch64 wheel exists on PyPI, so Jetson must build from lib/gtsam (vendored
+# submodule, pinned to the same 4.2.0 this wheel tracks) instead of this step.
+RUN pip3 install --retries 10 --timeout 120 "gtsam==4.2" && \
+    python3 -c "import gtsam; print('gtsam OK')"
+
 # Vision stack: YOLO inference for vision_cone_detector.
 # Without torch/ultralytics the node dies on import — perception mode then runs
 # LiDAR-only with the GT color fallback and the camera contributes nothing.
