@@ -42,6 +42,8 @@ except ImportError:
     except ImportError:
         _LIB_AVAILABLE = False
 
+from mfe_path_planning.amz_planner import AmzPlanner
+
 
 _QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
@@ -221,11 +223,16 @@ class PathPlannerNode(Node):
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
         self.declare_parameter('skidpad_mode', 'cone_based')  # cone_based | hardcoded
+        # Local (non-global) planning backend: fasttube = fsd_path_planning library,
+        # amz = Delaunay + beam search after the AMZ Driverless paper (amz_planner.py).
+        self.declare_parameter('planner_backend', 'fasttube')  # fasttube | amz
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
         self._mission = mission_str
         self._skidpad_mode = self.get_parameter('skidpad_mode').value
+        self._backend = self.get_parameter('planner_backend').value
+        self._amz = AmzPlanner() if self._backend == 'amz' else None
 
         # skidpad can use either hardcoded path or cone-based planner.
         # trackdrive-type missions (known closed track) plan GLOBALLY over the full cone
@@ -266,7 +273,8 @@ class PathPlannerNode(Node):
                     f'state machine initialized')
         else:
             self._skidpad_path = None
-            self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
+            self.get_logger().info(
+                f'PathPlannerNode started. Mission: {mission_str} | local planner: {self._backend}')
 
         # ---------- State ----------
         self._car_pos = np.array([0.0, 0.0])
@@ -920,6 +928,10 @@ class PathPlannerNode(Node):
             for b in buckets
         ]
 
+        if self._amz is not None and not self._global_planning:
+            self._plan_amz()
+            return
+
         n_left    = len(buckets[ConeTypes.LEFT])
         n_right   = len(buckets[ConeTypes.RIGHT])
         n_unknown = len(buckets[ConeTypes.UNKNOWN])
@@ -1037,6 +1049,46 @@ class PathPlannerNode(Node):
             self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
         if right_xy is not None and len(right_xy) > 0:
             self._pub_right.publish(_path_from_xy(np.array(right_xy)[:, :2], frame, stamp))
+
+
+    def _plan_amz(self) -> None:
+        """Local planning with the AMZ-style planner over the live cone map.
+        Cones keep their colour, or UNKNOWN in LiDAR-only mode; the planner's colour term
+        then simply has nothing to penalise, and width/angle/spacing terms carry the choice."""
+        xy = np.array(list(self._cone_map.keys()), dtype=np.float64)
+        col = np.array([int(t) for t in self._cone_map.values()])
+        d_nearest = float(np.min(np.hypot(xy[:, 0] - self._car_pos[0], xy[:, 1] - self._car_pos[1])))
+        if d_nearest > 20.0:  # same off-map guard as the library path
+            self.get_logger().warn(
+                f'Car is {d_nearest:.0f} m from the nearest mapped cone — off track? '
+                'Skipping planner so the stale-path failsafe stops the car.',
+                throttle_duration_sec=2.0)
+            return
+        res = self._amz.plan(xy, col, self._car_pos, self._car_dir)
+        if res is None:
+            self.get_logger().warn(f'AMZ planner found no path: {self._amz.last_debug}',
+                                   throttle_duration_sec=2.0)
+            return
+        path, left, right = res
+        dbg = self._amz.last_debug
+        self.get_logger().info(
+            f'amz planner OK: {len(path)} pts, {dbg.get("length", 0):.1f} m over {dbg.get("n_nodes")} gates, '
+            f'{dbg.get("n_cones")} cones in range, cost {dbg.get("cost", 0):.2f}',
+            throttle_duration_sec=2.0)
+        # same racing-line post-processing the library backend gets
+        optimized = path
+        if len(path) > 3 and len(left) > 3 and len(right) > 3:
+            try:
+                optimized = _min_curvature_path(path, left, right, safety=0.7)
+            except Exception as e:
+                self.get_logger().warn(f'Racing line optimizer failed ({type(e).__name__}): {e}',
+                                       throttle_duration_sec=5.0)
+        stamp = self.get_clock().now().to_msg()
+        self._pub_centerline.publish(_path_from_xy(optimized, self._map_frame, stamp))
+        if len(left):
+            self._pub_left.publish(_path_from_xy(left, self._map_frame, stamp))
+        if len(right):
+            self._pub_right.publish(_path_from_xy(right, self._map_frame, stamp))
 
 
 def main(args=None):

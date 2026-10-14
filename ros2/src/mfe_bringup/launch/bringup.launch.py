@@ -92,6 +92,16 @@ def generate_launch_description():
         ),
     )
 
+    planner_backend_arg = DeclareLaunchArgument(
+        'planner_backend',
+        default_value='fasttube',
+        choices=['fasttube', 'amz'],
+        description=(
+            'Local path planner: fasttube (fsd_path_planning library) or amz (Delaunay + beam '
+            'search after the AMZ Driverless paper). Global/trackdrive planning is unaffected.'
+        ),
+    )
+
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
         default_value='',
@@ -194,6 +204,7 @@ def generate_launch_description():
 
     mission = LaunchConfiguration('mission')
     skidpad_mode = LaunchConfiguration('skidpad_mode')
+    planner_backend = LaunchConfiguration('planner_backend')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
@@ -331,6 +342,7 @@ def generate_launch_description():
         parameters=[{
             'mission': mission,
             'skidpad_mode': skidpad_mode,
+            'planner_backend': planner_backend,
         }],
         remappings=[('/ekf/output', pose_topic)],
     )
@@ -482,6 +494,7 @@ def generate_launch_description():
         # args
         mission_arg,
         skidpad_mode_arg,
+        planner_backend_arg,
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
