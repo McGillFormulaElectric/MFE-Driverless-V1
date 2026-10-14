@@ -411,6 +411,11 @@ def generate_launch_description():
         if lookahead_override > 0.0:
             params['lookahead_distance'] = lookahead_override
         params['steer_pt2_tau'] = float(context.launch_configurations.get('steer_pt2_tau', '0.05'))
+        # pure_pursuit_node now uses an adaptive look-ahead (ld = K_v*v*sqrt(1+k^2), clamped to
+        # [ld_min, ld_max]) and no longer reads lookahead_distance. Keep the per-mission value as
+        # the floor: with the node default ld_min=0.5 m the car steered full lock on a straight
+        # path at low speed (skidpad, merged PR branch) and wove off the track.
+        params['ld_min'] = params['lookahead_distance']
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
