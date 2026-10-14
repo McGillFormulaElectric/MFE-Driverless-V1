@@ -82,6 +82,16 @@ def generate_launch_description():
         description='FSAE mission type passed to path planner',
     )
 
+    skidpad_mode_arg = DeclareLaunchArgument(
+        'skidpad_mode',
+        default_value='cone_based',
+        choices=['cone_based', 'hardcoded'],
+        description=(
+            'Skidpad path planning mode: cone_based (cone-detection-driven state machine) '
+            'or hardcoded (pre-computed template path). Has no effect on non-skidpad missions.'
+        ),
+    )
+
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
         default_value='',
@@ -183,6 +193,7 @@ def generate_launch_description():
     )
 
     mission = LaunchConfiguration('mission')
+    skidpad_mode = LaunchConfiguration('skidpad_mode')
     vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
@@ -319,6 +330,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'mission': mission,
+            'skidpad_mode': skidpad_mode,
         }],
         remappings=[('/ekf/output', pose_topic)],
     )
@@ -386,6 +398,10 @@ def generate_launch_description():
             # wired above as the emergency fallback only (fires if the gate is never
             # perceived) — gate_crossings=1 makes that the PRIMARY path, not x-position.
             extra = {'gate_crossings': 1}
+        elif mission_str == 'skidpad':
+            # Perception-based orange-gate detection: 5 passes (entry + 4 laps of central gate)
+            # finish_x stays as emergency fallback only.
+            extra = {'gate_crossings': 5}
         else:
             extra = {}
         return [Node(
@@ -465,6 +481,7 @@ def generate_launch_description():
     return LaunchDescription([
         # args
         mission_arg,
+        skidpad_mode_arg,
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,

@@ -220,18 +220,20 @@ class PathPlannerNode(Node):
         # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
+        self.declare_parameter('skidpad_mode', 'cone_based')  # cone_based | hardcoded
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
         self._mission = mission_str
+        self._skidpad_mode = self.get_parameter('skidpad_mode').value
 
-        # skidpad uses a hardcoded path; all other missions use ft-fsd cone-based planning.
+        # skidpad can use either hardcoded path or cone-based planner.
         # trackdrive-type missions (known closed track) plan GLOBALLY over the full cone
         # map — required on tracks whose boundary walls pass near each other (e.g. a
         # figure-8 crossing): a local radius filter makes the boundary trace jump walls,
         # while the global trace follows each wall around its own loop by ring continuity.
         # Local-type missions (autocross, acceleration) keep the visibility filter.
-        _HARDCODED_MISSIONS = {'skidpad'}
+        _HARDCODED_MISSIONS = {'skidpad'} if self._skidpad_mode == 'hardcoded' else set()
         self._global_planning = False
         if _LIB_AVAILABLE and mission_str not in _HARDCODED_MISSIONS:
             mission_map = {
@@ -239,6 +241,7 @@ class PathPlannerNode(Node):
                 'trackdrive':   MissionTypes.trackdrive,
                 'acceleration': MissionTypes.acceleration,
                 'peanut':       MissionTypes.trackdrive,   # closed figure-8 → global planning
+                'skidpad':      MissionTypes.autocross,    # cone-based planning for skidpad (local)
             }
             mission = mission_map.get(mission_str, MissionTypes.autocross)
             self._planner = PathPlanner(mission)
@@ -249,11 +252,18 @@ class PathPlannerNode(Node):
         # Pre-compute hardcoded paths for missions ft-fsd can't handle
         self._skidpad_path_published = False
         if mission_str == 'skidpad':
-            self._skidpad_path = _make_skidpad_path()
-            self.get_logger().info(
-                f'PathPlannerNode started. Mission: skidpad | '
-                f'hardcoded path: {len(self._skidpad_path)} waypoints, '
-                f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
+            if self._skidpad_mode == 'hardcoded':
+                self._skidpad_path = _make_skidpad_path()
+                self.get_logger().info(
+                    f'PathPlannerNode started. Mission: skidpad (hardcoded mode) | '
+                    f'path: {len(self._skidpad_path)} waypoints, '
+                    f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
+            else:
+                self._skidpad_path = None
+                self._init_skidpad_state_machine()
+                self.get_logger().info(
+                    f'PathPlannerNode started. Mission: skidpad (cone_based mode) | '
+                    f'state machine initialized')
         else:
             self._skidpad_path = None
             self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
@@ -261,6 +271,8 @@ class PathPlannerNode(Node):
         # ---------- State ----------
         self._car_pos = np.array([0.0, 0.0])
         self._car_dir = np.array([1.0, 0.0])   # unit vector, default facing +X
+        self._car_yaw = 0.0                    # yaw angle in radians
+        self._car_yaw_rate = 0.0               # angular velocity (z-component of twist)
         self._odom_received = False
 
         # Cone map: accumulated global map of all seen cones across frames.
@@ -277,6 +289,23 @@ class PathPlannerNode(Node):
         self._trail_max_r = 0.0           # max distance from start (excursion guard)
         self._locked_path = None          # Nx2 closed-loop path once lap 1 completes
 
+        # Skidpad state machine (cone-based mode): tracks which segment and lap count
+        if mission_str == 'skidpad' and self._skidpad_mode == 'cone_based':
+            self._skidpad_state = 'APPROACH'      # APPROACH → LEFT_CIRCLE → RIGHT_CIRCLE → EXIT
+            self._skidpad_circle_lap_count = 0    # laps completed in current circle (0, 1, or 2)
+            self._skidpad_left_locked = None      # locked left circle path (Nx2)
+            self._skidpad_right_locked = None     # locked right circle path (Nx2)
+            self._skidpad_left_trail = []         # trail for left circle
+            self._skidpad_left_start = None       # position where left circle started
+            self._skidpad_left_trail_dist = 0.0
+            self._skidpad_left_max_r = 0.0
+            self._skidpad_right_trail = []
+            self._skidpad_right_start = None
+            self._skidpad_right_trail_dist = 0.0
+            self._skidpad_right_max_r = 0.0
+            self._skidpad_sustained_yaw_rate_sign = None  # +1 (left/CCW), -1 (right/CW), or None
+            self._skidpad_yaw_rate_history = []   # recent yaw rates for filtering
+
         # ---------- Subscribers ----------
         self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS)
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, _QOS)
@@ -292,7 +321,10 @@ class PathPlannerNode(Node):
         pos = msg.pose.pose.position
         self._car_pos = np.array([pos.x, pos.y])
         yaw = _yaw_from_quaternion(msg.pose.pose.orientation)
+        self._car_yaw = yaw
         self._car_dir = np.array([math.cos(yaw), math.sin(yaw)])
+        # Extract yaw rate (angular velocity around z-axis)
+        self._car_yaw_rate = float(msg.twist.twist.angular.z)
         self._odom_received = True
 
         # Breadcrumb trail during lap 1 (global missions, before lock-in)
@@ -307,6 +339,102 @@ class PathPlannerNode(Node):
                     self._trail_max_r = max(
                         self._trail_max_r,
                         float(np.linalg.norm(self._car_pos - self._trail[0])))
+
+    def _init_skidpad_state_machine(self) -> None:
+        """Initialize skidpad cone-based state machine."""
+        self._skidpad_state = 'APPROACH'
+        self._skidpad_circle_lap_count = 0
+        self._skidpad_left_locked = None
+        self._skidpad_right_locked = None
+        self._skidpad_left_trail = []
+        self._skidpad_left_start = None
+        self._skidpad_left_trail_dist = 0.0
+        self._skidpad_left_max_r = 0.0
+        self._skidpad_right_trail = []
+        self._skidpad_right_start = None
+        self._skidpad_right_trail_dist = 0.0
+        self._skidpad_right_max_r = 0.0
+        self._skidpad_sustained_yaw_rate_sign = None
+        self._skidpad_yaw_rate_history = []
+
+    def _update_skidpad_yaw_rate_sign(self) -> None:
+        """Update sustained yaw-rate sign (moving average for filtering noise)."""
+        if self._mission != 'skidpad' or self._skidpad_mode != 'cone_based':
+            return
+        # Keep history of last 5 frames (~0.5 s at 10 Hz)
+        self._skidpad_yaw_rate_history.append(self._car_yaw_rate)
+        if len(self._skidpad_yaw_rate_history) > 5:
+            self._skidpad_yaw_rate_history.pop(0)
+        # Average yaw rate; if consistently positive (left/CCW) or negative (right/CW)
+        avg_yaw_rate = float(np.mean(self._skidpad_yaw_rate_history))
+        threshold = 0.1  # rad/s
+        if abs(avg_yaw_rate) > threshold:
+            new_sign = 1 if avg_yaw_rate > 0 else -1
+            if self._skidpad_sustained_yaw_rate_sign != new_sign:
+                self._skidpad_sustained_yaw_rate_sign = new_sign
+                circle_dir = "LEFT (CCW)" if new_sign > 0 else "RIGHT (CW)"
+                self.get_logger().debug(f'Skidpad: detected sustained turn {circle_dir}')
+
+    def _build_skidpad_circle(self, trail: list, trail_dist: float, trail_max_r: float,
+                              trail_start: np.ndarray) -> np.ndarray:
+        """
+        Build a locked circle path for skidpad, similar to _build_locked_loop
+        but working with a specific subset of the cone map for one circle.
+
+        Returns Nx2 closed path (first ≈ last) or None if the map is too thin.
+        """
+        if trail_start is None:
+            return None
+        blue = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.LEFT])
+        yellow = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.RIGHT])
+        if len(blue) < 4 or len(yellow) < 4 or len(trail) < 15:
+            return None
+        trail_arr = np.array(trail)
+        # Walk the driven trail; at each step take the midpoint of nearest left/right cones
+        centerline = []
+        for tx, ty in trail_arr[::2]:  # every ~1 m of trail
+            db = np.hypot(blue[:, 0] - tx, blue[:, 1] - ty)
+            dy = np.hypot(yellow[:, 0] - tx, yellow[:, 1] - ty)
+            ib, iy = int(np.argmin(db)), int(np.argmin(dy))
+            if db[ib] <= 5.0 and dy[iy] <= 5.0:
+                p = ((blue[ib, 0] + yellow[iy, 0]) / 2.0,
+                     (blue[ib, 1] + yellow[iy, 1]) / 2.0)
+            else:
+                p = (float(tx), float(ty))
+            if not centerline or (p[0]-centerline[-1][0])**2 + (p[1]-centerline[-1][1])**2 >= 0.75**2:
+                centerline.append(p)
+        centerline = np.array(centerline)
+        if len(centerline) < 8:
+            return None
+        # Light smoothing (3-point moving average, cyclic)
+        prev_c = np.roll(centerline, 1, axis=0)
+        next_c = np.roll(centerline, -1, axis=0)
+        centerline = (prev_c + centerline + next_c) / 3.0
+        raw = centerline.copy()
+        # One-time racing line optimization (gentle)
+        try:
+            centerline = _min_curvature_path(centerline, blue, yellow, safety=0.5)
+        except Exception as e:
+            self.get_logger().debug(f'Skidpad circle optimizer failed: {e}')
+        # Clearance guard
+        all_cones = np.vstack([blue, yellow])
+        reverted = 0
+        for i in range(len(centerline)):
+            d = np.hypot(all_cones[:, 0] - centerline[i, 0],
+                        all_cones[:, 1] - centerline[i, 1]).min()
+            if d < 1.0:
+                centerline[i] = raw[i]
+                reverted += 1
+        # Resample to uniform ~1.0 m spacing
+        closed = np.vstack([centerline, centerline[:1]])
+        seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        s = np.concatenate([[0.0], np.cumsum(seg)])
+        total = float(s[-1])
+        n = max(int(round(total)), 15)
+        return np.column_stack([
+            np.interp(np.linspace(0.0, total, n + 1), s, closed[:, 0]),
+            np.interp(np.linspace(0.0, total, n + 1), s, closed[:, 1]),
+        ])
 
     def _build_locked_loop(self):
         """
@@ -396,6 +524,286 @@ class PathPlannerNode(Node):
             np.interp(si, s, closed[:, 1]),
         ])
 
+    def _handle_skidpad_cone_based(self, msg: Track) -> None:
+        """
+        Skidpad state machine for cone-based planning.
+
+        Sequence: APPROACH (local planning) → LEFT_CIRCLE (detect & lock, 2 laps) →
+        RIGHT_CIRCLE (detect & lock, 2 laps) → EXIT (local planning).
+
+        Uses yaw-rate sign to disambiguate which circle, loop closure for lap counting,
+        cone color as corroborating signal, and separate start references.
+        """
+        if not self._odom_received:
+            return
+
+        # Update yaw-rate sign tracking
+        self._update_skidpad_yaw_rate_sign()
+
+        # --- Cone map accumulation (same as other missions) ---
+        _GRID = 0.5
+        _CONE_MAP_MAX = 500
+        for cone in msg.track:
+            if cone.color in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL):
+                continue
+            if not (math.isfinite(cone.location.x) and math.isfinite(cone.location.y)):
+                continue
+            rx = round(cone.location.x / _GRID) * _GRID
+            ry = round(cone.location.y / _GRID) * _GRID
+            key = (rx, ry)
+            if key not in self._cone_map:
+                if len(self._cone_map) >= _CONE_MAP_MAX:
+                    self._cone_map.pop(next(iter(self._cone_map)))
+                self._cone_map[key] = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
+            else:
+                new_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
+                if self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
+                    self._cone_map[key] = new_type
+
+        # Track trails for each circle (analogous to global mission trail tracking)
+        if self._skidpad_state == 'LEFT_CIRCLE':
+            if not self._skidpad_left_trail:
+                self._skidpad_left_trail.append(self._car_pos.copy())
+            else:
+                step = float(np.linalg.norm(self._car_pos - self._skidpad_left_trail[-1]))
+                if step >= 0.5:
+                    self._skidpad_left_trail.append(self._car_pos.copy())
+                    self._skidpad_left_trail_dist += step
+                    if self._skidpad_left_start is not None:
+                        self._skidpad_left_max_r = max(
+                            self._skidpad_left_max_r,
+                            float(np.linalg.norm(self._car_pos - self._skidpad_left_start)))
+        elif self._skidpad_state == 'RIGHT_CIRCLE':
+            if not self._skidpad_right_trail:
+                self._skidpad_right_trail.append(self._car_pos.copy())
+            else:
+                step = float(np.linalg.norm(self._car_pos - self._skidpad_right_trail[-1]))
+                if step >= 0.5:
+                    self._skidpad_right_trail.append(self._car_pos.copy())
+                    self._skidpad_right_trail_dist += step
+                    if self._skidpad_right_start is not None:
+                        self._skidpad_right_max_r = max(
+                            self._skidpad_right_max_r,
+                            float(np.linalg.norm(self._car_pos - self._skidpad_right_start)))
+
+        # --- State machine ---
+        if self._skidpad_state == 'APPROACH':
+            # Use local cone-based planning until we detect a sustained turn into a circle
+            if self._skidpad_sustained_yaw_rate_sign is not None:
+                if self._skidpad_sustained_yaw_rate_sign > 0:
+                    self.get_logger().info('Skidpad: entering LEFT_CIRCLE')
+                    self._skidpad_state = 'LEFT_CIRCLE'
+                    self._skidpad_circle_lap_count = 0
+                    self._skidpad_left_start = self._car_pos.copy()
+                    self._skidpad_left_trail = [self._car_pos.copy()]
+                    self._skidpad_left_trail_dist = 0.0
+                    self._skidpad_left_max_r = 0.0
+                else:
+                    self.get_logger().info('Skidpad: entering RIGHT_CIRCLE')
+                    self._skidpad_state = 'RIGHT_CIRCLE'
+                    self._skidpad_circle_lap_count = 0
+                    self._skidpad_right_start = self._car_pos.copy()
+                    self._skidpad_right_trail = [self._car_pos.copy()]
+                    self._skidpad_right_trail_dist = 0.0
+                    self._skidpad_right_max_r = 0.0
+
+        elif self._skidpad_state == 'LEFT_CIRCLE':
+            # Check for lap closure: trail dist > 40 m, max excursion > 10 m, back within 4 m of start
+            if (self._skidpad_left_trail_dist > 40.0
+                    and self._skidpad_left_max_r > 10.0
+                    and float(np.linalg.norm(self._car_pos - self._skidpad_left_start)) < 4.0):
+                if self._skidpad_left_locked is None:
+                    # First lap closure: build and lock the left circle
+                    locked = self._build_skidpad_circle(
+                        self._skidpad_left_trail, self._skidpad_left_trail_dist,
+                        self._skidpad_left_max_r, self._skidpad_left_start)
+                    if locked is not None:
+                        self._skidpad_left_locked = locked
+                        self._skidpad_circle_lap_count = 1
+                        arc = float(np.sum(np.hypot(np.diff(locked[:, 0]), np.diff(locked[:, 1]))))
+                        self.get_logger().info(
+                            f'Skidpad LEFT lap 1 complete — locked circle: {len(locked)} waypoints, '
+                            f'{arc:.1f} m')
+                        # Reset trail for lap 2 counting
+                        self._skidpad_left_trail = [self._car_pos.copy()]
+                        self._skidpad_left_trail_dist = 0.0
+                        self._skidpad_left_max_r = 0.0
+                elif self._skidpad_circle_lap_count == 1:
+                    # Second lap closure: transition to RIGHT_CIRCLE
+                    self._skidpad_circle_lap_count = 2
+                    self.get_logger().info('Skidpad LEFT lap 2 complete — transitioning to RIGHT_CIRCLE')
+                    # Check sustained turn direction before transitioning
+                    if self._skidpad_sustained_yaw_rate_sign is not None and self._skidpad_sustained_yaw_rate_sign < 0:
+                        self._skidpad_state = 'RIGHT_CIRCLE'
+                        self._skidpad_circle_lap_count = 0
+                        self._skidpad_right_start = self._car_pos.copy()
+                        self._skidpad_right_trail = [self._car_pos.copy()]
+                        self._skidpad_right_trail_dist = 0.0
+                        self._skidpad_right_max_r = 0.0
+                        self._skidpad_yaw_rate_history.clear()  # reset filter
+                    else:
+                        self.get_logger().warn('Skidpad: expected right turn to enter RIGHT_CIRCLE, still turning left')
+
+        elif self._skidpad_state == 'RIGHT_CIRCLE':
+            # Check for lap closure
+            if (self._skidpad_right_trail_dist > 40.0
+                    and self._skidpad_right_max_r > 10.0
+                    and float(np.linalg.norm(self._car_pos - self._skidpad_right_start)) < 4.0):
+                if self._skidpad_right_locked is None:
+                    # First lap closure: build and lock the right circle
+                    locked = self._build_skidpad_circle(
+                        self._skidpad_right_trail, self._skidpad_right_trail_dist,
+                        self._skidpad_right_max_r, self._skidpad_right_start)
+                    if locked is not None:
+                        self._skidpad_right_locked = locked
+                        self._skidpad_circle_lap_count = 1
+                        arc = float(np.sum(np.hypot(np.diff(locked[:, 0]), np.diff(locked[:, 1]))))
+                        self.get_logger().info(
+                            f'Skidpad RIGHT lap 1 complete — locked circle: {len(locked)} waypoints, '
+                            f'{arc:.1f} m')
+                        # Reset trail for lap 2 counting
+                        self._skidpad_right_trail = [self._car_pos.copy()]
+                        self._skidpad_right_trail_dist = 0.0
+                        self._skidpad_right_max_r = 0.0
+                elif self._skidpad_circle_lap_count == 1:
+                    # Second lap closure: transition to EXIT
+                    self._skidpad_circle_lap_count = 2
+                    self.get_logger().info('Skidpad RIGHT lap 2 complete — transitioning to EXIT')
+                    self._skidpad_state = 'EXIT'
+                    self._skidpad_yaw_rate_history.clear()
+
+        # Use locked paths when available, else fall through to local cone-based planning
+        if self._skidpad_state == 'LEFT_CIRCLE' and self._skidpad_left_locked is not None:
+            stamp = self.get_clock().now().to_msg()
+            self._pub_centerline.publish(
+                _path_from_xy(self._skidpad_left_locked, self._map_frame, stamp))
+            return
+        elif self._skidpad_state == 'RIGHT_CIRCLE' and self._skidpad_right_locked is not None:
+            stamp = self.get_clock().now().to_msg()
+            self._pub_centerline.publish(
+                _path_from_xy(self._skidpad_right_locked, self._map_frame, stamp))
+            return
+        elif self._skidpad_state == 'EXIT':
+            # Fall through to local cone-based planning for exit
+            pass
+
+        # If we haven't locked a path yet, use local cone-based planning (from ft-fsd)
+        # This handles APPROACH, incomplete circles, and EXIT states
+        self._handle_local_cone_planning(msg)
+
+    def _handle_local_cone_planning(self, msg: Track) -> None:
+        """
+        Handle local cone-based planning using ft-fsd for states that don't have locked paths.
+        Reused for APPROACH, EXIT, and incomplete circle states.
+        """
+        if not _LIB_AVAILABLE or self._planner is None:
+            return
+
+        if not msg.track:
+            return
+
+        # Build cones_by_type array
+        CONE_VIS_R    = 50.0
+        CONE_BEHIND_M = 3.0
+        n_types = len(ConeTypes)
+        buckets: list[list] = [[] for _ in range(n_types)]
+
+        for (rx, ry), cone_type in self._cone_map.items():
+            dx = rx - self._car_pos[0]
+            dy = ry - self._car_pos[1]
+            if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
+                continue
+            if dx * self._car_dir[0] + dy * self._car_dir[1] < -CONE_BEHIND_M:
+                continue
+            buckets[cone_type].append([rx, ry])
+
+        cones_by_type = [
+            np.array(b, dtype=np.float64).reshape(-1, 2) if b
+            else np.zeros((0, 2), dtype=np.float64)
+            for b in buckets
+        ]
+
+        n_left    = len(buckets[ConeTypes.LEFT])
+        n_right   = len(buckets[ConeTypes.RIGHT])
+        n_unknown = len(buckets[ConeTypes.UNKNOWN])
+
+        if n_left + n_right == 0 and n_unknown > 0:
+            # Geometric assignment for LiDAR-only mode
+            for (rx, ry), cone_type in self._cone_map.items():
+                if cone_type != ConeTypes.UNKNOWN:
+                    continue
+                dx = rx - self._car_pos[0]
+                dy = ry - self._car_pos[1]
+                fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
+                if fwd < -CONE_BEHIND_M:
+                    continue
+                cross_z = self._car_dir[0] * dy - self._car_dir[1] * dx
+                if cross_z > 0:
+                    buckets[ConeTypes.LEFT].append([rx, ry])
+                else:
+                    buckets[ConeTypes.RIGHT].append([rx, ry])
+            buckets[ConeTypes.UNKNOWN] = []
+            cones_by_type = [
+                np.array(b, dtype=np.float64).reshape(-1, 2) if b
+                else np.zeros((0, 2), dtype=np.float64)
+                for b in buckets
+            ]
+            n_left  = len(buckets[ConeTypes.LEFT])
+            n_right = len(buckets[ConeTypes.RIGHT])
+
+        if n_left + n_right == 0:
+            self.get_logger().warn(
+                'No colored or assignable cones — skipping planner.',
+                throttle_duration_sec=5.0)
+            return
+
+        all_xy = np.array(list(self._cone_map.keys()), dtype=np.float64)
+        d_nearest = float(np.min(np.hypot(all_xy[:, 0] - self._car_pos[0],
+                                          all_xy[:, 1] - self._car_pos[1])))
+        if d_nearest > 20.0:
+            self.get_logger().warn(
+                f'Car is {d_nearest:.0f} m from nearest cone — off track?',
+                throttle_duration_sec=2.0)
+            return
+
+        try:
+            result = self._planner.calculate_path_in_global_frame(
+                cones_by_type, self._car_pos, self._car_dir,
+                return_intermediate_results=True,
+            )
+            path_xy, left_xy, right_xy, *_ = result
+        except Exception as e:
+            self.get_logger().error(
+                f'Path calculation failed: {type(e).__name__}: {e}',
+                throttle_duration_sec=2.0)
+            return
+
+        stamp = self.get_clock().now().to_msg()
+        frame = self._map_frame
+
+        if path_xy is not None and len(path_xy) > 0:
+            centerline = np.array(path_xy)[:, 1:3]
+            # Run racing line optimizer for local missions
+            if (len(path_xy) > 3
+                    and left_xy is not None and len(left_xy) > 3
+                    and right_xy is not None and len(right_xy) > 3):
+                left   = np.array(left_xy)[:, :2]
+                right  = np.array(right_xy)[:, :2]
+                try:
+                    optimized = _min_curvature_path(centerline, left, right, safety=0.7)
+                except Exception as opt_e:
+                    self.get_logger().debug(f'Optimizer failed: {opt_e}')
+                    optimized = centerline
+            else:
+                optimized = centerline
+
+            self._pub_centerline.publish(_path_from_xy(optimized, frame, stamp))
+
+        if left_xy is not None and len(left_xy) > 0:
+            self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
+        if right_xy is not None and len(right_xy) > 0:
+            self._pub_right.publish(_path_from_xy(np.array(right_xy)[:, :2], frame, stamp))
+
     def _cones_cb(self, msg: Track) -> None:
         # Locked loop (global missions, lap 2+): the full-lap path was built from the
         # live-accumulated cone map when the car closed lap 1. Publish it unchanged —
@@ -406,17 +814,21 @@ class PathPlannerNode(Node):
                 _path_from_xy(self._locked_path, self._map_frame, stamp))
             return
 
-        # Skidpad uses a hardcoded path (complex multi-lap sequence ft-fsd can't express).
+        # Skidpad: use either cone-based state machine or hardcoded path
         if self._mission == 'skidpad':
-            if self._odom_received:
-                stamp = self.get_clock().now().to_msg()
-                self._pub_centerline.publish(
-                    _path_from_xy(self._skidpad_path, self._map_frame, stamp))
-                if not self._skidpad_path_published:
-                    self._skidpad_path_published = True
-                    self.get_logger().info(
-                        f'skidpad path first publish: {len(self._skidpad_path)} waypoints')
-            return
+            if self._skidpad_mode == 'hardcoded':
+                if self._odom_received:
+                    stamp = self.get_clock().now().to_msg()
+                    self._pub_centerline.publish(
+                        _path_from_xy(self._skidpad_path, self._map_frame, stamp))
+                    if not self._skidpad_path_published:
+                        self._skidpad_path_published = True
+                        self.get_logger().info(
+                            f'skidpad hardcoded path first publish: {len(self._skidpad_path)} waypoints')
+                return
+            else:  # cone_based
+                self._handle_skidpad_cone_based(msg)
+                return
 
         if not _LIB_AVAILABLE or self._planner is None:
             return
