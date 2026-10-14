@@ -70,7 +70,7 @@ if(CMAKE_CUDA_COMPILER)
 endif()
 
 if(CMAKE_CUDA_COMPILER AND LIDAR_GPU_OK)
-  add_library(lidar_gpu_filter STATIC src/gpu/cuda_filter.cu)
+  add_library(lidar_gpu_filter STATIC src/gpu/cuda_filter.cu src/gpu/cuda_cone_pipeline.cu)
   target_include_directories(lidar_gpu_filter PUBLIC include)
   target_link_libraries(lidar_gpu_filter PUBLIC CUDA::cudart)
   target_compile_options(lidar_gpu_filter PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)

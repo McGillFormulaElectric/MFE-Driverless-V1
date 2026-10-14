@@ -26,6 +26,8 @@
     #include <cuda_runtime.h>
     #include <vector>
     #include "lidar_cone_detector/cuda_filter.hpp"
+    #include <memory>
+    #include "lidar_cone_detector/cuda_cone_pipeline.hpp"
 #else
     #define USE_GPU_PIPELINE 0
 #endif
@@ -65,6 +67,7 @@ public:
             int device_count = 0;
             if (cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0) {
                 use_gpu_ = true;
+                gpu_pipe_ = std::make_unique<GpuConePipeline>();
             } else {
                 RCLCPP_WARN(this->get_logger(), "use_gpu requested but no CUDA device found; using CPU PCL");
                 cudaGetLastError();  // clear the sticky error from the failed query
@@ -90,7 +93,7 @@ public:
             "/debug/gpu_objects", 10);
 
         RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s",
-            use_gpu_ ? "CUDA filters (GPU) + CPU PCL" : "Standard PCL (CPU)");
+            use_gpu_ ? "GPU (CUDA: ROI, voxel, RANSAC ground, band, clustering)" : "Standard PCL (CPU)");
     }
 
 private:
@@ -123,133 +126,37 @@ private:
         #if USE_GPU_PIPELINE
         if (use_gpu_) {
             // =========================================================
-            // OPTION A: GPU PIPELINE (CUDA filters: ROI passthrough + voxel grid)
+            // OPTION A: GPU PIPELINE — ROI, voxel grid, RANSAC ground plane, cone-height
+            // band and Euclidean clustering all run on the GPU (cuda_cone_pipeline.cu).
+            // The host gets back the band points + one cluster label each and only does
+            // the per-cluster bounding-box checks.
             // =========================================================
-            
-            cudaStream_t stream = NULL;
-            checkCudaErrors(cudaStreamCreate(&stream));
-
-            int point_count = host_cloud->points.size();
-
-            // --- 1. Upload (Host -> GPU) ---
-            float* d_input = NULL;
-            checkCudaErrors(cudaMalloc(&d_input, point_count * sizeof(pcl::PointXYZ)));
-            checkCudaErrors(cudaMemcpy(d_input, host_cloud->points.data(), point_count * sizeof(pcl::PointXYZ), cudaMemcpyHostToDevice));
-
-            // --- 1b. cuFilter (Passthrough ROI: X range 0-20m ahead) ---
-            float* d_roi = NULL;
-            checkCudaErrors(cudaMalloc(&d_roi, point_count * sizeof(pcl::PointXYZ)));
-            unsigned int roi_count = 0;
-
-            cudaFilter roi_filter_x(stream);
-            FilterParam_t roi_param_x;
-            roi_param_x.type = PASSTHROUGH;
-            roi_param_x.dim = 0;
-            roi_param_x.downFilterLimits = -1.0f;   // 1m behind (side cones)
-            roi_param_x.upFilterLimits = 15.0f;    // 15m ahead — beyond this VLP-16 has <2 hits/cone
-            roi_param_x.limitsNegative = false;
-            roi_filter_x.set(roi_param_x);
-            roi_filter_x.filter(d_roi, &roi_count, d_input, point_count);
-            cudaStreamSynchronize(stream);
-            cudaFree(d_input);
-
-            RCLCPP_INFO(this->get_logger(), "raw=%d  roi=%u", point_count, roi_count);
-
-            if (roi_count < 50) {
-                cudaFree(d_roi);
-                checkCudaErrors(cudaStreamDestroy(stream));
-                return;
-            }
-
-            // --- 2. cuFilter (VoxelGrid) ---
-            // Managed memory: cudaSegmentation::getSamples() reads cloud_in from CPU.
-            // cudaMallocManaged lets both GPU kernels and CPU access the same buffer.
-            float* d_filtered = NULL;
-            checkCudaErrors(cudaMallocManaged(&d_filtered, roi_count * sizeof(pcl::PointXYZ)));
-            unsigned int filtered_count = 0;
-
-            cudaFilter filter(stream);
-            FilterParam_t filter_param;
-            filter_param.type = VOXELGRID;
-            filter_param.dim = 0;
-            filter_param.voxelX = static_cast<float>(leaf_size_);
-            filter_param.voxelY = static_cast<float>(leaf_size_);
-            filter_param.voxelZ = static_cast<float>(leaf_size_);
-            filter.set(filter_param);
-            filter.filter(d_filtered, &filtered_count, d_roi, roi_count);
-            cudaStreamSynchronize(stream);
-            cudaFree(d_roi);
-
-            RCLCPP_INFO(this->get_logger(), "voxel=%u", filtered_count);
-
-            if (filtered_count < 50) {
-                cudaFree(d_filtered);
-                checkCudaErrors(cudaStreamDestroy(stream));
-                return;
-            }
-
-            // --- 3. Download voxelgrid cloud and run CPU RANSAC ground removal ---
-            // cudaSegmentation only supports SACMODEL_PLANE (any plane), which
-            // incorrectly fits a tilted plane through all points on a flat track.
-            // CPU RANSAC with SACMODEL_PERPENDICULAR_PLANE constrains to horizontal
-            // ground and correctly separates cones from the ground plane.
-            // On ~5k points this takes <5ms — not a bottleneck.
-            std::vector<float> h_filtered(filtered_count * 4);
-            cudaMemcpy(h_filtered.data(), d_filtered,
-                       filtered_count * sizeof(pcl::PointXYZ), cudaMemcpyDeviceToHost);
-            cudaFree(d_filtered);
-            checkCudaErrors(cudaStreamDestroy(stream));
-
-            pcl::PointCloud<pcl::PointXYZ>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-            voxel_cloud->reserve(filtered_count);
-            for (unsigned int i = 0; i < filtered_count; i++) {
-                voxel_cloud->points.emplace_back(h_filtered[i*4], h_filtered[i*4+1], h_filtered[i*4+2]);
-            }
-
-            pcl::SACSegmentation<pcl::PointXYZ> seg;
-            seg.setOptimizeCoefficients(true);
-            seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
-            seg.setAxis(Eigen::Vector3f(0.0f, 0.0f, 1.0f));
-            seg.setEpsAngle(10.0f * static_cast<float>(M_PI) / 180.0f);
-            seg.setMethodType(pcl::SAC_RANSAC);
-            seg.setDistanceThreshold(ground_threshold_);
-            seg.setMaxIterations(100);
-            seg.setInputCloud(voxel_cloud);
-
-            pcl::PointIndices::Ptr ground_inliers(new pcl::PointIndices);
-            pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
-            seg.segment(*ground_inliers, *coefficients);
+            GpuConeParams gp;
+            gp.leaf = static_cast<float>(leaf_size_);
+            gp.ground_threshold = static_cast<float>(ground_threshold_);
+            gp.cluster_tolerance = static_cast<float>(cluster_tolerance_);
+            gp.min_cluster_size = min_cluster_size_;
+            gp.max_cluster_size = max_cluster_size_;
+            GpuConeResult res;
+            gpu_pipe_->run(reinterpret_cast<const float*>(host_cloud->points.data()),
+                           static_cast<unsigned>(host_cloud->points.size()), gp, res);
+            RCLCPP_DEBUG(this->get_logger(),
+                "gpu: raw=%u roi=%u voxel=%u ground=%u band=%zu clusters=%d | ms h2d %.2f roi %.2f voxel %.2f "
+                "ransac %.2f band %.2f cluster %.2f d2h %.2f",
+                res.raw, res.roi, res.voxel, res.ground, res.labels.size(), res.n_clusters,
+                res.t.h2d, res.t.roi, res.t.voxel, res.t.ransac, res.t.band, res.t.cluster, res.t.d2h);
+            if (res.voxel < 50 || res.labels.empty()) return;
 
             pcl::PointCloud<pcl::PointXYZ>::Ptr object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-            pcl::ExtractIndices<pcl::PointXYZ> extract;
-            extract.setInputCloud(voxel_cloud);
-            extract.setIndices(ground_inliers);
-            extract.setNegative(true);
-            extract.filter(*object_cloud);
+            object_cloud->reserve(res.labels.size());
+            for (size_t i = 0; i < res.labels.size(); i++)
+                object_cloud->points.emplace_back(res.points[4*i], res.points[4*i+1], res.points[4*i+2]);
+            *debug_object_cloud = *object_cloud;
 
-            // --- 3b. Cone isolation filters ---
-            // Use the fitted ground plane to keep only points at cone height (2–45 cm above ground).
-            // Also apply Y-range filter — track is narrow, no need to look far sideways.
-            if (coefficients->values.size() >= 4) {
-                float a = coefficients->values[0];
-                float b = coefficients->values[1];
-                float c_n = coefficients->values[2];
-                float d = coefficients->values[3];
-                float norm = std::sqrt(a*a + b*b + c_n*c_n);
-
-                pcl::PointCloud<pcl::PointXYZ>::Ptr cone_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-                for (const auto& p : object_cloud->points) {
-                    if (std::abs(p.y) > 6.0f) continue;           // Y range: ±6 m
-                    float h = std::abs((a*p.x + b*p.y + c_n*p.z + d) / norm);
-                    if (h < 0.005f || h > 0.75f) continue;        // 0–75 cm above ground (covers small 325mm & large 505mm cones + margin)
-                    cone_cloud->points.push_back(p);
-                }
-                object_cloud = cone_cloud;
-            }
-
-            // Intensity filter — keep only high-reflectivity points (retroreflective cone tape)
-            // Disabled when min_intensity == 0 (sim has no meaningful intensity values)
+            std::vector<pcl::PointIndices> cluster_indices;
             if (min_intensity_ > 0.0 && !host_cloud_i->empty()) {
+                // Intensity filter must run before clustering, so this (hardware-only)
+                // case clusters on the CPU; the sim has no meaningful intensity (0 = off).
                 pcl::KdTreeFLANN<pcl::PointXYZI> kdtree_i;
                 kdtree_i.setInputCloud(host_cloud_i);
                 pcl::PointCloud<pcl::PointXYZ>::Ptr hi_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -261,21 +168,9 @@ private:
                         hi_cloud->points.push_back(p);
                 }
                 object_cloud = hi_cloud;
-            }
-
-            unsigned int object_count = object_cloud->size();
-            RCLCPP_INFO(this->get_logger(), "seg: ground=%zu  cone_band=%u",
-                        ground_inliers->indices.size(), object_count);
-
-            if (object_count == 0) return;
-
-            *debug_object_cloud = *object_cloud;
-
-            // --- 4. Cluster on CPU + bounding-box cone validation ---
-            if (!object_cloud->empty()) {
+                if (object_cloud->empty()) return;
                 pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
                 tree->setInputCloud(object_cloud);
-                std::vector<pcl::PointIndices> cluster_indices;
                 pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
                 ec.setClusterTolerance(cluster_tolerance_);
                 ec.setMinClusterSize(min_cluster_size_);
@@ -283,47 +178,50 @@ private:
                 ec.setSearchMethod(tree);
                 ec.setInputCloud(object_cloud);
                 ec.extract(cluster_indices);
+            } else {
+                cluster_indices.resize(res.n_clusters);
+                for (size_t i = 0; i < res.labels.size(); i++)
+                    if (res.labels[i] >= 0) cluster_indices[res.labels[i]].indices.push_back(static_cast<int>(i));
+            }
 
-                for (const auto& idxs : cluster_indices) {
-                    // Bounding box check — FSAE Driverless 2026 DD.1.3.2:
-                    //   Small cones (blue/yellow/orange): 228 × 228 × 325 mm
-                    //   Large orange cones (finish gate): 285 × 285 × 505 mm
-                    // Filter sized to accept the large cone envelope with margin.
-                    float mn_x = FLT_MAX, mx_x = -FLT_MAX;
-                    float mn_y = FLT_MAX, mx_y = -FLT_MAX;
-                    float mn_z = FLT_MAX, mx_z = -FLT_MAX;
-                    for (int idx : idxs.indices) {
-                        const auto& p = object_cloud->points[idx];
-                        mn_x = std::min(mn_x, p.x); mx_x = std::max(mx_x, p.x);
-                        mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
-                        mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
-                    }
-                    // Reject clusters too large to be cones (walls, barriers, car body)
-                    if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
-                        continue;
-
-                    Eigen::Vector4f c;
-                    pcl::compute3DCentroid(*object_cloud, idxs, c);
-                    centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
-
-                    // Bounding box marker
-                    visualization_msgs::msg::Marker m;
-                    m.header = msg->header;
-                    m.header.frame_id = lidar_frame_id_;
-                    m.ns = "cones"; m.id = marker_id++;
-                    m.type = visualization_msgs::msg::Marker::CUBE;
-                    m.action = visualization_msgs::msg::Marker::ADD;
-                    m.pose.position.x = c[0];
-                    m.pose.position.y = c[1];
-                    m.pose.position.z = (mn_z + mx_z) * 0.5f;
-                    m.pose.orientation.w = 1.0;
-                    m.scale.x = std::max(mx_x - mn_x, 0.05f);
-                    m.scale.y = std::max(mx_y - mn_y, 0.05f);
-                    m.scale.z = std::max(mx_z - mn_z, 0.05f);
-                    m.color.r = 1.0f; m.color.g = 0.5f; m.color.b = 0.0f; m.color.a = 0.5f;
-                    m.lifetime = rclcpp::Duration::from_seconds(0.3);
-                    marker_array.markers.push_back(m);
+            for (const auto& idxs : cluster_indices) {
+                // Bounding box check — FSAE Driverless 2026 DD.1.3.2:
+                //   Small cones (blue/yellow/orange): 228 × 228 × 325 mm
+                //   Large orange cones (finish gate): 285 × 285 × 505 mm
+                // Filter sized to accept the large cone envelope with margin.
+                float mn_x = FLT_MAX, mx_x = -FLT_MAX;
+                float mn_y = FLT_MAX, mx_y = -FLT_MAX;
+                float mn_z = FLT_MAX, mx_z = -FLT_MAX;
+                for (int idx : idxs.indices) {
+                    const auto& p = object_cloud->points[idx];
+                    mn_x = std::min(mn_x, p.x); mx_x = std::max(mx_x, p.x);
+                    mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
+                    mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                 }
+                // Reject clusters too large to be cones (walls, barriers, car body)
+                if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
+                    continue;
+
+                Eigen::Vector4f c;
+                pcl::compute3DCentroid(*object_cloud, idxs, c);
+                centroids_cloud->points.emplace_back(c[0], c[1], c[2]);
+
+                visualization_msgs::msg::Marker m;
+                m.header = msg->header;
+                m.header.frame_id = lidar_frame_id_;
+                m.ns = "cones"; m.id = marker_id++;
+                m.type = visualization_msgs::msg::Marker::CUBE;
+                m.action = visualization_msgs::msg::Marker::ADD;
+                m.pose.position.x = c[0];
+                m.pose.position.y = c[1];
+                m.pose.position.z = (mn_z + mx_z) * 0.5f;
+                m.pose.orientation.w = 1.0;
+                m.scale.x = std::max(mx_x - mn_x, 0.05f);
+                m.scale.y = std::max(mx_y - mn_y, 0.05f);
+                m.scale.z = std::max(mx_z - mn_z, 0.05f);
+                m.color.r = 1.0f; m.color.g = 0.5f; m.color.b = 0.0f; m.color.a = 0.5f;
+                m.lifetime = rclcpp::Duration::from_seconds(0.3);
+                marker_array.markers.push_back(m);
             }
 
         } else
@@ -427,6 +325,9 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
     bool use_gpu_ = false;
+#if USE_GPU_PIPELINE
+    std::unique_ptr<GpuConePipeline> gpu_pipe_;   // persistent stream + device buffers
+#endif
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
     double cone_z_min_, cone_z_max_;
     int min_cluster_size_, max_cluster_size_;

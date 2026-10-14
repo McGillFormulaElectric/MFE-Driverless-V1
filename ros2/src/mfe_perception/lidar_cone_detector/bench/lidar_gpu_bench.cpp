@@ -42,6 +42,7 @@
 #include <pcl/segmentation/sac_segmentation.h>
 
 #include "lidar_cone_detector/cuda_filter.hpp"
+#include "lidar_cone_detector/cuda_cone_pipeline.hpp"
 
 using Clock = std::chrono::steady_clock;
 using PC = pcl::PointCloud<pcl::PointXYZ>;
@@ -201,6 +202,26 @@ static std::vector<Vec3> gpuDownstream(const PCP &voxel, const Params &P, Stats 
   if (s) s->add("gpu.cluster", msSince(t));
   return out;
 }
+
+
+// Full-GPU path (GpuConePipeline): cones from its labels, with the node's bbox check.
+static std::vector<Vec3> conesFromGpu(const GpuConeResult &r) {
+  std::vector<std::vector<int>> cl(r.n_clusters);
+  for (size_t i = 0; i < r.labels.size(); i++) if (r.labels[i] >= 0) cl[r.labels[i]].push_back(static_cast<int>(i));
+  std::vector<Vec3> out;
+  for (const auto &idx : cl) {
+    float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    double c[3] = {0, 0, 0};
+    for (int i : idx) for (int k = 0; k < 3; k++) {
+      const float v = r.points[4 * i + k];
+      mn[k] = std::min(mn[k], v); mx[k] = std::max(mx[k], v); c[k] += v;
+    }
+    if ((mx[0] - mn[0]) > 0.4f || (mx[1] - mn[1]) > 0.4f || (mx[2] - mn[2]) > 0.6f) continue;
+    out.emplace_back(c[0] / idx.size(), c[1] / idx.size(), c[2] / idx.size());
+  }
+  return out;
+}
+
 
 // GPU filter stages, written as in the node's GPU branch (per-frame allocations included).
 // Returns the voxel cloud on the host. Stage times are recorded into s if given.
@@ -395,7 +416,14 @@ int main(int argc, char **argv) {
   cudaStream_t stream;
   checkCudaErrors(cudaStreamCreate(&stream));
 
-  Stats cpu_s, gpu_s;          // timed stages
+  Stats cpu_s, gpu_s, full_s;  // timed stages
+  std::vector<double> full_total;
+  GpuConePipeline pipe;
+  GpuConeParams gp;   // node defaults (matches Params)
+  gp.leaf = P.leaf; gp.ground_threshold = P.ground_threshold; gp.cluster_tolerance = static_cast<float>(P.cluster_tolerance);
+  gp.min_cluster_size = P.min_cluster_size; gp.max_cluster_size = P.max_cluster_size;
+  size_t full_frames_equal = 0, full_cnt_ref = 0, full_cnt_gpu = 0;
+  std::vector<double> full_matched_frac, full_med; double full_worst = 0.0;
   std::vector<double> cpu_total, gpu_total;
   std::vector<double> filt_max_nn, filt_p99_nn, filt_cnt_cpu, filt_cnt_gpu;
   std::vector<double> filt_matched_frac;
@@ -422,6 +450,27 @@ int main(int argc, char **argv) {
     PCP gpu_vox = gpuFilters(host, P, stream, timed ? &gpu_s : nullptr, &ok);
     std::vector<Vec3> cones_gpu = gpuDownstream(gpu_vox, P, timed ? &gpu_s : nullptr);
     if (timed) gpu_total.push_back(msSince(tg));
+
+    // --- timed: full-GPU path (ROI, voxel, RANSAC, band, clustering on the GPU) ---
+    GpuConeResult res;
+    auto tf = Clock::now();
+    pipe.run(reinterpret_cast<const float *>(host->points.data()), static_cast<unsigned>(host->points.size()), gp, res);
+    std::vector<Vec3> cones_full = conesFromGpu(res);
+    if (timed) {
+      full_total.push_back(msSince(tf));
+      full_s.add("full.h2d", res.t.h2d); full_s.add("full.roi", res.t.roi); full_s.add("full.voxel", res.t.voxel);
+      full_s.add("full.ransac", res.t.ransac); full_s.add("full.band", res.t.band);
+      full_s.add("full.cluster", res.t.cluster); full_s.add("full.d2h", res.t.d2h);
+    }
+    // untimed: same algorithm with PCL RANSAC/cluster on the same CUDA voxel cloud
+    {
+      NN r = compareSets(cones_gpu, cones_full, 0.05), r2 = compareSets(cones_full, cones_gpu, 0.05);
+      full_cnt_ref += cones_gpu.size(); full_cnt_gpu += cones_full.size();
+      if (cones_gpu.size() == cones_full.size() && r.matched == r.na && r2.matched == r2.na) full_frames_equal++;
+      full_matched_frac.push_back(cones_gpu.empty() ? 1.0 : static_cast<double>(r.matched) / r.na);
+      if (r.matched > 0) full_med.push_back(r.med_match);
+      full_worst = std::max(full_worst, r.max_match);
+    }
 
     // --- untimed: filter equivalence (CPU ROI+voxel vs CUDA ROI+voxel) ---
     PCP cpu_roi_vox = cpuRoiVoxel(host, P);
@@ -468,6 +517,16 @@ int main(int argc, char **argv) {
   for (auto &kv : gpu_s.v) printRow(kv.first.c_str(), kv.second);
   printRow("end-to-end", gpu_total);
 
+  std::printf("Full GPU pipeline (CUDA events per stage; end-to-end is host wall time):\n");
+  for (auto &kv : full_s.v) printRow(kv.first.c_str(), kv.second);
+  printRow("end-to-end", full_total);
+  std::printf("\n=== (0) Full-GPU cones vs PCL RANSAC+cluster on the same CUDA voxel cloud ===\n");
+  std::printf("  frames: %zu  mean cones: PCL %.2f  full-GPU %.2f\n", cone_frames,
+              static_cast<double>(full_cnt_ref) / cone_frames, static_cast<double>(full_cnt_gpu) / cone_frames);
+  std::printf("  frames with identical cone count and all centroids within 5 cm: %zu / %zu\n", full_frames_equal, cone_frames);
+  std::printf("  matched within 5 cm (PCL -> full-GPU, mean): %.4f\n",
+              std::accumulate(full_matched_frac.begin(), full_matched_frac.end(), 0.0) / full_matched_frac.size());
+  if (!full_med.empty()) std::printf("  median centroid offset of matches: %.4f m  worst: %.4f m\n", pct(full_med, 0.5), full_worst);
   std::printf("\n=== (1) Filter equivalence: CUDA ROI+voxel vs PCL PassThrough+VoxelGrid ===\n");
   std::printf("  frames: %zu  mean points: CPU %.0f  GPU %.0f\n", filt_cnt_cpu.size(),
               std::accumulate(filt_cnt_cpu.begin(), filt_cnt_cpu.end(), 0.0) / filt_cnt_cpu.size(),
@@ -504,6 +563,8 @@ int main(int argc, char **argv) {
   for (auto &kv : cpu_s.v) out << "cpu," << kv.first << "," << kv.second.size() << "," << pct(kv.second, 0.5) << "," << pct(kv.second, 0.95) << "\n";
   for (auto &kv : gpu_s.v) out << "gpu," << kv.first << "," << kv.second.size() << "," << pct(kv.second, 0.5) << "," << pct(kv.second, 0.95) << "\n";
   out << "cpu,end_to_end," << cpu_total.size() << "," << pct(cpu_total, 0.5) << "," << pct(cpu_total, 0.95) << "\n";
+  for (auto &kv : full_s.v) out << "full," << kv.first << "," << kv.second.size() << "," << pct(kv.second, 0.5) << "," << pct(kv.second, 0.95) << "\n";
+  out << "full,end_to_end," << full_total.size() << "," << pct(full_total, 0.5) << "," << pct(full_total, 0.95) << "\n";
   out << "gpu,end_to_end," << gpu_total.size() << "," << pct(gpu_total, 0.5) << "," << pct(gpu_total, 0.95) << "\n";
   return 0;
 }
