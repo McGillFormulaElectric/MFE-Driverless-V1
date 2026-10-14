@@ -263,4 +263,4 @@ approach to any cone (excellent safety margin).
   search window was already constrained to avoid skipping laps. Locked loops resampled to 1.0 m
   preserve this margin.
 
-Commit hash: (pending — ready to commit after this session summary)
+Commit: `6ce6f30`
