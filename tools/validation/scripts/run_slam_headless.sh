@@ -8,7 +8,9 @@
 # Needs: ~/Develop/simws built (colcon), tmux, gtsam (pip --user --no-deps), a built MFE26-eufs-sim/MFE workspace.
 # Never launch it from a shell whose command line contains "ros2" (launch_sim_local.sh runs `pkill -f ros2`).
 EVENT=${1:-accel}; TIMEOUT=${2:-240}
-ROOT=$HOME/Develop; SIMWS=$ROOT/simws; CUDAPCL=$ROOT/cudaPCL
+ROOT=$HOME/Develop; SIMWS=$ROOT/simws
+# tools/validation is the parent directory of this script
+TOOLS_VALIDATION="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COLOR=geometric; export MISSION_OVERRIDE=""
 case $EVENT in
   accel)   TRACK=acceleration; AMI=11 ;;
@@ -55,7 +57,7 @@ fi   # MODE=no_perception: control run, ground-truth cones + pose, no LiDAR stac
 [ -n "$REC" ] && { rm -rf "$REC"; setsid bash -c "source $ENVSH; exec ros2 bag record -o $REC /lidar/points_raw /slam/odom /planning/cones /skidpad/cones /planning/centerline /ground_truth/state_odom" > $LOG/rec.log 2>&1 & }
 
 # 3. start scorer, then the mission, and wait for FINISHED / timeout
-bash -c "source $ENVSH; python3 $CUDAPCL/eval/score_run.py $TIMEOUT $TRACK" > $LOG/score.out 2>&1 &
+bash -c "source $ENVSH; python3 $TOOLS_VALIDATION/eval/score_run.py $TIMEOUT $TRACK" > $LOG/score.out 2>&1 &
 SC=$!
 sleep 3
 bash -c "source $ENVSH; timeout 40 ros2 service call /ros_can/set_mission eufs_msgs/srv/SetCanState '{ami_state: $AMI, as_state: 1}'" > /dev/null 2>&1

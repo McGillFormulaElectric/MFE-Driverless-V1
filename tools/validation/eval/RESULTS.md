@@ -64,11 +64,11 @@ bag `test_bag/accel_cuda_test`, node src md5 `014800d0`, cmd ``. P/R/F1/err on t
 
 ## 2026-10-09 18:08:30 - run
 
-bag `test_bag/accel_cuda_test`, node src md5 `014800d0`, cmd `-p leaf_size=0.05 -p ground_threshold=0.04 -p cluster_tolerance=0.4 -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p height_min=0.02 -p rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model.txt --rate 1.0`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
+bag `test_bag/accel_cuda_test`, node src md5 `014800d0`, cmd `-p leaf_size=0.05 -p ground_threshold=0.04 -p cluster_tolerance=0.4 -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p height_min=0.02 -p rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model.txt --rate 1.0`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
 
 | time | mode | trial | split | params | P | R | F1 | err m | lat ms | p95 ms | best |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 18:08:54 | run |  | all | leaf_size=0.05 ground_threshold=0.04 cluster_tolerance=0.4 min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True height_min=0.02 rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model.txt | 1.000 | 0.800 | 0.889 | 0.121 | 13.3 | 14.4 | **best** |
+| 18:08:54 | run |  | all | leaf_size=0.05 ground_threshold=0.04 cluster_tolerance=0.4 min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True height_min=0.02 rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model.txt | 1.000 | 0.800 | 0.889 | 0.121 | 13.3 | 14.4 | **best** |
 
 ## 2026-10-09 18:51:32 - run
 
@@ -128,11 +128,11 @@ bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_vox
 
 ## 2026-10-09 18:58:49 - run
 
-bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_voxel=False -p rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
+bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_voxel=False -p rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
 
 | time | mode | trial | split | params | P | R | F1 | err m | lat ms | p95 ms | best |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 18:59:20 | run |  | all | gpu_voxel=False rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 | 0.999 | 0.714 | 0.832 | 0.143 | 2.3 | 2.5 | **best** |
+| 18:59:20 | run |  | all | gpu_voxel=False rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 | 0.999 | 0.714 | 0.832 | 0.143 | 2.3 | 2.5 | **best** |
 
 ## 2026-10-09 18:59:28 - run
 
@@ -144,11 +144,11 @@ bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_vox
 
 ## 2026-10-09 19:00:00 - run
 
-bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_voxel=False -p rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02 --json /tmp/claude-1000/-home-neil-Develop-cudaPCL/47008f88-cb0a-4931-b9a9-77057b2eb944/scratchpad/rf.json`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
+bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 2.5 -p gpu_voxel=False -p rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02 --json /tmp/claude-1000/-home-neil-Develop-cudaPCL/47008f88-cb0a-4931-b9a9-77057b2eb944/scratchpad/rf.json`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
 
 | time | mode | trial | split | params | P | R | F1 | err m | lat ms | p95 ms | best |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 19:00:31 | run |  | all | gpu_voxel=False rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 | 0.999 | 0.714 | 0.832 | 0.143 | 2.4 | 2.8 | **best** |
+| 19:00:31 | run |  | all | gpu_voxel=False rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 | 0.999 | 0.714 | 0.832 | 0.143 | 2.4 | 2.8 | **best** |
 
 ## 2026-10-09 19:00:39 - tune
 
@@ -222,8 +222,8 @@ bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 5 -p gpu_voxel
 
 ## 2026-10-09 22:50:38 - run
 
-bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 5 -p gpu_voxel=False -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02 -p rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt --json /tmp/claude-1000/-home-neil-Develop-cudaPCL/47008f88-cb0a-4931-b9a9-77057b2eb944/scratchpad/abl_rf.json`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
+bag `test_bag/accel_moving`, node src md5 `3d824dba`, cmd `--rate 5 -p gpu_voxel=False -p min_cluster_size=1 -p far_min_cluster_size=1 -p cluster_2d=True -p ground_threshold=0.04 -p height_min=0.02 -p rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt --json /tmp/claude-1000/-home-neil-Develop-cudaPCL/47008f88-cb0a-4931-b9a9-77057b2eb944/scratchpad/abl_rf.json`. P/R/F1/err on the train split (first 70% of frames) unless row says `all`; best = new best reward so far.
 
 | time | mode | trial | split | params | P | R | F1 | err m | lat ms | p95 ms | best |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 22:50:55 | run |  | all | gpu_voxel=False min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 rf_model_path=/home/neil/Develop/cudaPCL/eval/rf_model_70.txt | 0.999 | 0.714 | 0.832 | 0.143 | 2.3 | 2.5 | **best** |
+| 22:50:55 | run |  | all | gpu_voxel=False min_cluster_size=1 far_min_cluster_size=1 cluster_2d=True ground_threshold=0.04 height_min=0.02 rf_model_path=/home/neil/Develop/MFE-Driverless-V1-neil-fix/tools/validation/eval/rf_model_70.txt | 0.999 | 0.714 | 0.832 | 0.143 | 2.3 | 2.5 | **best** |
