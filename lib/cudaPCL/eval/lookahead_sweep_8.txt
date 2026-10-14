@@ -1,0 +1,4 @@
+la=8 sp=6 run1: sim 12.4 s | 0.3m:0 0.5m:0 0.8m:0  | final x -3.7 m, max |y| 14.31 m   path extent map x -16.0..22.0 y -4.5..14.3; cones nearest-approach by colour: {'blue': 0.8, 'big_orange': 
+la=8 sp=6 run2: sim 12.5 s | 0.3m:0 0.5m:0 0.8m:0  | final x -3.6 m, max |y| 14.40 m   path extent map x -16.1..22.1 y -4.5..14.4; cones nearest-approach by colour: {'big_orange': 0.88, 'yellow
+la=8 sp=8 run1: sim 12.5 s | 0.3m:0 0.5m:0 0.8m:0  | final x -3.7 m, max |y| 14.27 m   path extent map x -16.0..22.0 y -4.6..14.3; cones nearest-approach by colour: {'yellow': 1.0, 'blue': 0.91
+la=8 sp=8 run2: sim 12.4 s | 0.3m:0 0.5m:0 0.8m:0  | final x -3.8 m, max |y| 14.16 m   path extent map x -16.1..22.1 y -4.6..14.2; cones nearest-approach by colour: {'big_orange': 0.87, 'yellow

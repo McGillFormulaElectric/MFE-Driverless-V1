@@ -120,6 +120,11 @@ The peanut track is a crossing figure-8 (verified from lap traces: the car cross
 ### launch_sim.sh
 - `BRIDGE_MAX_SPEED` must match the bringup pure-pursuit `max_speed` for the mission (peanut 6.0, autocross/trackdrive 8.0) — the bridge clamps commands, so a mismatch silently caps or exceeds intended speed.
 
+### lib/
+- `lib/gtsam` — git submodule, `borglab/gtsam` pinned to tag `4.2.0`. Reference/build-version pin only — the actual runtime dependency is the `gtsam==4.2` pip wheel (`pip install --user --no-deps gtsam`), installed separately in whatever environment runs `slam_node.py`. This submodule is not built or imported from; don't assume it needs compiling.
+- `lib/cudaPCL` — the LiDAR+GTSAM-SLAM validation/testing harness (`slam_node.py`, `skidpad_planner.py`, `score_run.py`, `render_video.py`, `run_slam_headless.sh`, etc.), vendored in as plain tracked files (not a submodule — it's this team's own code, no separate remote). Scripts that load a track's cone CSV now resolve the EUFS tracks directory from the `EUFS_MASTER` env var (same variable the launch scripts already export) instead of a hardcoded absolute path — falls back to `~/Develop/MFE26-eufs-sim` if unset.
+- Not to be confused with `ros2/src/mfe_perception/lidar_cone_detector/lib/cuda-pcl` — a separate, unrelated submodule (NVIDIA's `cuda-pcl` GPU point-cloud library), pre-existing, different purpose, different name (no capital P/no hyphen distinguishes `cudaPCL` from `cuda-pcl`).
+
 ---
 
 ## Current status
