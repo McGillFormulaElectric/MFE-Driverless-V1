@@ -17,7 +17,7 @@ class PurePursuitNode(Node):
 
     Steering:  pure pursuit geometry (classic).
     Speed:     scan upcoming path curvature → compute corner speed targets
-               → brake hard if within stopping distance, full throttle otherwise.
+               → brake (proportional to the deceleration needed) if too fast for the corner, full throttle otherwise.
                Falls back to steering-proportional reduction when no speed data.
 
     Subscribes to:
@@ -67,14 +67,13 @@ class PurePursuitNode(Node):
         self._car_speed        = None   # scalar m/s from odometry twist
         self._mission_finished = False
         self._path_idx         = 0
-        self._last_path_time   = None   # stale-path failsafe timestamp
 
         # QoS
         reliable_qos   = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         best_effort_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
-        self.create_subscription(Path,     '/planning/centerline',     self._path_callback,     best_effort_qos)
-        self.create_subscription(Odometry, '/ekf/output',              self._odom_callback,     best_effort_qos)
+        self.create_subscription(Path,     '/planning/centerline',     self._path_callback,     reliable_qos)
+        self.create_subscription(Odometry, '/ekf/output',              self._odom_callback,     reliable_qos)
         self.create_subscription(Bool,     '/planning/mission_finished', self._finished_callback, reliable_qos)
 
         self._cmd_pub = self.create_publisher(ControlCommand, '/control/command', reliable_qos)
@@ -100,26 +99,8 @@ class PurePursuitNode(Node):
         if not msg.poses:
             return
         new_path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
-        # Reset index whenever the path CONTENT changes (compare first/middle/last
-        # waypoints with a small epsilon). ft-fsd regenerates its path each cycle with
-        # every waypoint shifted → reset every time, matching planner intent. Fixed
-        # paths (skidpad hardcoded, peanut locked loop) re-publish bit-identical → keep
-        # the index. Do NOT use a coarse "first waypoint moved >1 m" test: ft-fsd's
-        # first waypoint tracks the car and shifts LESS than that per replan, so the
-        # index was kept on paths that had slid under the car — and because the closest-
-        # point search only looks forward, _path_idx ratcheted ahead ~0.8 m per replan
-        # until pure pursuit aimed 10+ m past the corner (missed turns, straight-line
-        # runaway at full speed).
-        def _same_wp(a, b):
-            return abs(a[0] - b[0]) < 0.01 and abs(a[1] - b[1]) < 0.01
-        if (self._path is None
-                or len(new_path) != len(self._path)
-                or not _same_wp(new_path[0], self._path[0])
-                or not _same_wp(new_path[len(new_path) // 2], self._path[len(self._path) // 2])
-                or not _same_wp(new_path[-1], self._path[-1])):
-            self._path_idx = 0
+        self._path_idx = 0  # always reset — planner regenerates from car's current position
         self._path = new_path
-        self._last_path_time = self.get_clock().now()
 
     def _odom_callback(self, msg: Odometry):
         self._car_x     = msg.pose.pose.position.x
@@ -141,18 +122,6 @@ class PurePursuitNode(Node):
             self.get_logger().warn('Waiting for path/odometry...', throttle_duration_sec=2.0)
             self._publish_command(0.0, 0.0, 0.0)
             return
-
-        # Stale-path failsafe: the planner stops publishing when it sees no cones
-        # (car off track / planner blind). Without this the car keeps driving at
-        # max speed on the last path — observed sailing 60+ m off the peanut track.
-        if self._last_path_time is not None:
-            path_age = (self.get_clock().now() - self._last_path_time).nanoseconds * 1e-9
-            if path_age > 2.0:
-                self.get_logger().warn(
-                    f'Path stale ({path_age:.1f} s — planner blind?) — braking to stop.',
-                    throttle_duration_sec=2.0)
-                self._publish_command(0.0, 0.0, 1.0)
-                return
 
         lookahead_point = self._find_lookahead_point()
         if lookahead_point is None:
@@ -236,6 +205,11 @@ class PurePursuitNode(Node):
             # Linear ramp: max_speed far out, v_target at the corner
             t = dist_to_target / ramp_dist          # 1.0 = far, 0.0 = at corner
             v_cmd = v_target + t * (self._max_speed - v_target)
+            # Too fast to make the corner on throttle alone: brake with the deceleration needed to reach v_target at it
+            # (brake is a 0..1 fraction of max_deceleration; the drivetrain caps it at the tyre grip limit).
+            if v_now > v_cmd + 0.5:
+                a_req = (v_now**2 - v_target**2) / (2.0 * max(dist_to_target, 0.5))
+                return (0.0, min(1.0, a_req / self._max_deceleration))
             return (max(0.1, v_cmd / self._max_speed), 0.0)
         else:
             return (1.0, 0.0)
@@ -250,14 +224,10 @@ class PurePursuitNode(Node):
         ld = self._lookahead_distance
 
         # Find closest waypoint to the car, searching forward from _path_idx.
-        # Window MUST stay below the waypoints-per-lap of sequenced self-crossing
-        # paths (skidpad circles: ~50 wp/lap): at the central crossing the next
-        # segment's waypoints sit at the same physical spot, and a wider window
-        # lets the search jump segments and skip laps (regression: 60 made the
-        # car drive skidpad nearly straight through). 30 is the verified value;
-        # the >10 m fallback below covers genuine relocalization.
+        # _path_idx is reset to 0 on every new path, so this window covers the
+        # relevant portion and advances naturally as the car moves.
         n = len(path)
-        search_end = min(n, self._path_idx + 30)
+        search_end = min(n, self._path_idx + 60)
 
         min_dist    = float('inf')
         closest_idx = self._path_idx
@@ -268,14 +238,9 @@ class PurePursuitNode(Node):
                 min_dist    = d
                 closest_idx = i
 
-        # If nothing close was found in the window, fall back to a FORWARD-only
-        # search (from _path_idx to the end). Never search backward: on sequenced
-        # self-crossing paths (skidpad laps) earlier laps' waypoints sit at the same
-        # physical spot, and a backward snap makes the car repeat a lap (measured:
-        # 5 circle laps instead of 4). Closed-loop wrap-around is handled separately.
+        # If nothing close was found in the window, fall back to global search
         if min_dist > 10.0:
-            for i in range(self._path_idx, n):
-                wx, wy = path[i]
+            for i, (wx, wy) in enumerate(path):
                 d = math.hypot(wx - car_x, wy - car_y)
                 if d < min_dist:
                     min_dist    = d
@@ -288,16 +253,6 @@ class PurePursuitNode(Node):
             wx, wy = path[i]
             if math.hypot(wx - car_x, wy - car_y) >= ld:
                 return (wx, wy)
-
-        # Wrap around only for closed-loop paths (first and last waypoints within 3 m),
-        # e.g. the peanut locked loop. Open paths (accel, skidpad, ft-fsd local paths)
-        # never wrap — avoids reversing at the finish line.
-        if math.hypot(path[0][0] - path[-1][0], path[0][1] - path[-1][1]) < 3.0:
-            for i in range(0, closest_idx):
-                wx, wy = path[i]
-                if math.hypot(wx - car_x, wy - car_y) >= ld:
-                    self._path_idx = i
-                    return (wx, wy)
 
         return path[-1]
 

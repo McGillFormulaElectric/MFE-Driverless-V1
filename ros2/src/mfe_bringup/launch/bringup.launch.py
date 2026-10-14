@@ -31,23 +31,14 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
-# finish_x per mission: EMERGENCY position fallback only. Primary finish detection
-# is perception-based: orange-gate passes (accel/skidpad) or return-to-start
-# (autocross/trackdrive/peanut). These fire only if the gate is never perceived,
-# so they sit beyond the expected gate-based stopping point.
+# finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
     'autocross':    100.0,
     'trackdrive':   100.0,
-    'acceleration':  85.0,  # gate at x≈78; gate pass normally stops the car by ~92
-    'skidpad':       36.0,  # gate stop rests car ≈33; corridor cones end at x≈35.4
+    'acceleration':  78.0,  # orange finish gate at x=78 m on EUFS acceleration track
+    'skidpad':       37.0,  # end of exit corridor on EUFS skidpad track
     'peanut':       100.0,  # unused — peanut uses return-to-start lap counting
 }
-
-# Orange-gate pass counts per mission (perception-based finish, 0 = disabled):
-# acceleration crosses its finish gate once; skidpad passes the central gate
-# 5 times (entry + 4 laps), then needs ~17 m run-out to reach the stop zone.
-_GATE_CROSSINGS = {'acceleration': 1, 'skidpad': 5}
-_STOP_AFTER_GATE_M = {'acceleration': 0.0, 'skidpad': 17.0}
 
 
 def _make_vision_node(model_path_str: str) -> list:
@@ -70,20 +61,11 @@ def _make_vision_node(model_path_str: str) -> list:
         output='screen',
         parameters=[{
             'model_path': model_path_str,
-            # ZED depth-camera trio: RGB + depth + camera_info all come from the SAME
-            # Gazebo depth sensor (camera_name 'zed'), so YOLO bboxes on the RGB are
-            # pixel-aligned with the depth image and the intrinsics match exactly.
-            'depth_callback': True,
-            # zed_*_optical_frame joints in the EUFS urdf are identity-rotated (NOT
-            # optical convention), so the node converts optical→body coords and stamps
-            # the body-convention frame colocated with the depth sensor.
-            'camera_frame': 'zed_depth_camera_frame',
-            'output_body_frame': True,
+            'depth_callback': False,
         }],
         remappings=[
-            ('image/input', '/zed/image_raw'),
-            ('image/depth', '/zed/depth/image_raw'),
-            ('camera/camera_info', '/zed/camera_info'),
+            # vision detector subscribes to 'image/input'; camera publishes /camera/image_raw
+            ('image/input', '/camera/image_raw'),
         ],
     )]
 
@@ -102,12 +84,10 @@ def generate_launch_description():
 
     vision_model_arg = DeclareLaunchArgument(
         'vision_model_path',
-        default_value=os.path.join(
-            get_package_share_directory('vision_cone_detector'), 'resource', 'best.pt'),
+        default_value='',
         description=(
             'Absolute path to YOLO weights file for the vision cone detector. '
-            'Defaults to the cone-trained weights shipped with vision_cone_detector; '
-            'pass an empty string to skip the vision node.'
+            'Leave empty to skip. Defaults to trained yolov8s weights.'
         ),
     )
 
@@ -116,8 +96,11 @@ def generate_launch_description():
         default_value='/ekf/output',
         description=(
             'Odometry topic used by path planner and pure pursuit for vehicle pose. '
-            'In simulation pass pose_topic:=/ground_truth/state_odom for a consistent '
-            'frame with the Gazebo world / TF map frame.'
+            'In simulation pass pose_topic:=/sim/xsens/state_odom (same map-frame header as '
+            'ground truth, but noise-corrupted to be representative of the real Xsens '
+            'MTi-670G — see mfe_eufs_sim/xsens_noise_node.py). Do not use raw '
+            '/ground_truth/state_odom as pose_topic — it is noiseless and hides pose error '
+            'the real sensor would introduce.'
         ),
     )
 
@@ -153,7 +136,7 @@ def generate_launch_description():
         default_value='true',
         description=(
             'Launch the GPS+IMU EKF node. '
-            'Set false in sim when using pose_topic:=/ground_truth/state_odom '
+            'Set false in sim when using pose_topic:=/sim/xsens/state_odom '
             '(EKF GPS-origin frame does not align with the Gazebo world/TF map frame).'
         ),
     )
@@ -191,6 +174,12 @@ def generate_launch_description():
         'max_speed',
         default_value='0.0',
         description='Override pure pursuit max_speed (m/s). 0 = use mission default.',
+    )
+
+    lookahead_arg = DeclareLaunchArgument(
+        'lookahead',
+        default_value='0.0',
+        description='Override pure pursuit lookahead_distance (m). 0 = use mission default.',
     )
 
     mission = LaunchConfiguration('mission')
@@ -276,10 +265,24 @@ def generate_launch_description():
     )
 
     # --------------------------------------------------------------------------
+    # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
+    # Publishes: /imu (sensor_msgs/Imu), /gps (sensor_msgs/NavSatFix) — feeds ekf_node below.
+    # Gated on use_ekf since that's the only consumer of these topics.
+    # --------------------------------------------------------------------------
+    xsens_mti_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
+            )
+        ),
+        condition=IfCondition(use_ekf),
+    )
+
+    # --------------------------------------------------------------------------
     # State estimation — Extended Kalman Filter (custom MFE node)
     # Subscribes: /imu/data (Imu), /gps (NavSatFix)
     # Publishes:  /ekf/output (nav_msgs/Odometry)
-    # Disabled in sim (use_ekf:=false) when pose_topic:=/ground_truth/state_odom —
+    # Disabled in sim (use_ekf:=false) when pose_topic:=/sim/xsens/state_odom —
     # EKF GPS origin ≠ Gazebo world frame so EKF pose cannot be used with TF-derived cones.
     # --------------------------------------------------------------------------
     ekf_params_file = os.path.join(
@@ -333,7 +336,7 @@ def generate_launch_description():
         params = {
             'wheelbase': 1.56,
             'max_steering_deg': 28.0,
-            'max_lateral_accel': 4.0,   # measured: 8.0 never brakes for the tightest corners — car runs wide
+            'max_lateral_accel': 8.0,
             'max_deceleration': 10.0,
         }
         if mission_str == 'skidpad':
@@ -342,12 +345,15 @@ def generate_launch_description():
             params.update({'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2})
         elif mission_str == 'peanut':
             # Tighter lookahead + lower speed for the figure-8 crossing pinch
-            params.update({'max_speed': 6.0, 'lookahead_distance': 4.5, 'speed_reduction_factor': 0.5})
+            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5, 'speed_reduction_factor': 0.5})
         else:  # autocross / trackdrive
             params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3})
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:
             params['max_speed'] = max_speed_override
+        lookahead_override = float(context.launch_configurations.get('lookahead', '0.0'))
+        if lookahead_override > 0.0:
+            params['lookahead_distance'] = lookahead_override
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -372,15 +378,11 @@ def generate_launch_description():
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
         # Closed-loop tracks use return-to-start lap counting.
-        # Linear tracks (acceleration, skidpad) use orange-gate pass counting,
-        # with the x-position fallback as an emergency net — num_laps ignored.
+        # Linear tracks (acceleration, skidpad) keep x-position logic — num_laps ignored.
         if mission_str in ('autocross', 'trackdrive', 'peanut'):
             extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
         else:
-            extra = {
-                'gate_crossings': _GATE_CROSSINGS.get(mission_str, 0),
-                'stop_after_gate_m': _STOP_AFTER_GATE_M.get(mission_str, 0.0),
-            }
+            extra = {}
         return [Node(
             package='mfe_path_planning',
             executable='finish_detector_node',
@@ -418,9 +420,6 @@ def generate_launch_description():
         executable='fusion_evaluator_node',
         name='fusion_evaluator',
         output='screen',
-        # Same camera_info source as the vision node — without this remap the
-        # evaluator's pixel-mode matching never gets intrinsics in sim.
-        remappings=[('camera/camera_info', '/zed/camera_info')],
     )
 
     # --------------------------------------------------------------------------
@@ -433,6 +432,7 @@ def generate_launch_description():
             vision_node_action,         # skipped unless vision_model_path is set
             pc2scan_launch,             # PointCloud2 → LaserScan for SLAM
             slam_launch,
+            xsens_mti_launch,           # Xsens MTi-670G GNSS/INS -> /imu, /gps
             ekf_node,
             boundary_extractor_node,
             evaluator_node,
@@ -470,6 +470,7 @@ def generate_launch_description():
         run_perception_arg,
         run_compute_arg,
         max_speed_arg,
+        lookahead_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,

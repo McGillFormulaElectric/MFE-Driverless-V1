@@ -21,6 +21,10 @@ EUFS Sim → Driverless Stack:
 
 Driverless Stack → EUFS Sim:
   /control/command              (fs_msgs/ControlCommand)   → /cmd (ackermann_msgs/AckermannDriveStamped)
+                                 throttle/brake run through a 4x AMK DD5-14-10-POW in-hub
+                                 drivetrain model (see drivetrain_model.py) to produce a real
+                                 acceleration command — EUFS must be launched with
+                                 commandMode:=acceleration (not velocity) for this to take effect.
 
 NOTE: The EKF node (mfe_state_estimation) publishes to /ekf/output from GPS+IMU data.
       The bridge publishes ground truth as /ground_truth/state_odom for accuracy measurement only.
@@ -41,6 +45,8 @@ from std_msgs.msg import Header
 from eufs_msgs.msg import ConeArrayWithCovariance
 from mfe_msgs.msg import Cone, Track
 from fs_msgs.msg import ControlCommand
+
+from mfe_eufs_sim.drivetrain_model import AMKDrivetrainModel
 
 try:
     from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
@@ -167,7 +173,7 @@ class EufsSimBridge(Node):
 
     # Physical limits used for control command conversion
     MAX_STEERING_ANGLE_RAD = math.radians(25.0)   # ±25° max steering
-    MAX_SPEED_MS = 10.0                            # m/s — max speed (throttle=1, velocity mode)
+    MAX_SPEED_MS = 10.0                            # m/s — hard top-speed safety cap
 
     def __init__(self):
         super().__init__('mfe_eufs_sim_bridge')
@@ -179,12 +185,35 @@ class EufsSimBridge(Node):
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
 
+        # ---------- Drivetrain parameters (4x AMK DD5-14-10-POW in-hub) ----------
+        # See mfe_eufs_sim/drivetrain_model.py docstring for what's a real datasheet
+        # number vs. a placeholder needing confirmation against the real vehicle.
+        self.declare_parameter('gear_ratio', 14.0)
+        self.declare_parameter('wheel_radius_m', 0.2525)
+        self.declare_parameter('vehicle_mass_kg', 225.0)
+        self.declare_parameter('max_system_power_w', 80000.0)
+        self.declare_parameter('tire_mu', 1.4)
+        self.declare_parameter('brake_bias_front', 0.6)
+        self.declare_parameter('regen_braking_enabled', True)
+
         self._map_frame = self.get_parameter('map_frame').value
         self._base_frame = self.get_parameter('base_frame').value
         self.MAX_STEERING_ANGLE_RAD = math.radians(
             self.get_parameter('max_steering_deg').value)
         self.MAX_SPEED_MS = self.get_parameter('max_speed_ms').value
         self._use_sim_cones_directly = self.get_parameter('use_sim_cones_directly').value
+
+        self._drivetrain = AMKDrivetrainModel(
+            gear_ratio=self.get_parameter('gear_ratio').value,
+            wheel_radius_m=self.get_parameter('wheel_radius_m').value,
+            vehicle_mass_kg=self.get_parameter('vehicle_mass_kg').value,
+            max_system_power_w=self.get_parameter('max_system_power_w').value,
+            tire_mu=self.get_parameter('tire_mu').value,
+            brake_bias_front=self.get_parameter('brake_bias_front').value,
+            regen_enabled=self.get_parameter('regen_braking_enabled').value,
+        )
+        self._current_speed_ms = 0.0
+        self._last_control_time = None
 
         # ---------- EUFS → MFE: Sensor streams ----------
         # LiDAR: just a remap — same PointCloud2 type
@@ -206,20 +235,22 @@ class EufsSimBridge(Node):
         self._gt_colored_pub = self.create_publisher(
             Track, '/ground_truth/cones_colored', _QOS_MFE)
 
-        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored,
-        # and (GT bypass mode) → /planning/cones for the path planner.
-        # ONE subscription feeds both publishers: duplicate subscriptions to the same
-        # topic in one node were observed to silently starve (one delivered, the other
-        # never fired) — planner went blind while track_colored kept flowing.
+        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored
+        # Used by boundary_extractor as a color fallback when camera is not running.
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
         self._gt_track_colored_pub = self.create_publisher(
             Track, '/ground_truth/track_colored', _QOS_MFE)
+
+        # GT bypass mode: forward full track cones directly to /planning/cones so
+        # the path planner can run without the perception pipeline.
+        # /ground_truth/track gives ALL cones in Gazebo world frame (= TF map frame) —
+        # no coordinate transformation needed; positions are absolute and stable.
         if self._use_sim_cones_directly:
+            self.create_subscription(
+                ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
                 Track, '/planning/cones', _QOS_MFE)
-        else:
-            self._planning_cones_pub = None
 
         # ---------- EUFS → MFE: Vehicle state (ground truth for accuracy measurement) ----------
         # Publishes to /ground_truth/state_odom — NOT to /ekf/output.
@@ -244,11 +275,12 @@ class EufsSimBridge(Node):
 
         mode = 'GT-bypass (→ /planning/cones)' if self._use_sim_cones_directly else 'perception (LiDAR detector owns /perception/cones_uncolored)'
         self.get_logger().info(
-            f'EufsSimBridge started (velocity mode). '
+            f'EufsSimBridge started (acceleration mode — 4x AMK DD5-14-10-POW drivetrain model). '
             f'Cone mode: {mode} | '
             f'GT cones always → /ground_truth/cones_colored | '
             f'Ground truth state → /ground_truth/state_odom (NOT /ekf/output) | '
-            f'Max speed: {self.MAX_SPEED_MS} m/s | '
+            f'gear_ratio={self._drivetrain.gear_ratio} wheel_r={self._drivetrain.wheel_radius_m}m '
+            f'mass={self._drivetrain.vehicle_mass_kg}kg tire_mu={self._drivetrain.tire_mu} | '
             f'Max steering: {math.degrees(self.MAX_STEERING_ANGLE_RAD):.1f}°')
 
     # ------------------------------------------------------------------ #
@@ -274,9 +306,8 @@ class EufsSimBridge(Node):
         map→odom→base_footprint from Gazebo). Positions are absolute and stable —
         no coordinate transformation required.
 
-        BLUE and YELLOW boundary cones are forwarded for planning; ORANGE_BIG
-        start/finish pylons are forwarded for the finish detector's gate-pass
-        detection (the planner skips them at intake — see _MFE_TO_FSD).
+        Only BLUE and YELLOW boundary cones are forwarded. ORANGE_BIG are
+        start/finish pylons that sit off to the side and confuse the path planner.
         """
         track = Track()
         stamp = msg.header.stamp
@@ -295,8 +326,7 @@ class EufsSimBridge(Node):
             track.track.append(make_cone(cw.point, Cone.BLUE))
         for cw in msg.yellow_cones:
             track.track.append(make_cone(cw.point, Cone.YELLOW))
-        for cw in msg.big_orange_cones:
-            track.track.append(make_cone(cw.point, Cone.ORANGE_BIG))
+        # ORANGE_BIG omitted — start/finish pylons at off-track positions confuse the planner
 
         self._planning_cones_pub.publish(track)
 
@@ -307,20 +337,23 @@ class EufsSimBridge(Node):
         self._gt_colored_pub.publish(track)
 
     def _gt_track_cb(self, msg: ConeArrayWithCovariance) -> None:
-        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored,
-        and in GT-bypass mode → /planning/cones (single subscription feeds both).
+        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored.
         Published in the EUFS track-local frame for debugging/visualisation in Foxglove.
         NOTE: frame_id='map' here is the Gazebo track-local origin, NOT the TF map frame.
         """
         track = _cone_array_to_track(msg, msg.header.frame_id)
         self._gt_track_colored_pub.publish(track)
-        if self._planning_cones_pub is not None:
-            self._sim_cones_cb(msg)
 
     def _car_state_cb(self, msg) -> None:
         """Convert eufs_msgs/CarState → nav_msgs/Odometry → /ground_truth/state_odom."""
         odom = _car_state_to_odometry(msg)
         self._odom_pub.publish(odom)
+        # Cache current speed for the drivetrain model — ground truth, not the noisy
+        # /sim/xsens/state_odom, since this represents the real car's own wheel-speed
+        # sensing (encoders), not GNSS/INS.
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        self._current_speed_ms = math.hypot(vx, vy)
 
     # ------------------------------------------------------------------ #
     #  MFE → EUFS callbacks                                               #
@@ -330,11 +363,17 @@ class EufsSimBridge(Node):
         """
         Convert fs_msgs/ControlCommand → ackermann_msgs/AckermannDriveStamped.
 
-        EUFS sim must be launched with commandMode:=velocity so that
-        AckermannDrive.speed is treated as m/s (target speed).
+        EUFS sim must be launched with commandMode:=acceleration — AckermannDrive.acceleration
+        is read directly as the vehicle's longitudinal acceleration command (the plugin's own
+        velocity-tracking loop is bypassed entirely in this mode; see gazebo_ros_race_car_model.cpp,
+        `_des_input.acc = cmd->drive.acceleration`). The acceleration value itself comes from the
+        4x AMK DD5-14-10-POW drivetrain model (mfe_eufs_sim/drivetrain_model.py), not an arbitrary
+        speed target — see that module for the real motor numbers and the assumptions still
+        needing confirmation (gear ratio, vehicle mass, wheel radius, power cap, tire mu).
 
-        throttle ∈ [0,1] → forward speed: throttle * MAX_SPEED_MS
-        brake    ∈ [0,1] → overrides throttle, reduces speed proportionally
+        throttle ∈ [0,1] → positive acceleration from the motor torque-speed curve
+        brake    ∈ [0,1] → negative acceleration (regen + friction, traction-limited);
+                            overrides throttle when both are nonzero
         steering ∈ [-1,+1] → steering_angle in radians
         """
         if not _ACKERMANN_AVAILABLE or self._cmd_pub is None:
@@ -343,17 +382,29 @@ class EufsSimBridge(Node):
         # Steering: normalised → radians
         steering_rad = float(msg.steering) * self.MAX_STEERING_ANGLE_RAD
 
-        # Speed: brake reduces the throttle demand (brake-by-wire)
         throttle = float(msg.throttle)
         brake = float(msg.brake)
-        speed_ms = (throttle - brake) * self.MAX_SPEED_MS
-        speed_ms = max(0.0, speed_ms)   # clamp — no reverse
+        speed_ms = self._current_speed_ms
+
+        now = self.get_clock().now()
+        dt = ((now - self._last_control_time).nanoseconds * 1e-9
+              if self._last_control_time is not None else 0.02)
+        self._last_control_time = now
+
+        if brake > 0.0:
+            accel_ms2 = -self._drivetrain.compute_deceleration(brake, speed_ms)
+        elif speed_ms >= self.MAX_SPEED_MS:
+            # Hard top-speed safety cap — independent of pure_pursuit's own mission-tuned
+            # max_speed (which governs throttle, not this bridge's physics output directly).
+            accel_ms2 = 0.0
+        else:
+            accel_ms2 = self._drivetrain.compute_acceleration(throttle, speed_ms, dt)
 
         cmd = AckermannDriveStamped()
-        cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.header.stamp = now.to_msg()
         cmd.header.frame_id = self._base_frame
         cmd.drive.steering_angle = steering_rad
-        cmd.drive.speed = speed_ms
+        cmd.drive.acceleration = accel_ms2
 
         self._cmd_pub.publish(cmd)
 
