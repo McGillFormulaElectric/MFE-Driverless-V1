@@ -1,5 +1,7 @@
 // GPU cone pipeline (see cuda_cone_pipeline.hpp).
 //
+// Unpack:     rawFlags reads x/y/z from the PointCloud2 bytes and flags finite points ->
+//             exclusive scan -> rawScatter (order kept) -> motionCorrect (t = i/n * T).
 // RANSAC:     host draws K index triplets (fixed seed) -> planeHyp kernel builds one plane per
 //             triplet (rejects degenerate / too-tilted ones) -> countInliers scores all K planes
 //             against all points at once (grid.y = hypothesis) -> best on host -> refitSums
@@ -25,6 +27,37 @@ constexpr int kBlock = 256;
 inline unsigned blocksFor(unsigned n) { return (n + kBlock - 1) / kBlock; }
 
 __device__ inline float3 sub3(float4 a, float4 b) { return make_float3(a.x - b.x, a.y - b.y, a.z - b.z); }
+
+__global__ void rawFlags(const uint8_t *data, unsigned n, unsigned step, unsigned ox, unsigned oy, unsigned oz,
+                         unsigned *flags) {
+  const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  const uint8_t *pt = data + static_cast<size_t>(i) * step;
+  const float x = *reinterpret_cast<const float *>(pt + ox);
+  const float y = *reinterpret_cast<const float *>(pt + oy);
+  const float z = *reinterpret_cast<const float *>(pt + oz);
+  flags[i] = isfinite(x) && isfinite(y) && isfinite(z);
+}
+
+__global__ void rawScatter(const uint8_t *data, unsigned n, unsigned step, unsigned ox, unsigned oy, unsigned oz,
+                           const unsigned *flags, const unsigned *offs, float4 *out) {
+  const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n || !flags[i]) return;
+  const uint8_t *pt = data + static_cast<size_t>(i) * step;
+  out[offs[i]] = make_float4(*reinterpret_cast<const float *>(pt + ox), *reinterpret_cast<const float *>(pt + oy),
+                             *reinterpret_cast<const float *>(pt + oz), 0.0f);
+}
+
+// Same model as perception::MotionDistortionCorrector (index-based capture time).
+__global__ void motionCorrect(float4 *pts, unsigned n, float vx, float vy, float omega, float T) {
+  const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  const float dt = T - (static_cast<float>(i) / static_cast<float>(n)) * T;
+  float s, c;
+  sincosf(omega * dt, &s, &c);
+  const float4 p = pts[i];
+  pts[i] = make_float4(c * p.x - s * p.y + vx * dt, s * p.x + c * p.y + vy * dt, p.z, p.w);
+}
 
 __global__ void planeHyp(const float4 *pts, const int3 *samples, int K, float cos_eps, float4 *planes) {
   int k = blockIdx.x * blockDim.x + threadIdx.x;
@@ -155,9 +188,10 @@ void smallestEigvec(double A[3][3], double out[3]) {
 
 struct GpuConePipeline::Impl {
   cudaStream_t st;
-  cudaEvent_t ev[8];
+  cudaEvent_t ev[9];
   cudaFilter *roi_f, *vox_f;
   thrust::device_vector<float4> raw, roi, vox, band;
+  thrust::device_vector<uint8_t> bytes;   // raw PointCloud2 buffer
   thrust::device_vector<int3> samples;
   thrust::device_vector<float4> planes;
   thrust::device_vector<unsigned> counts, flags, offs;
@@ -193,24 +227,60 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
   Impl &s = *impl_;
   cudaStream_t st = s.st;
   out = GpuConeResult();
-  out.raw = n;
+  out.raw = out.valid = n;
   if (n == 0) return;
-
-  // --- upload + ROI + voxel ---
   checkCudaErrors(cudaEventRecord(s.ev[0], st));
-  grow(s.raw, n); grow(s.roi, n);
+  grow(s.raw, n);
   checkCudaErrors(cudaMemcpyAsync(raw_ptr(s.raw), host, n * sizeof(float4), cudaMemcpyHostToDevice, st));
   checkCudaErrors(cudaEventRecord(s.ev[1], st));
+  checkCudaErrors(cudaEventRecord(s.ev[2], st));   // no unpack stage
+  process(n, P, out);
+}
+
+void GpuConePipeline::runRaw(const uint8_t *data, unsigned n, unsigned step, unsigned ox, unsigned oy, unsigned oz,
+                             const GpuMotion &M, const GpuConeParams &P, GpuConeResult &out) {
+  Impl &s = *impl_;
+  cudaStream_t st = s.st;
+  out = GpuConeResult();
+  out.raw = n;
+  if (n == 0) return;
+  checkCudaErrors(cudaEventRecord(s.ev[0], st));
+  const size_t nbytes = static_cast<size_t>(n) * step;
+  grow(s.bytes, nbytes); grow(s.flags, n); grow(s.offs, n); grow(s.raw, n);
+  checkCudaErrors(cudaMemcpyAsync(raw_ptr(s.bytes), data, nbytes, cudaMemcpyHostToDevice, st));
+  checkCudaErrors(cudaEventRecord(s.ev[1], st));
+  rawFlags<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, raw_ptr(s.flags));
+  thrust::exclusive_scan(thrust::cuda::par.on(st), raw_ptr(s.flags), raw_ptr(s.flags) + n, raw_ptr(s.offs));
+  unsigned lo = 0, lf = 0;
+  checkCudaErrors(cudaMemcpyAsync(&lo, raw_ptr(s.offs) + n - 1, sizeof(unsigned), cudaMemcpyDeviceToHost, st));
+  checkCudaErrors(cudaMemcpyAsync(&lf, raw_ptr(s.flags) + n - 1, sizeof(unsigned), cudaMemcpyDeviceToHost, st));
+  checkCudaErrors(cudaStreamSynchronize(st));
+  const unsigned nv = lo + lf;
+  rawScatter<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, raw_ptr(s.flags),
+                                              raw_ptr(s.offs), raw_ptr(s.raw));
+  if (M.enable && nv > 0)
+    motionCorrect<<<blocksFor(nv), kBlock, 0, st>>>(raw_ptr(s.raw), nv, M.vx, M.vy, M.omega, M.scan_duration);
+  checkCudaErrors(cudaEventRecord(s.ev[2], st));
+  out.valid = nv;
+  if (nv == 0) return;
+  process(nv, P, out);
+}
+
+void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult &out) {
+  Impl &s = *impl_;
+  cudaStream_t st = s.st;
+  // --- ROI + voxel ---
+  grow(s.roi, n);
   FilterParam_t rp{}; rp.type = PASSTHROUGH; rp.dim = 0;
   rp.downFilterLimits = P.roi_x_min; rp.upFilterLimits = P.roi_x_max; rp.limitsNegative = false;
   s.roi_f->set(rp);
   s.roi_f->filter(raw_ptr(s.roi), &out.roi, raw_ptr(s.raw), n);
-  checkCudaErrors(cudaEventRecord(s.ev[2], st));
+  checkCudaErrors(cudaEventRecord(s.ev[3], st));
   grow(s.vox, std::max(out.roi, 1u));
   FilterParam_t vp{}; vp.type = VOXELGRID; vp.voxelX = vp.voxelY = vp.voxelZ = P.leaf;
   s.vox_f->set(vp);
   s.vox_f->filter(raw_ptr(s.vox), &out.voxel, raw_ptr(s.roi), out.roi);
-  checkCudaErrors(cudaEventRecord(s.ev[3], st));
+  checkCudaErrors(cudaEventRecord(s.ev[4], st));
   const unsigned m = out.voxel;
 
   // --- RANSAC ground plane ---
@@ -262,7 +332,7 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
     }
   }
   out.plane[0] = best_plane.x; out.plane[1] = best_plane.y; out.plane[2] = best_plane.z; out.plane[3] = best_plane.w;
-  checkCudaErrors(cudaEventRecord(s.ev[4], st));
+  checkCudaErrors(cudaEventRecord(s.ev[5], st));
 
   // --- cone-height band (compaction) ---
   unsigned nb = 0;
@@ -278,7 +348,7 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
     nb = lo + lf;
     scatter<<<blocksFor(m), kBlock, 0, st>>>(raw_ptr(s.vox), raw_ptr(s.flags), raw_ptr(s.offs), m, raw_ptr(s.band));
   }
-  checkCudaErrors(cudaEventRecord(s.ev[5], st));
+  checkCudaErrors(cudaEventRecord(s.ev[6], st));
 
   // --- Euclidean clustering: connected components over distance <= tol ---
   if (nb > 0) {
@@ -295,7 +365,7 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
       if (!changed) break;
     }
   }
-  checkCudaErrors(cudaEventRecord(s.ev[6], st));
+  checkCudaErrors(cudaEventRecord(s.ev[7], st));
 
   // --- download band points + labels ---
   out.points.resize(static_cast<size_t>(nb) * 4);
@@ -304,7 +374,7 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
     checkCudaErrors(cudaMemcpyAsync(out.points.data(), raw_ptr(s.band), nb * sizeof(float4), cudaMemcpyDeviceToHost, st));
     checkCudaErrors(cudaMemcpyAsync(out.labels.data(), raw_ptr(s.labels), nb * sizeof(int), cudaMemcpyDeviceToHost, st));
   }
-  checkCudaErrors(cudaEventRecord(s.ev[7], st));
+  checkCudaErrors(cudaEventRecord(s.ev[8], st));
   checkCudaErrors(cudaStreamSynchronize(st));
   checkCudaErrors(cudaGetLastError());
 
@@ -320,6 +390,6 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
   }
   out.n_clusters = static_cast<int>(id.size());
 
-  float *t[] = {&out.t.h2d, &out.t.roi, &out.t.voxel, &out.t.ransac, &out.t.band, &out.t.cluster, &out.t.d2h};
-  for (int k = 0; k < 7; k++) cudaEventElapsedTime(t[k], s.ev[k], s.ev[k + 1]);
+  float *t[] = {&out.t.h2d, &out.t.unpack, &out.t.roi, &out.t.voxel, &out.t.ransac, &out.t.band, &out.t.cluster, &out.t.d2h};
+  for (int k = 0; k < 8; k++) cudaEventElapsedTime(t[k], s.ev[k], s.ev[k + 1]);
 }

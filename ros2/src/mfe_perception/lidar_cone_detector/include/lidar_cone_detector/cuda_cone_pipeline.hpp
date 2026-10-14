@@ -1,5 +1,11 @@
 // Whole-frame GPU cone pipeline for lidar_perception_node:
+//   [raw PointCloud2 unpack -> drop non-finite -> motion-distortion correction] ->
 //   ROI passthrough -> voxel grid -> RANSAC ground plane -> cone-height band -> Euclidean clustering.
+//
+// runRaw() takes the message's byte buffer as-is, so the host does no conversion at all.
+// Motion correction matches perception::MotionDistortionCorrector: point i of the n finite
+// points (in message order) was captured at t = i/n * scan_duration, and is moved to the scan
+// end by rotating omega*dt about z and translating (vx, vy)*dt, dt = scan_duration - t.
 //
 // Everything up to the cluster labels stays on the GPU; the host gets back the cone-band
 // points and one cluster label per point, and does the per-cluster bounding-box checks
@@ -34,8 +40,14 @@ struct GpuConeParams {
   int min_cluster_size = 3, max_cluster_size = 150;
 };
 
+struct GpuMotion {        // ego motion for distortion correction (runRaw only)
+  bool enable = false;
+  float vx = 0, vy = 0, omega = 0;   // m/s, m/s, rad/s in the sensor frame
+  float scan_duration = 0.1f;        // s
+};
+
 struct GpuConeTiming {  // milliseconds, measured with CUDA events on the pipeline stream
-  float h2d = 0, roi = 0, voxel = 0, ransac = 0, band = 0, cluster = 0, d2h = 0;
+  float h2d = 0, unpack = 0, roi = 0, voxel = 0, ransac = 0, band = 0, cluster = 0, d2h = 0;
 };
 
 struct GpuConeResult {
@@ -44,7 +56,7 @@ struct GpuConeResult {
   int n_clusters = 0;
   float plane[4] = {0, 0, 1, 0};
   bool plane_ok = false;
-  unsigned raw = 0, roi = 0, voxel = 0, ground = 0;
+  unsigned raw = 0, valid = 0, roi = 0, voxel = 0, ground = 0;
   GpuConeTiming t;
 };
 
@@ -58,7 +70,14 @@ public:
   // host_xyzp: n points, 4 floats each (pcl::PointXYZ layout), finite.
   void run(const float *host_xyzp, unsigned n, const GpuConeParams &p, GpuConeResult &out);
 
+  // data: raw PointCloud2 bytes (little-endian), n points of point_step bytes; x/y/z are
+  // float32 at the given byte offsets (all multiples of 4). Non-finite points are dropped
+  // on the GPU (order kept), then motion correction, then the same stages as run().
+  void runRaw(const uint8_t *data, unsigned n, unsigned point_step, unsigned off_x, unsigned off_y,
+              unsigned off_z, const GpuMotion &motion, const GpuConeParams &p, GpuConeResult &out);
+
 private:
+  void process(unsigned n, const GpuConeParams &p, GpuConeResult &out);  // input in device raw buffer
   struct Impl;
   Impl *impl_;
 };

@@ -110,7 +110,7 @@ public:
             "/debug/gpu_objects", 10);
 
         RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s",
-            use_gpu_ ? "GPU (CUDA: ROI, voxel, RANSAC ground, band, clustering)" : "Standard PCL (CPU)");
+            use_gpu_ ? "GPU (CUDA: raw unpack, NaN strip, motion correction, ROI, voxel, RANSAC ground, band, clustering)" : "Standard PCL (CPU)");
     }
 
 private:
@@ -121,17 +121,44 @@ private:
         distortion_corrector_->setEgoMotion(last_vx_, last_vy_, last_omega_);
     }
 
+#if USE_GPU_PIPELINE
+    // x/y/z byte offsets if the raw buffer can go straight to the GPU (float32, 4-byte aligned,
+    // little-endian); false means use the CPU conversion.
+    static bool raw_xyz_offsets(const sensor_msgs::msg::PointCloud2& m, unsigned off[3]) {
+        if (m.is_bigendian || m.point_step % 4) return false;
+        const char* names[3] = {"x", "y", "z"};
+        for (int k = 0; k < 3; k++) {
+            bool found = false;
+            for (const auto& f : m.fields)
+                if (f.name == names[k] && f.datatype == sensor_msgs::msg::PointField::FLOAT32 &&
+                    f.count == 1 && f.offset % 4 == 0) { off[k] = f.offset; found = true; break; }
+            if (!found) return false;
+        }
+        return m.data.size() >= static_cast<size_t>(m.width) * m.height * m.point_step;
+    }
+#endif
+
     void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
+        // GPU raw path: the message buffer is uploaded as-is; unpacking, NaN removal and
+        // motion-distortion correction happen on the GPU (cuda_cone_pipeline.cu runRaw).
+        // The intensity filter (min_intensity > 0, hardware only) still needs host clouds.
+        bool gpu_raw = false;
+        unsigned raw_off[3] = {0, 0, 0};
+#if USE_GPU_PIPELINE
+        gpu_raw = use_gpu_ && min_intensity_ <= 0.0 && raw_xyz_offsets(*msg, raw_off);
+#endif
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::fromROSMsg(*msg, *host_cloud);
-        std::vector<int> nan_indices;
-        pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
+        if (!gpu_raw) {
+            // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
+            pcl::fromROSMsg(*msg, *host_cloud);
+            std::vector<int> nan_indices;
+            pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
 
-        if (host_cloud->empty()) return;
+            if (host_cloud->empty()) return;
 
-        if (enable_motion_distortion_) {
-            host_cloud = distortion_corrector_->correctMotionDistortion(host_cloud, motion_scan_duration_sec_);
+            if (enable_motion_distortion_) {
+                host_cloud = distortion_corrector_->correctMotionDistortion(host_cloud, motion_scan_duration_sec_);
+            }
         }
 
         // Load PointXYZI in parallel — used for intensity filtering after geometric pipeline
@@ -168,13 +195,24 @@ private:
             gp.min_cluster_size = min_cluster_size_;
             gp.max_cluster_size = max_cluster_size_;
             GpuConeResult res;
-            gpu_pipe_->run(reinterpret_cast<const float*>(host_cloud->points.data()),
-                           static_cast<unsigned>(host_cloud->points.size()), gp, res);
+            if (gpu_raw) {
+                GpuMotion mo;
+                mo.enable = enable_motion_distortion_;
+                mo.vx = static_cast<float>(last_vx_);
+                mo.vy = static_cast<float>(last_vy_);
+                mo.omega = static_cast<float>(last_omega_);
+                mo.scan_duration = static_cast<float>(motion_scan_duration_sec_);
+                gpu_pipe_->runRaw(msg->data.data(), msg->width * msg->height, msg->point_step,
+                                  raw_off[0], raw_off[1], raw_off[2], mo, gp, res);
+            } else {
+                gpu_pipe_->run(reinterpret_cast<const float*>(host_cloud->points.data()),
+                               static_cast<unsigned>(host_cloud->points.size()), gp, res);
+            }
             RCLCPP_DEBUG(this->get_logger(),
-                "gpu: raw=%u roi=%u voxel=%u ground=%u band=%zu clusters=%d | ms h2d %.2f roi %.2f voxel %.2f "
+                "gpu: raw=%u valid=%u roi=%u voxel=%u ground=%u band=%zu clusters=%d | ms h2d %.2f unpack %.2f roi %.2f voxel %.2f "
                 "ransac %.2f band %.2f cluster %.2f d2h %.2f",
-                res.raw, res.roi, res.voxel, res.ground, res.labels.size(), res.n_clusters,
-                res.t.h2d, res.t.roi, res.t.voxel, res.t.ransac, res.t.band, res.t.cluster, res.t.d2h);
+                res.raw, res.valid, res.roi, res.voxel, res.ground, res.labels.size(), res.n_clusters,
+                res.t.h2d, res.t.unpack, res.t.roi, res.t.voxel, res.t.ransac, res.t.band, res.t.cluster, res.t.d2h);
             if (res.voxel < 50 || res.labels.empty()) return;
 
             pcl::PointCloud<pcl::PointXYZ>::Ptr object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -385,7 +423,7 @@ private:
 
     bool enable_motion_distortion_;
     double motion_scan_duration_sec_;
-    double last_vx_, last_vy_, last_omega_;
+    double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;   // until the first odometry message
     std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
     std::shared_ptr<perception::IntensityClassifier> intensity_classifier_;
 };

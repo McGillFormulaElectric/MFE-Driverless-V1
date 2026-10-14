@@ -43,6 +43,9 @@
 
 #include "lidar_cone_detector/cuda_filter.hpp"
 #include "lidar_cone_detector/cuda_cone_pipeline.hpp"
+#include "lidar_cone_detector/motion_distortion.hpp"
+#include <pcl/PCLPointCloud2.h>
+#include <pcl/conversions.h>
 
 using Clock = std::chrono::steady_clock;
 using PC = pcl::PointCloud<pcl::PointXYZ>;
@@ -359,6 +362,23 @@ static PCP loadFrame(const std::string &path) {
   return pc;
 }
 
+static pcl::PCLPointCloud2 loadRawMsg(const std::string &path) {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  const size_t bytes = static_cast<size_t>(f.tellg());
+  f.seekg(0);
+  pcl::PCLPointCloud2 m;
+  m.height = 1; m.width = static_cast<uint32_t>(bytes / 16); m.point_step = 16; m.row_step = m.width * 16;
+  m.is_bigendian = false; m.is_dense = false;
+  const char *names[4] = {"x", "y", "z", "intensity"};
+  for (int k = 0; k < 4; k++) {
+    pcl::PCLPointField pf; pf.name = names[k]; pf.offset = 4 * k; pf.datatype = pcl::PCLPointField::FLOAT32; pf.count = 1;
+    m.fields.push_back(pf);
+  }
+  m.data.resize(bytes);
+  f.read(reinterpret_cast<char *>(m.data.data()), bytes);
+  return m;
+}
+
 // Filter-stage scaling: concatenate K consecutive raw frames and time ROI+voxel only,
 // CPU (PCL PassThrough + VoxelGrid, host) vs CUDA (H2D + ROI + voxel + D2H).
 static void scalingBench(const std::vector<std::string> &files, const Params &P, cudaStream_t stream) {
@@ -423,6 +443,11 @@ int main(int argc, char **argv) {
   gp.leaf = P.leaf; gp.ground_threshold = P.ground_threshold; gp.cluster_tolerance = static_cast<float>(P.cluster_tolerance);
   gp.min_cluster_size = P.min_cluster_size; gp.max_cluster_size = P.max_cluster_size;
   size_t full_frames_equal = 0, full_cnt_ref = 0, full_cnt_gpu = 0;
+  // front end: CPU (PCL conversion + NaN strip + motion correction) vs GPU raw path
+  Stats fe_s; std::vector<double> rawgpu_total, cpufe_gpu_total;
+  perception::MotionDistortionCorrector mdc(5.0, 0.0, 0.3);   // representative ego motion
+  GpuMotion gmo; gmo.enable = true; gmo.vx = 5.0f; gmo.vy = 0.0f; gmo.omega = 0.3f; gmo.scan_duration = 0.1f;
+  size_t raw_frames_equal = 0, raw_cnt_a = 0, raw_cnt_b = 0; double raw_worst = 0.0;
   std::vector<double> full_matched_frac, full_med; double full_worst = 0.0;
   std::vector<double> cpu_total, gpu_total;
   std::vector<double> filt_max_nn, filt_p99_nn, filt_cnt_cpu, filt_cnt_gpu;
@@ -462,6 +487,39 @@ int main(int argc, char **argv) {
       full_s.add("full.ransac", res.t.ransac); full_s.add("full.band", res.t.band);
       full_s.add("full.cluster", res.t.cluster); full_s.add("full.d2h", res.t.d2h);
     }
+    // --- front end: CPU conversion + NaN strip + motion correction, then GPU core ---
+    {
+      pcl::PCLPointCloud2 rawmsg = loadRawMsg(files[f]);
+      auto t0 = Clock::now();
+      PCP fe(new PC);
+      pcl::fromPCLPointCloud2(rawmsg, *fe);
+      if (timed) fe_s.add("cpu_fe.convert", msSince(t0));
+      auto t1 = Clock::now();
+      std::vector<int> nan_idx;
+      pcl::removeNaNFromPointCloud(*fe, *fe, nan_idx);
+      if (timed) fe_s.add("cpu_fe.nan_strip", msSince(t1));
+      auto t2 = Clock::now();
+      PCP fec = mdc.correctMotionDistortion(fe, 0.1);
+      if (timed) fe_s.add("cpu_fe.motion", msSince(t2));
+      if (timed) fe_s.add("cpu_fe.total", msSince(t0));
+      GpuConeResult ra, rb;
+      pipe.run(reinterpret_cast<const float *>(fec->points.data()), static_cast<unsigned>(fec->size()), gp, ra);
+      if (timed) cpufe_gpu_total.push_back(msSince(t0));
+      // all-GPU: raw bytes in
+      auto t3 = Clock::now();
+      pipe.runRaw(rawmsg.data.data(), rawmsg.width, 16, 0, 4, 8, gmo, gp, rb);
+      std::vector<Vec3> cb = conesFromGpu(rb);
+      if (timed) {
+        rawgpu_total.push_back(msSince(t3));
+        fe_s.add("gpu_raw.h2d", rb.t.h2d); fe_s.add("gpu_raw.unpack_nan_motion", rb.t.unpack);
+      }
+      std::vector<Vec3> ca = conesFromGpu(ra);
+      NN r = compareSets(ca, cb, 0.05), r2 = compareSets(cb, ca, 0.05);
+      raw_cnt_a += ca.size(); raw_cnt_b += cb.size();
+      if (ca.size() == cb.size() && r.matched == r.na && r2.matched == r2.na) raw_frames_equal++;
+      raw_worst = std::max(raw_worst, r.max_match);
+    }
+
     // untimed: same algorithm with PCL RANSAC/cluster on the same CUDA voxel cloud
     {
       NN r = compareSets(cones_gpu, cones_full, 0.05), r2 = compareSets(cones_full, cones_gpu, 0.05);
@@ -520,6 +578,13 @@ int main(int argc, char **argv) {
   std::printf("Full GPU pipeline (CUDA events per stage; end-to-end is host wall time):\n");
   for (auto &kv : full_s.v) printRow(kv.first.c_str(), kv.second);
   printRow("end-to-end", full_total);
+  std::printf("\nFront end (raw message -> corrected cloud), ego motion vx=5 m/s omega=0.3 rad/s:\n");
+  for (auto &kv : fe_s.v) printRow(kv.first.c_str(), kv.second);
+  printRow("CPU front + GPU core", cpufe_gpu_total);
+  printRow("all-GPU (raw bytes)", rawgpu_total);
+  std::printf("  cones, CPU front end vs GPU raw path: frames identical %zu / %zu, mean %.2f vs %.2f, worst offset %.4f m\n",
+              raw_frames_equal, cone_frames, static_cast<double>(raw_cnt_a) / cone_frames,
+              static_cast<double>(raw_cnt_b) / cone_frames, raw_worst);
   std::printf("\n=== (0) Full-GPU cones vs PCL RANSAC+cluster on the same CUDA voxel cloud ===\n");
   std::printf("  frames: %zu  mean cones: PCL %.2f  full-GPU %.2f\n", cone_frames,
               static_cast<double>(full_cnt_ref) / cone_frames, static_cast<double>(full_cnt_gpu) / cone_frames);
