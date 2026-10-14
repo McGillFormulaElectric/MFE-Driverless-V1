@@ -64,6 +64,16 @@ The peanut track is a crossing figure-8 (verified from lap traces: the car cross
 
 ## Key implementation notes
 
+### skidpad_planner.py (registration via ft-fsd-path-planning SkidpadRelocalizer)
+- **Upstream**: AMZ ft-fsd-path-planning, https://github.com/papalotis/ft-fsd-path-planning — the library is installed in the sim container as `fsd_path_planning` (`relocalization/skidpad/skidpad_relocalizer.py`, base class `relocalization/relocalization_base_class.py`).
+- **Registration mode** (ROS param `registration_mode`, launch arg `registration_mode:=library|custom`, default `library`):
+  - `library`: `SkidpadRelocalizer()`, then per `/skidpad/cones` message (needs >=3 cones and at least one `/slam/odom` message) `attempt_relocalization_calculation(list_of_cones, position_2d, direction_2d)`. The library latches the first successful fit (it returns early once `is_relocalized`), so later cone messages do not re-register. The template is mapped with `_known_map_to_original_transformer(pos, yaw) -> (pos, yaw)` (known skidpad frame -> SLAM frame). Note the forward `_original_to_known_map_transformer` is the wrong direction for the template.
+  - `custom`: the old hand-rolled SE2 Kabsch/ICP (`rigid()`/`fit()`), re-fitted every cone message against the eufs `skidpad.csv` layout.
+- **Frame bridge**: the library's known frame is defined by its own reference path (`BASE_SKIDPAD_PATH`), whose circle centres sit at (0.05, +/-9.13). `_make_skidpad_path()` has circle centres at (14.4, +/-9.3). A fixed translation `lib_offset` (about (-14.35, -0.01) m) is computed at init from the two sets of circle centres (`calculate_reference_centers_for_skidpad_path`) and added to template points before the library transform.
+- The library needs the initial car pose: odometry is required before the first attempt, and it sets the left/right disambiguation from that pose.
+- Path geometry is still the hardcoded 2L+2R template from `_make_skidpad_path()`; only the registration changed. The `self.idx` / `self.window` windowed path-ahead is unchanged.
+- Test results (2026-10-14, sim container, `skidpad`): library 2 clean, 1 chaotic (3 valid runs); custom 1 clean, 1 wrong with a false MISSION_COMPLETED (2 valid runs). See `docs/agent_knowledge_base.md`.
+
 ### path_planner_node.py
 - `self._global_planning` (true for trackdrive-type missions): pass the FULL cone map to ft-fsd, no visibility/behind filter. Local missions keep `CONE_VIS_R = 50 m` + 3 m behind-car filter.
 - **Lap-1 lock-in** (global missions only): during lap 1 the node records a breadcrumb trail (points ≥0.5 m apart). When the car closes the loop (trail distance >60 m, max excursion from start >15 m, back within 4 m of start), `_build_locked_loop()` builds a full-lap centerline: walk the trail every ~1 m, take the midpoint of the nearest blue/yellow wall cones (each within 5 m; else keep the drive line), smooth (cyclic 3-point average), run `_min_curvature_path` once (safety 0.5), then a clearance guard reverts any waypoint the optimizer pushed within 1.0 m of a cone back to its raw centered position. The result is closed (path[0] == path[-1], so pure pursuit wraps) and published unchanged forever — per-cycle re-planning stops. Trail ordering is what makes this correct on self-crossing tracks (figure-8): midpoints are sequenced by where the car actually drove.
@@ -136,7 +146,7 @@ The peanut track is a crossing figure-8 (verified from lap traces: the car cross
 ### Working
 - `accel` ✓
 - `small_track` / autocross ✓ (ft-fsd, multi-lap, finish detection; re-verified 2026-07-12: 1 lap, 0 cone hits, max deviation 1.9 m — after fixing a May-3 typo in MFE26-eufs-sim `small_track.launch` (`$(var pub_ground)truth)` → `$(var pub_ground_truth)`) that had crashed the EUFS launch for this track since then. That fix lives in the MFE26-eufs-sim repo (uncommitted).
-- `skidpad` ✓ (hardcoded 2L+2R path; 2026-07-12: fixed lap-skipping regression — search window 60→30 — and switched finish to perception-based orange-gate passes. Verified in-sim headless: 5 gate passes at travel 10/65/120/175/230 m — exactly entry + 4 laps — gate-triggered brake at x=27, rest at x=28.98 inside the stop corridor, no coordinate involved)
+- `skidpad` (2026-10-14: registration now via ft-fsd `SkidpadRelocalizer` by default, `registration_mode:=custom` for the old Kabsch/ICP. Library: 2 of 3 runs clean (2L+2R+exit, 0 cones within 0.3 m); 1 run drove chaotic loops. Custom: 1 of 2 clean; the other drove off track yet reported MISSION_COMPLETED.)
 - `peanut` — REGRESSED since 2026-07-11 (<1 hit/lap then; re-measured 2026-07-19: 4-18 hits/lap, cross-track up to 2.7 m at the right lobe SE hairpin, both during lap-1 exploration and on the locked loop; peanut was never re-verified after the 7-12 pure-pursuit changes). Locked-loop 1 m resampling fix applied 2026-07-19 — re-verification in progress, see below.
 
 ### Perception-node fix pass (2026-07-18)
