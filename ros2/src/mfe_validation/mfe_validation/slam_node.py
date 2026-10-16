@@ -34,7 +34,7 @@ class SlamNode(Node):
     def __init__(self):
         super().__init__('slam_node')
         for k, v in dict(track_csv='', keyframe_m=1.5, gate=1.0, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
-                         min_obs_publish=3, publish_radius=25.0, color_radius=2.0,
+                         min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
                          cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6).items():
             self.declare_parameter(k, v)
         p = lambda k: self.get_parameter(k).value
@@ -69,7 +69,7 @@ class SlamNode(Node):
             self.create_subscription(Track, '/ground_truth/track_colored', self.on_gt_track, 1)
         self.pub_odom = self.create_publisher(Odometry, '/slam/odom', QOS)
         self.pub_cones = self.create_publisher(Track, p('cones_topic'), QOS)
-        self.create_timer(0.5, self.publish_cones)
+        self.create_timer(1.0 / max(0.1, float(p('publish_hz'))), self.publish_cones)
         self.create_timer(10.0, self.report)
         self.get_logger().info(f'slam_node up: velocity+yaw odometry, cone landmarks, colour mode={self.color_mode}, output {p("cones_topic")}')
 

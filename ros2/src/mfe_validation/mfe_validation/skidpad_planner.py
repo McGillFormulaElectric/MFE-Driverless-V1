@@ -43,6 +43,16 @@ def apply(T, p):
     return np.c_[c * p[:, 0] - s * p[:, 1] + tx, s * p[:, 0] + c * p[:, 1] + ty]
 
 
+def check_registration(transformer, lib_offset, origin, yaw0, max_err, max_yaw):
+    """Sanity-check a library fit: the template start (0,0) must land on the car's first SLAM position and the
+    start->centre (template +x) direction must match its first heading. Returns (ok, err_m, yaw_err_deg)."""
+    st = transformer(np.array([0.0, 0.0]) + lib_offset, 0.0)[0]
+    ce = transformer(np.array([14.4, 0.0]) + lib_offset, 0.0)[0]
+    err = float(np.linalg.norm(st - origin))
+    yaw_err = abs(math.degrees((math.atan2(ce[1] - st[1], ce[0] - st[0]) - yaw0 + math.pi) % (2 * math.pi) - math.pi))
+    return err <= max_err and yaw_err <= max_yaw, err, yaw_err
+
+
 class SkidpadPlanner(Node):
     def __init__(self):
         super().__init__('skidpad_planner')
@@ -56,6 +66,16 @@ class SkidpadPlanner(Node):
             raise ValueError(f"registration_mode must be 'library' or 'custom', got {self.registration_mode!r}")
         self.gate, self.min_match = self.get_parameter('gate').value, self.get_parameter('min_match').value
         self.max_resid, self.max_shift = self.get_parameter('max_resid').value, self.get_parameter('max_shift').value
+        # Library mode: the fit is occasionally wrong, so it must put the template start at the car's start pose.
+        self.declare_parameter('max_start_err_m', 2.0)      # max distance of the mapped template start from the first SLAM position
+        self.declare_parameter('max_start_yaw_deg', 15.0)   # max heading error of the mapped start->centre vs the first SLAM yaw
+        self.declare_parameter('max_reloc_rejects', 200)    # give up (un-registered template) after this many rejected fits (BS03 replay needed 40)
+        self.max_start_err = self.get_parameter('max_start_err_m').value
+        self.max_start_yaw = self.get_parameter('max_start_yaw_deg').value
+        self.max_rejects = self.get_parameter('max_reloc_rejects').value
+        self.rejects = 0
+        self.gave_up = False
+        self.start_pos = self.start_yaw = None      # first SLAM pose (the template start, facing template +x)
 
         # Template cones (custom mode)
         rows = list(csv.DictReader(open(CSV)))
@@ -123,6 +143,8 @@ class SkidpadPlanner(Node):
         if self.registration_mode == 'library':
             q = msg.pose.pose.orientation
             yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            if self.start_pos is None:
+                self.start_pos, self.start_yaw = p, yaw
             self.vehicle_position = p
             self.vehicle_direction = np.array([math.cos(yaw), math.sin(yaw)])
         q = self.template_to_car(self.tpl_path[self.idx:self.idx + 10])   # small window: can't jump to the overlapping next lap
@@ -133,7 +155,7 @@ class SkidpadPlanner(Node):
 
         if self.registration_mode == 'library':
             # Library relocalizer: needs the car pose (it latches the first one) and a few cones; latches once it succeeds.
-            if self.transformer is None and self.vehicle_position is not None and len(lm) >= 3:
+            if self.transformer is None and not self.gave_up and self.vehicle_position is not None and len(lm) >= 3:
                 try:
                     self.relocalizer.attempt_relocalization_calculation(
                         list(lm), self.vehicle_position, self.vehicle_direction)
@@ -141,9 +163,21 @@ class SkidpadPlanner(Node):
                     self.get_logger().warn(f'library relocalizer error: {e}', throttle_duration_sec=5.0)
                 if self.relocalizer.is_relocalized:
                     # The relocalizer's fwd transform maps original -> known; we need known -> car for the template.
-                    self.transformer = self.relocalizer._known_map_to_original_transformer
-                    c = self.template_to_car(np.array([[14.4, 0.0]]))[0]
-                    self.get_logger().info(f'library relocalized with {len(lm)} landmarks; template centre (14.4,0) -> car frame ({c[0]:.2f},{c[1]:.2f}) m')
+                    tr = self.relocalizer._known_map_to_original_transformer
+                    ok, err, yaw_err = check_registration(tr, self.lib_offset, self.start_pos, self.start_yaw,
+                                                          self.max_start_err, self.max_start_yaw)
+                    if ok:
+                        self.transformer = tr
+                        c = self.template_to_car(np.array([[14.4, 0.0]]))[0]
+                        self.get_logger().info(f'library relocalized with {len(lm)} landmarks; template centre (14.4,0) -> car frame ({c[0]:.2f},{c[1]:.2f}) m')
+                    else:
+                        # The relocalizer is single-shot (latches once), so retry with a fresh instance on the next message.
+                        self.rejects += 1
+                        self.get_logger().warn(f'rejected library fit #{self.rejects}: start off by {err:.2f} m, heading off by {yaw_err:.1f} deg')
+                        self.relocalizer = type(self.relocalizer)()
+                        if self.rejects >= self.max_rejects:
+                            self.gave_up = True
+                            self.get_logger().error(f'{self.rejects} library fits rejected; using the un-registered template')
         else:
             if len(lm) >= self.min_match:
                 r = self.fit(lm)
