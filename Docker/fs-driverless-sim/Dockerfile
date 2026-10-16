@@ -49,9 +49,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# NOTE: cuda-pcl (NVIDIA-AI-IOT/cuda-pcl) ships pre-built ARM aarch64 .so files only —
-# no x86_64 build path exists. On x86_64 (desktop/sim), lidar_perception_node falls back
-# to CPU PCL automatically (see CMakeLists.txt). On Jetson, build natively without Docker.
+# CUDA toolkit for the GPU LiDAR pipeline (lidar_cone_detector builds its own CUDA kernels when nvcc is
+# found; cuda-pcl's prebuilt aarch64 libraries are not used). 12.8 is the first release with sm_120
+# (RTX 50-series). The driver comes from the host: run the container with --gpus all. Without a GPU the
+# node falls back to CPU PCL at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && \
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb && \
+    apt-get update && apt-get install -y --no-install-recommends cuda-toolkit-12-8 && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/local/cuda/bin:${PATH}
 
 # rosdep
 RUN rosdep init 2>/dev/null || true && rosdep update
@@ -60,7 +67,8 @@ RUN rosdep init 2>/dev/null || true && rosdep update
 RUN pip3 install --upgrade pip && pip3 install uv
 
 # Python deps — install all together so uv respects the numpy<2 constraint
-RUN uv pip install --system "numpy<2" "scipy>=1.13" scikit-learn icecream pandas
+# numba: compiles the path planner's racing-line optimiser (falls back to pure Python, ~10x slower)
+RUN uv pip install --system "numpy<2" "scipy>=1.13" scikit-learn icecream pandas numba
 
 # ft-fsd-path-planning (PyPI name is broken; must install from source)
 RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /opt/ft-fsd-path-planning && \
