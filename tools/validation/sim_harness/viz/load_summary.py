@@ -11,17 +11,20 @@ same split by group (gzserver, lidar_perception_node, slam_node, path_planner_no
 ros2/python), then GPU utilisation mean/max, GPU memory max (MiB) and power mean (W). Processes are matched by a
 substring of the full command line (pidstat -l).
 """
-import argparse, glob, os, sys
+import argparse
+import re, glob, os, sys
 from collections import defaultdict
 
-GROUPS = [
-    ("gzserver", ("gzserver",)),
+GROUPS = [   # first match wins; order matters
+    ("test harness", ("topic echo", "bag record", "score_run", "pidstat", "nvidia-smi")),   # measurement only
     ("lidar_perception_node", ("lidar_perception_node",)),
     ("slam_node", ("slam_node",)),
     ("path_planner_node", ("path_planner_node",)),
     ("pure_pursuit", ("pure_pursuit",)),
-    ("other ros2/python", ("ros2", "python")),   # matched last: the catch-all for the rest of the stack
+    ("simulator", ("gzserver", "eufs", "mfe_eufs_sim", "joint_state_publisher", "robot_state_publisher")),
+    ("other stack nodes", ("/mfe_", "finish_detector", "supervisor", "foxglove")),
 ]
+STACK = ("lidar_perception_node", "slam_node", "path_planner_node", "pure_pursuit", "other stack nodes")
 DEFAULT_DIR = os.path.join(os.environ.get("RESULTS", os.path.expanduser("~/mfe_sim_results")), "load")
 
 
@@ -45,6 +48,9 @@ def parse_pidstat(path):
                 continue
             if header is None:
                 continue
+            # 12-hour locales print the time as "02:58:08 PM": two tokens under the one "Time" column, which
+            # shifts every column. Join them (run_batch.sh also runs pidstat with LC_ALL=C for 24-hour time).
+            line = re.sub(r"^(\d\d:\d\d:\d\d) ([AP]M)\b", r"\1\2", line)
             fields = line.split(None, len(header) - 1)      # the command is the last field and may contain spaces
             if len(fields) != len(header):
                 continue
@@ -86,7 +92,7 @@ def cpu_summary(path):
         g = classify(cmd)
         if g:
             per_t[t][g] += cpu
-    total = [sum(d.values()) for d in per_t.values()]
+    total = [sum(d.get(g, 0.0) for g in STACK) for d in per_t.values()]   # driverless stack only
     groups = {name: [d.get(name, 0.0) for d in per_t.values()] for name, _ in GROUPS}
     return len(per_t), total, groups
 
@@ -98,7 +104,7 @@ def report(run_id, directory):
     if os.path.exists(pidstat):
         n, total, groups = cpu_summary(pidstat)
         tm, tx = mean_max(total)
-        lines.append(f"  CPU sim stack: mean {tm:7.1f}%  max {tx:7.1f}%  over {n} samples (100% = one core)")
+        lines.append(f"  CPU driverless stack (excl. simulator, test harness): mean {tm:7.1f}%  max {tx:7.1f}%  over {n} samples (100% = one core)")
         for name, _ in GROUPS:
             gm, gx = mean_max(groups[name])
             lines.append(f"    {name:22} mean {gm:7.1f}%  max {gx:7.1f}%")

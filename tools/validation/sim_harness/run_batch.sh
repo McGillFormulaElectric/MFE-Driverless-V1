@@ -108,7 +108,7 @@ for EV in $EVENTS; do
     PROBE=$!
     # Host-side load sampling (sees the container's processes): per-process CPU every 1 s, GPU every 0.5 s.
     if [ "$LOAD" = 1 ]; then
-      pidstat -u -r -h -l 1 > "$RESULTS/load/$id.pidstat" 2>/dev/null & PS_PID=$!
+      LC_ALL=C pidstat -u -r -h -l 1 > "$RESULTS/load/$id.pidstat" 2>/dev/null & PS_PID=$!
       nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used,power.draw --format=csv,noheader,nounits -lms 500 > "$RESULTS/load/$id.gpu" 2>/dev/null & NV_PID=$!
     fi
     out=$(timeout -s INT $((TO + 260)) docker exec "${DXE[@]}" "${RUNENV[@]}" "${MENV[@]+"${MENV[@]}"}" \
