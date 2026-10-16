@@ -8,7 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
 from fs_msgs.msg import ControlCommand
-from std_msgs.msg import Bool, Header, Float64MultiArray
+from std_msgs.msg import Bool, Header, Float32, Float64MultiArray
 
 
 class PurePursuitNode(Node):
@@ -51,18 +51,39 @@ class PurePursuitNode(Node):
         # Velocity profile parameters
         self.declare_parameter('max_lateral_accel', 8.0)
         self.declare_parameter('max_deceleration', 10.0)
+        # Colourless local planning publishes /planning/path_horizon and ends the path at the last
+        # mapped cones. While it does, cap speed so the car can stop before the path runs out:
+        # v <= sqrt(2 * frac * max_deceleration * (remaining - margin)).
+        self.declare_parameter('path_end_decel_frac', 0.6)
+        self.declare_parameter('path_end_margin_m', 1.5)
         self.declare_parameter('lookahead_waypoints', 40)
+        # Moving-average window (points) applied to the path for the corner-speed scan only (steering uses the raw
+        # path). A colourless planned path zig-zags between gate midpoints, and its 3-point radius reads ~1.5 m
+        # where the smoothed path reads 3-5 m, capping speed well below the corner. 1 = off.
+        self.declare_parameter('speed_smooth_window', 1)
 
         # Fallback for when car speed is unknown (startup)
         self.declare_parameter('speed_reduction_factor', 0.3)
 
         # PT2 steer delay compensation: tau (s), zeta (damping ratio)
+        self.declare_parameter('control_rate_hz', 50.0)  # /control/command publish rate
         self.declare_parameter('steer_pt2_tau', 0.05)
         self.declare_parameter('steer_pt2_zeta', 0.7)
+        # Smooths the steer target before the PT2 inverse. The inverse's gains grow with
+        # (tau/dt)^2, so without this its response to pose jitter scales with the control
+        # rate (at 50 Hz: steering flipped sign 8-9x/s and sat at full lock). With the
+        # filter its high-frequency gain stays ~7 at 50 Hz (7.8 unfiltered at 20 Hz, which
+        # worked) while keeping ~17 deg of lead at 1 Hz.
+        self.declare_parameter('steer_pt2_filter_tau', 0.012)
 
         # Longitudinal PI controller
         self.declare_parameter('speed_kp', 0.5)
         self.declare_parameter('speed_ki', 0.1)
+        # Brake when faster than the target. Was hard-coded 0: the car could only coast (~0.6 m/s^2),
+        # so it entered corners, and ran off the end of short paths, far too fast.
+        # brake = speed_kb * overspeed (m/s), after a small deadband; bridge maps brake 1.0 to ~13.7 m/s^2.
+        self.declare_parameter('speed_kb', 0.25)
+        self.declare_parameter('brake_deadband_mps', 0.3)
 
         self._K_v                  = self.get_parameter('K_v').value
         self._ld_min               = self.get_parameter('ld_min').value
@@ -73,16 +94,24 @@ class PurePursuitNode(Node):
         self._map_frame            = self.get_parameter('map_frame').value
         self._max_lateral_accel    = self.get_parameter('max_lateral_accel').value
         self._max_deceleration     = self.get_parameter('max_deceleration').value
+        self._path_end_decel       = self.get_parameter('path_end_decel_frac').value * self._max_deceleration
+        self._path_end_margin      = self.get_parameter('path_end_margin_m').value
+        self._horizon_time         = None   # last /planning/path_horizon receipt (s, node clock)
         self._lookahead_waypoints  = self.get_parameter('lookahead_waypoints').value
+        self._speed_smooth_window  = max(1, int(self.get_parameter('speed_smooth_window').value))
+        self._speed_path           = None   # smoothed copy of _path for _compute_target_speed
         self._speed_reduction_factor = self.get_parameter('speed_reduction_factor').value
 
         self._pt2_tau  = self.get_parameter('steer_pt2_tau').value
         self._pt2_zeta = self.get_parameter('steer_pt2_zeta').value
+        self._pt2_filter_tau = self.get_parameter('steer_pt2_filter_tau').value
         self._speed_kp = self.get_parameter('speed_kp').value
         self._speed_ki = self.get_parameter('speed_ki').value
+        self._speed_kb = self.get_parameter('speed_kb').value
+        self._brake_deadband = self.get_parameter('brake_deadband_mps').value
 
         # Control loop sample period (matches timer below)
-        self._dt = 1.0 / 20.0
+        self._dt = 1.0 / float(self.get_parameter('control_rate_hz').value)
 
         # State
         self._path             = None
@@ -97,6 +126,8 @@ class PurePursuitNode(Node):
         # PT2 anticipator state: last two raw (pre-compensation) steer commands
         self._steer_prev1 = 0.0  # r[k-1]
         self._steer_prev2 = 0.0  # r[k-2]
+        self._steer_lp1 = 0.0    # two cascaded first-order low-pass stages on r
+        self._steer_lp2 = 0.0
 
         # PI velocity controller state
         self._speed_integral = 0.0
@@ -108,6 +139,7 @@ class PurePursuitNode(Node):
         self.create_subscription(Path,     '/planning/centerline',     self._path_callback,     reliable_qos)
         self.create_subscription(Odometry, '/ekf/output',              self._odom_callback,     reliable_qos)
         self.create_subscription(Bool,     '/planning/mission_finished', self._finished_callback, reliable_qos)
+        self.create_subscription(Float32,  '/planning/path_horizon',   self._horizon_callback,  reliable_qos)
         self.create_subscription(
             Float64MultiArray,
             '/planning/target_speeds',
@@ -118,12 +150,12 @@ class PurePursuitNode(Node):
         self.create_timer(self._dt, self._control_loop)
 
         self.get_logger().info(
-            f'pure_pursuit_node started | '
+            f'pure_pursuit_node started | rate={1.0 / self._dt:.0f} Hz  '
             f'K_v={self._K_v}  ld=[{self._ld_min},{self._ld_max}] m  '
             f'max_speed={self._max_speed} m/s  '
             f'a_lat={self._max_lateral_accel} m/s²  a_brake={self._max_deceleration} m/s²  '
             f'scan={self._lookahead_waypoints} wp  '
-            f'PT2 tau={self._pt2_tau} zeta={self._pt2_zeta}  '
+            f'PT2 tau={self._pt2_tau} zeta={self._pt2_zeta} filter_tau={self._pt2_filter_tau}  '
             f'PI Kp={self._speed_kp} Ki={self._speed_ki}'
         )
 
@@ -136,6 +168,21 @@ class PurePursuitNode(Node):
             self.get_logger().info('Mission finished — pure pursuit stopped.')
             self._mission_finished = True
 
+    def _horizon_callback(self, msg: Float32) -> None:
+        self._horizon_time = self.get_clock().now().nanoseconds * 1e-9
+
+    def _cap_to_path_end(self, v_target: float) -> float:
+        """Limit speed so the car can stop before the end of a horizon-truncated path."""
+        if self._horizon_time is None or self._path is None:
+            return v_target
+        if self.get_clock().now().nanoseconds * 1e-9 - self._horizon_time > 1.0:
+            return v_target   # planner stopped publishing horizons: not colourless planning
+        path, idx = self._path, self._path_idx
+        remaining = sum(math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+                        for i in range(idx, len(path) - 1))
+        v_stop = math.sqrt(2.0 * self._path_end_decel * max(0.0, remaining - self._path_end_margin))
+        return min(v_target, v_stop)
+
     def _target_speeds_callback(self, msg: Float64MultiArray) -> None:
         self._target_speeds = list(msg.data)
 
@@ -145,6 +192,21 @@ class PurePursuitNode(Node):
         new_path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
         self._path_idx = 0
         self._path = new_path
+        self._speed_path = self._smooth_path(new_path, self._speed_smooth_window)
+
+    @staticmethod
+    def _smooth_path(path, w):
+        """Centred moving average over w points, window shrunk at the ends so the length and endpoints are kept."""
+        if w <= 1 or len(path) < 3:
+            return path
+        h = w // 2
+        n = len(path)
+        out = []
+        for i in range(n):
+            k = min(h, i, n - 1 - i)
+            seg = path[i - k:i + k + 1]
+            out.append((sum(p[0] for p in seg) / len(seg), sum(p[1] for p in seg) / len(seg)))
+        return out
 
     def _odom_callback(self, msg: Odometry):
         self._car_x     = msg.pose.pose.position.x
@@ -188,14 +250,17 @@ class PurePursuitNode(Node):
         alpha = math.atan2(dy, dx) - self._car_yaw
         alpha = math.atan2(math.sin(alpha), math.cos(alpha))
 
-        steering_rad  = math.atan2(2.0 * self._wheelbase * math.sin(alpha), ld)
+        # Use the actual distance to the lookahead point: it is the first path point at >= ld, often
+        # 20% further on sparse paths, and dividing by ld over-steered (skidpad cut ~0.3 m inside).
+        d_la = max(math.hypot(dx, dy), 0.5)
+        steering_rad  = math.atan2(2.0 * self._wheelbase * math.sin(alpha), d_la)
         steering_norm = max(-1.0, min(1.0, steering_rad / self._max_steering_rad))
 
         # Apply PT2 feedforward anticipator to compensate steering actuator lag
         steering_cmd = self._apply_pt2_anticipator(steering_norm)
 
         # --- Speed (PI closed-loop on ramped v_target) ---
-        v_target = self._compute_target_speed(steering_norm)
+        v_target = self._cap_to_path_end(self._compute_target_speed(steering_norm))
         throttle, brake = self._compute_throttle_brake_pi(v_target)
 
         self._publish_command(steering_cmd, throttle, brake)
@@ -223,6 +288,12 @@ class PurePursuitNode(Node):
         tau  = self._pt2_tau
         zeta = self._pt2_zeta
         T    = self._dt
+
+        if self._pt2_filter_tau > 0.0 and tau > 0.0:
+            a = T / (self._pt2_filter_tau + T)
+            self._steer_lp1 += a * (r_k - self._steer_lp1)
+            self._steer_lp2 += a * (self._steer_lp1 - self._steer_lp2)
+            r_k = self._steer_lp2
 
         ratio  = tau / T
         ratio2 = ratio * ratio
@@ -265,7 +336,7 @@ class PurePursuitNode(Node):
             return v_target
         # else: fall through to existing curvature scan
 
-        path     = self._path
+        path     = self._speed_path or self._path
         idx      = self._path_idx
         n        = len(path)
         scan_end = min(n, idx + self._lookahead_waypoints)
@@ -319,8 +390,7 @@ class PurePursuitNode(Node):
 
         Anti-windup: integral state is clamped to [-1.0, 1.0].
         Throttle output is clamped to [0.0, 1.0].
-        Brake is not modified by the PI; existing brake logic is preserved
-        (currently always 0.0 from the velocity profile path).
+        Brake is proportional to overspeed beyond brake_deadband_mps (throttle 0 while braking).
         """
         v_now = self._car_speed
         if v_now is None:
@@ -334,6 +404,10 @@ class PurePursuitNode(Node):
         throttle = self._speed_kp * v_error + self._speed_ki * self._speed_integral
         throttle = max(0.0, min(1.0, throttle))
 
+        overspeed = -v_error - self._brake_deadband
+        if overspeed > 0.0:
+            self._speed_integral = min(self._speed_integral, 0.0)   # don't carry throttle windup into braking
+            return (0.0, max(0.0, min(1.0, self._speed_kb * overspeed)))
         return (throttle, 0.0)
 
     # ------------------------------------------------------------------

@@ -37,7 +37,8 @@ _FINISH_X = {
     'autocross':    100.0,
     'trackdrive':   100.0,
     'acceleration':  78.0,  # orange finish gate at x=78 m on EUFS acceleration track
-    'skidpad':       37.0,  # end of exit corridor on EUFS skidpad track
+    'skidpad':       30.0,  # 15 m past the crossing: brakes inside the stop zone (orange cones 9-21 m past it);
+                            # 37 m braked at ~22 m and every run stopped past the last cones
     'peanut':       100.0,  # unused — peanut uses return-to-start lap counting
 }
 
@@ -403,7 +404,8 @@ def generate_launch_description():
             # Tighter lookahead + lower speed for the figure-8 crossing pinch
             params.update({'max_speed': 6.0, 'lookahead_distance': 3.5, 'speed_reduction_factor': 0.5})
         else:  # autocross / trackdrive
-            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3})
+            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3,
+                           'speed_smooth_window': int(os.environ.get('SPEED_SMOOTH', '5'))})
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:
             params['max_speed'] = max_speed_override
