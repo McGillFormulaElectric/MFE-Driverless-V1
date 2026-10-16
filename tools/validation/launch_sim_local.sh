@@ -3,8 +3,10 @@
 # MFE Driverless — Full Simulation Launch Script
 # Opens tmux with 6 panes and launches all components.
 #
-# Usage: bash scripts/launch_sim.sh [track] [mode] [gui] [laps] [pose_source]
-#   track         — accel (default), skidpad, peanut, small_track, rectangle, ...
+# Usage (inside the container): bash $MFE_REPO/tools/validation/launch_sim_local.sh [event] [mode] [gui] [laps] [pose_source]
+#   Run via sim_harness/run_sim_test.sh or run_batch.sh rather than by hand. Paths come from the environment
+#   (SIMWS, EUFS_WS, EUFS_TRACKS_CSV, GAZEBO_ROS_WS, LOG_DIR); see tools/validation/sim_harness/README.md.
+#   event         — accel (default), skidpad, peanut, autocross, small_track, its_a_mess, ... (case table below)
 #   mode          — no_perception (default) | perception
 #   gui           — gui (default) | nogui
 #   laps          — number of laps before stopping at orange-cone finish gate (default: 1)
@@ -14,11 +16,20 @@
 #                    ground_truth   — perfect /ground_truth/state_odom, for isolating whether
 #                                      a behavior (e.g. drift, cone hits) is noise-caused
 # =============================================================================
+# Must run inside the sim container: on the host, cleanup's tmux kill-server and
+# launch_sim_local.sh's pkills hit the user's own sessions (killed every Claude
+# session on 2026-10-13). Run via: docker exec mfe-sim-gpu-test bash <script> ...
+[ -f /.dockerenv ] || { echo "ERROR: run inside the sim container: docker exec mfe-sim-gpu-test bash $0 $*" >&2; exit 1; }
+# Use the caller's private tmux server when set (run_local_docker_test.sh sets it).
+tmux() { command tmux -L "${MFE_TMUX_SOCKET:-default}" "$@"; }
 
-GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
-EUFS_WS=~/Develop/MFE26-eufs-sim
-MFE_WS=~/Develop/MFE-Driverless-V1/ros2
-LOG_DIR=~/mfe_logs
+# Paths: override from the environment. Defaults assume the ~/Develop layout; the same paths must resolve
+# inside the container (host ~/Develop mounted at the same path).
+SIMWS=${SIMWS:-$HOME/Develop/simws}                 # colcon workspace with the stack + EUFS packages
+EUFS_WS=${EUFS_WS:-$HOME/Develop/MFE26-eufs-sim}    # MFE26-eufs-sim checkout (branch mfe-sim-realtime-cmd-fix)
+EUFS_TRACKS_CSV=${EUFS_TRACKS_CSV:-$EUFS_WS/eufs_tracks/csv}
+GAZEBO_ROS_WS=${GAZEBO_ROS_WS:-$HOME/Develop/gazebo_ros_pkgs}   # optional extra gazebo_ros install
+LOG_DIR=${LOG_DIR:-$HOME/mfe_logs}
 
 # Parse event choice
 EVENT=${1:-accel}
@@ -61,7 +72,7 @@ esac
 [ -n "$MISSION_OVERRIDE" ] && MISSION=$MISSION_OVERRIDE
 
 # Read spawn pose from the track CSV (car_start row: tag,x,y,yaw,...)
-CSV_FILE="$EUFS_WS/eufs_sim/eufs_tracks/csv/${TRACK}.csv"
+CSV_FILE="$EUFS_TRACKS_CSV/${TRACK}.csv"
 if [ -f "$CSV_FILE" ] && grep -q "^car_start" "$CSV_FILE"; then
     IFS=',' read -r _ SPAWN_X SPAWN_Y SPAWN_YAW _ < <(grep "^car_start" "$CSV_FILE")
 else
@@ -137,7 +148,7 @@ SOURCE_ALL="export EUFS_MASTER=$EUFS_WS && \
             export GAZEBO_MASTER_URI=http://localhost:$GAZEBO_PORT && \
             source /opt/ros/humble/setup.bash && \
             ([ -f $GAZEBO_ROS_WS/install/setup.bash ] && source $GAZEBO_ROS_WS/install/setup.bash || true) && \
-            source $HOME/Develop/simws/install/setup.bash && \
+            source $SIMWS/install/setup.bash && \
             true"
 
 # Kill any existing session and stale ROS/Gazebo processes
@@ -177,12 +188,12 @@ sleep 25
 
 # If the EUFS state machine isn't up yet (car not spawned), do it manually.
 source /opt/ros/humble/setup.bash
-source $HOME/Develop/simws/install/setup.bash
+source $SIMWS/install/setup.bash
 if ! timeout 3 ros2 topic echo /ros_can/state_str --once 2>/dev/null | grep -q AS:; then
     echo "==> Car not spawned by eufs_launcher — spawning manually at ($SPAWN_X, $SPAWN_Y, yaw=$SPAWN_YAW)..."
     ros2 run gazebo_ros spawn_entity.py \
         -entity eufs \
-        -file $HOME/Develop/simws/install/eufs_racecar/share/eufs_racecar/robots/eufs/robot.urdf \
+        -file $SIMWS/install/eufs_racecar/share/eufs_racecar/robots/eufs/robot.urdf \
         -x $SPAWN_X -y $SPAWN_Y -z 0.1 -R 0.0 -P 0.0 -Y $SPAWN_YAW \
         -timeout 30.0 --ros-args --log-level warn 2>/dev/null &
     SPAWN_PID=$!
@@ -227,8 +238,9 @@ else
 fi
 [ -n "$LOOKAHEAD" ] && BRINGUP_EXTRAS="$BRINGUP_EXTRAS lookahead:=$LOOKAHEAD"
 [ -n "$MAX_SPEED" ] && BRINGUP_EXTRAS="$BRINGUP_EXTRAS max_speed:=$MAX_SPEED"
+[ -n "$UNKNOWN_CONE_MODE" ] && BRINGUP_EXTRAS="$BRINGUP_EXTRAS unknown_cone_mode:=$UNKNOWN_CONE_MODE"
 tmux send-keys -t mfe:0.2 \
-    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS" Enter
+    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION planner_backend:=${PLANNER_BACKEND:-fasttube} steer_pt2_tau:=${STEER_PT2_TAU:-0.05} $BRINGUP_EXTRAS" Enter
 
 # Pane 3 (top-right) — Foxglove Bridge
 tmux send-keys -t mfe:0.3 \
@@ -250,5 +262,5 @@ tmux send-keys -t mfe:0.5 \
 if [ -t 0 ]; then
     tmux attach-session -t mfe
 else
-    echo "==> tmux session 'mfe' started. Attach with: tmux attach-session -t mfe"
+    echo "==> tmux session 'mfe' started. Attach with: tmux -L ${MFE_TMUX_SOCKET:-default} attach-session -t mfe"
 fi
