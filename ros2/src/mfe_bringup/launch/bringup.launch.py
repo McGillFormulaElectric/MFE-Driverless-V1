@@ -94,6 +94,11 @@ def generate_launch_description():
         ),
     )
 
+    unknown_cone_mode_arg = DeclareLaunchArgument(
+        'unknown_cone_mode',
+        default_value='trace',
+        description='Planning without cone colours: trace (wall tracer path), trace_backend (tracer labels, '
+                    'backend plans), fasttube (ft-fsd sorts the uncoloured cones itself), heading (legacy).')
     planner_backend_arg = DeclareLaunchArgument(
         'planner_backend',
         default_value='fasttube',
@@ -376,6 +381,7 @@ def generate_launch_description():
             'mission': mission,
             'skidpad_mode': skidpad_mode,
             'planner_backend': planner_backend,
+            'unknown_cone_mode': LaunchConfiguration('unknown_cone_mode'),
         }],
         remappings=[('/ekf/output', pose_topic)],
     )
@@ -599,6 +605,7 @@ def generate_launch_description():
         mission_arg,
         skidpad_mode_arg,
         planner_backend_arg,
+        unknown_cone_mode_arg,
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,

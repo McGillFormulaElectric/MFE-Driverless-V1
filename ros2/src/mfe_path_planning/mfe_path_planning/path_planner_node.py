@@ -451,6 +451,8 @@ class PathPlannerNode(Node):
         #                   its gate-midpoint centreline is used directly; ends where the mapped walls end
         #   trace_backend — same wall labels, fed to the backend as left/right; path cut at the same end
         #   heading       — legacy: left/right = side of the car's current heading (fails in corners)
+        #   fasttube      — uncoloured cones go to ft-fsd unchanged; its own cone sorting picks the
+        #                   sides (racing line only with colourless_raceline)
         self.declare_parameter('unknown_cone_mode', 'trace')
         # Racing-line optimizer on colourless (traced) paths. Off: traced paths end at the mapped
         # cones (~10-12 m), so it gains little, and its ~0.27 s per cycle made the path lag the car
@@ -1210,7 +1212,10 @@ class PathPlannerNode(Node):
             f'dir=({self._car_dir[0]:.2f},{self._car_dir[1]:.2f})',
             throttle_duration_sec=2.0)
 
-        if n_left + n_right == 0 and n_unknown > 0:
+        # unknown_cone_mode fasttube: hand the uncoloured cones to ft-fsd unchanged so its own cone
+        # sorting picks the sides.
+        colourless_native = (n_left + n_right == 0 and n_unknown > 0 and self._unknown_mode == 'fasttube')
+        if n_left + n_right == 0 and n_unknown > 0 and not colourless_native:
             # No colored cones (LiDAR-only mode) — assign UNKNOWN cones geometrically.
             # Cross product of car heading with cone direction: positive = left, negative = right.
             for (rx, ry), cone_type in self._cone_map.items():
@@ -1238,7 +1243,7 @@ class PathPlannerNode(Node):
                 f'LiDAR-only: geometry L/R assignment → left={n_left} right={n_right}',
                 throttle_duration_sec=2.0)
 
-        if n_left + n_right == 0:
+        if n_left + n_right == 0 and not colourless_native:
             self.get_logger().warn(
                 'No colored or assignable cones — skipping planner.',
                 throttle_duration_sec=5.0)
@@ -1293,6 +1298,7 @@ class PathPlannerNode(Node):
             # ~2 s — exactly pure pursuit's stale threshold (measured spurious
             # stale-brakes mid-straight on peanut at 6 m/s).
             if (not self._global_planning
+                    and (self._colourless_raceline or not colourless_native)
                     and len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
                     and right_xy is not None and len(right_xy) > 3):
