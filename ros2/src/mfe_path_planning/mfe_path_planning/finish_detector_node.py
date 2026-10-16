@@ -106,6 +106,8 @@ class FinishDetectorNode(Node):
         self._car_x               = 0.0
         self._start_x             = None   # recorded on first odometry message
         self._start_y             = None
+        self._start_yaw           = None   # heading at the first odometry message
+        self._prev_long           = None   # previous position along the start heading (m)
         self._prev_x              = None
         self._prev_y              = None
         self._travel_m            = 0.0
@@ -257,8 +259,15 @@ class FinishDetectorNode(Node):
         y = msg.pose.pose.position.y
         self._car_x = x
 
+        q = msg.pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         if self._start_x is None:
-            self._start_x, self._start_y = x, y
+            self._start_x, self._start_y, self._start_yaw = x, y, yaw
+        # Position relative to the start pose: along the start heading (long) and across it (lat).
+        dx, dy = x - self._start_x, y - self._start_y
+        c, s = math.cos(self._start_yaw), math.sin(self._start_yaw)
+        long, lat = c * dx + s * dy, -s * dx + c * dy
+        prev_long, self._prev_long = self._prev_long, long
 
         if self._prev_x is not None:
             self._travel_m += math.hypot(x - self._prev_x, y - self._prev_y)
@@ -282,8 +291,13 @@ class FinishDetectorNode(Node):
         #   min_travel_m  — must cover at least one partial lap before first crossing counts
         #   max_dist >= 15 m — reset each lap; prevents firing at the figure-8 midpoint
         #                      crossing where the car briefly passes near the origin
+        # A lap counts only when the car crosses the start line: long goes from behind to past the
+        # start, within return_r sideways, heading within 60 deg of the start heading. Distance alone
+        # fired early on peanut, where the track passes 4.3 m from the start before reaching it.
         if self._return_r > 0.0 and self._travel_m >= self._min_travel_m and self._max_dist_from_start >= 15.0:
-            if dist_from_start <= self._return_r:
+            heading_ok = math.cos(yaw - self._start_yaw) > 0.5
+            crossed = prev_long is not None and prev_long < 0.0 <= long
+            if crossed and abs(lat) <= self._return_r and heading_ok:
                 self._laps_completed += 1
                 lap_msg = Int32()
                 lap_msg.data = self._laps_completed

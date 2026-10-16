@@ -13,10 +13,18 @@ Publishes:
     /planning/centerline  (nav_msgs/Path)          — computed centerline
     /planning/track_left  (nav_msgs/Path)          — left boundary
     /planning/track_right (nav_msgs/Path)          — right boundary
+    /planning/path_horizon (std_msgs/Float32)      — colourless local planning: path length (m) ahead
+                                                     of the car before the mapped walls end
 """
 
 import math
 import numpy as np
+
+try:  # the PSO fitness runs ~6000 times per planning cycle; compiled, it drops from ~2.5 s to ~0.4 s per cycle
+    from numba import njit as _njit
+except ImportError:  # same results, just slower
+    def _njit(fn):
+        return fn
 
 try:
     from scipy.optimize import minimize as _sp_minimize
@@ -29,6 +37,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Float32
 from geometry_msgs.msg import PoseStamped
 from mfe_msgs.msg import Cone, Track
 
@@ -43,12 +52,18 @@ except ImportError:
         _LIB_AVAILABLE = False
 
 from mfe_path_planning.amz_planner import AmzPlanner
+from mfe_path_planning.boundary_tracer import BoundaryTracer
 
 
 _QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10,
+)
+_QOS_LATEST = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
 )
 
 # mfe_msgs/Cone color enum → fsd_path_planning ConeTypes
@@ -92,6 +107,17 @@ def _path_from_xy(xy: np.ndarray, frame_id: str, stamp) -> Path:
     return path
 
 
+def _inside_polygon(P: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """Even-odd point-in-polygon for each row of P (Nx2) against a closed polygon (Mx2)."""
+    x, y = P[:, 0][:, None], P[:, 1][:, None]
+    x1, y1 = poly[:, 0][None, :], poly[:, 1][None, :]
+    x2, y2 = np.roll(poly[:, 0], -1)[None, :], np.roll(poly[:, 1], -1)[None, :]
+    with np.errstate(divide='ignore', invalid='ignore'):
+        xc = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+    cross = ((y1 > y) != (y2 > y)) & (x < xc)
+    return (np.count_nonzero(cross, axis=1) % 2) == 1
+
+
 def _make_skidpad_path() -> np.ndarray:
     """
     Generate the full skidpad trajectory for the EUFS Gazebo track.
@@ -103,8 +129,11 @@ def _make_skidpad_path() -> np.ndarray:
       inner cone radius = 7.625 m (standard FSAE), outer = 10.6 m
       path radius = midpoint = 9.1 m, circle centres at (14.4, ±9.3)
     """
-    cx, cy_l, cy_r = 14.4, 9.3, -9.3   # x shared, y for left/right circles
-    R = 9.1                              # centreline radius
+    # Centres ±9.125, R 9.125 (the circles touch at the crossing). Was ±9.3 / 9.1: the path ran 0.2 m
+    # inside the centreline at the crossing with a 0.4 m step between circles, and the car clipped the
+    # inner cones there (skidpad_compare/crossing/a1.py).
+    cx, cy_l, cy_r = 14.4, 9.125, -9.125  # x shared, y for left/right circles
+    R = 9.125                             # centreline radius
 
     N = 50    # waypoints per full lap (keep message small; ~220 total waypoints)
 
@@ -131,7 +160,7 @@ def _make_skidpad_path() -> np.ndarray:
     ])
 
     # Stitch: omit duplicate junction point between sections
-    return np.vstack([entry[:-1], left_circ, right_circ, exit_pts])
+    return np.vstack([entry[:-1], left_circ, right_circ[1:], exit_pts[1:]])
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +182,7 @@ _F_ENGINE_MAX  = 7676.0    # N  peak tractive force
 # Physics helpers for PSO lap-time fitness
 # ---------------------------------------------------------------------------
 
+@_njit
 def _menger_kappa(path):
     """Menger curvature at each waypoint of path (N, 2)."""
     N = len(path)
@@ -179,6 +209,7 @@ def _grip_speed(kappa):
     return np.sqrt(np.clip(v2, 0, 900))   # cap at 30 m/s
 
 
+@_njit
 def _backward_pass(v_lat, ds):
     """Backward deceleration pass: ensure car can brake to each corner speed."""
     v = v_lat.copy()
@@ -192,6 +223,7 @@ def _backward_pass(v_lat, ds):
     return v
 
 
+@_njit
 def _forward_pass(v_after_backward, ds):
     """Forward acceleration pass with pack-power and force limits."""
     v = v_after_backward.copy()
@@ -414,14 +446,30 @@ class PathPlannerNode(Node):
         # Local (non-global) planning backend: fasttube = fsd_path_planning library,
         # amz = Delaunay + beam search after the AMZ Driverless paper (amz_planner.py).
         self.declare_parameter('planner_backend', 'fasttube')  # fasttube | amz
+        # Cones without colour (LiDAR-only), local missions:
+        #   trace         — boundary_tracer labels the walls (driven-trajectory seeds + wall growth) and
+        #                   its gate-midpoint centreline is used directly; ends where the mapped walls end
+        #   trace_backend — same wall labels, fed to the backend as left/right; path cut at the same end
+        #   heading       — legacy: left/right = side of the car's current heading (fails in corners)
+        self.declare_parameter('unknown_cone_mode', 'trace')
+        # Racing-line optimizer on colourless (traced) paths. Off: traced paths end at the mapped
+        # cones (~10-12 m), so it gains little, and its ~0.27 s per cycle made the path lag the car
+        # (replayed with live timing: worst-10% path ahead 3.7-5.9 m with it, 6.7-7.6 m without).
+        self.declare_parameter('colourless_raceline', False)
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
         self._use_pso_optimizer = self.get_parameter('use_pso_optimizer').value
+        if self._use_pso_optimizer:  # compile the PSO hot loops now, not on the first planning cycle
+            _w = np.c_[np.linspace(0.0, 3.0, 4), np.zeros(4)]
+            _backward_pass(_forward_pass(_menger_kappa(_w), np.ones(3)), np.ones(3))
         self._mission = mission_str
         self._skidpad_mode = self.get_parameter('skidpad_mode').value
         self._backend = self.get_parameter('planner_backend').value
         self._amz = AmzPlanner() if self._backend == 'amz' else None
+        self._unknown_mode = self.get_parameter('unknown_cone_mode').value
+        self._colourless_raceline = bool(self.get_parameter('colourless_raceline').value)
+        self._tracer = BoundaryTracer()
 
         # skidpad can use either hardcoded path or cone-based planner.
         # trackdrive-type missions (known closed track) plan GLOBALLY over the full cone
@@ -432,16 +480,26 @@ class PathPlannerNode(Node):
         _HARDCODED_MISSIONS = {'skidpad'} if self._skidpad_mode == 'hardcoded' else set()
         self._global_planning = False
         if _LIB_AVAILABLE and mission_str not in _HARDCODED_MISSIONS:
+            # No per-track entries: an unknown mission string (e.g. a track name) plans as autocross.
             mission_map = {
                 'autocross':    MissionTypes.autocross,
                 'trackdrive':   MissionTypes.trackdrive,
                 'acceleration': MissionTypes.acceleration,
-                'peanut':       MissionTypes.trackdrive,   # closed figure-8 → global planning
                 'skidpad':      MissionTypes.autocross,    # cone-based planning for skidpad (local)
             }
             mission = mission_map.get(mission_str, MissionTypes.autocross)
             self._planner = PathPlanner(mission)
             self._global_planning = (mission == MissionTypes.trackdrive)
+            if mission == MissionTypes.acceleration and self._planner.relocalizer is not None:
+                # ft-fsd's known accel path is a loop (out along y=0, back along y=5) and its
+                # pathing keeps every known-path point within 30 m of the car, splicing the
+                # return leg into the path (replayed HA02: 7 deg swerve, 4.6 m off at x=50).
+                # Keep only the outbound straight.
+                _known = self._planner.relocalizer.get_known_global_path()
+                _ret = _known[:, 1] > 1.0
+                if _ret.any():
+                    _known = _known[:int(np.argmax(_ret))]
+                    self._planner.relocalizer.get_known_global_path = lambda: _known
         else:
             self._planner = None
 
@@ -504,13 +562,17 @@ class PathPlannerNode(Node):
             self._skidpad_yaw_rate_history = []   # recent yaw rates for filtering
 
         # ---------- Subscribers ----------
-        self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS)
+        # Depth 1: every /planning/cones message carries the whole cone map, so only the newest matters.
+        # With depth 10 a planning cycle slower than the 5 Hz cone rate (race line ~0.3 s) worked through a
+        # backlog and planned on a ~2 s old map: live TPF01 path ahead shrank to 0 m entering the first corner.
+        self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS_LATEST)
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, _QOS)
 
         # ---------- Publishers ----------
         self._pub_centerline = self.create_publisher(Path, '/planning/centerline', _QOS)
         self._pub_left       = self.create_publisher(Path, '/planning/track_left',  _QOS)
         self._pub_right      = self.create_publisher(Path, '/planning/track_right', _QOS)
+        self._pub_horizon    = self.create_publisher(Float32, '/planning/path_horizon', _QOS)
 
     # ------------------------------------------------------------------ #
 
@@ -523,6 +585,7 @@ class PathPlannerNode(Node):
         # Extract yaw rate (angular velocity around z-axis)
         self._car_yaw_rate = float(msg.twist.twist.angular.z)
         self._odom_received = True
+        self._tracer.add_pose(self._car_pos)   # driven trajectory: labels passed cones left/right
 
         # Breadcrumb trail during lap 1 (global missions, before lock-in)
         if self._global_planning and self._locked_path is None:
@@ -1041,7 +1104,7 @@ class PathPlannerNode(Node):
         # Merge incoming cones into the global map (rounded to 0.5 m grid).
         # This builds up a global picture of all seen cones as the car drives.
         _GRID = 0.5
-        _CONE_MAP_MAX = 500
+        _CONE_MAP_MAX = 1000
         for cone in msg.track:
             # Orange pylons mark the start/finish gate, not track boundaries.
             # They are on /planning/cones for the finish detector's gate-pass
@@ -1057,15 +1120,20 @@ class PathPlannerNode(Node):
             ry = round(cone.location.y / _GRID) * _GRID
             key = (rx, ry)
             if key not in self._cone_map:
-                if len(self._cone_map) >= _CONE_MAP_MAX:
-                    # Remove an arbitrary oldest entry to stay within cap
-                    self._cone_map.pop(next(iter(self._cone_map)))
                 self._cone_map[key] = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
             else:
                 # If we get a colored update for a previously unknown cone, upgrade it
                 new_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
                 if self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
                     self._cone_map[key] = new_type
+        if len(self._cone_map) > _CONE_MAP_MAX:
+            # Over the cap: drop the cones farthest from the car. (Evicting the oldest inserted key
+            # instead churned the map every message once a track held >500 cones: each incoming cone
+            # evicted another, so cones next to the car went missing — replayed hairpin track.)
+            keys = list(self._cone_map.keys())
+            d2 = np.sum((np.array(keys) - self._car_pos) ** 2, axis=1)
+            for i in np.argsort(d2)[_CONE_MAP_MAX:]:
+                del self._cone_map[keys[i]]
 
         # --- Lap-1 completion → lock the loop (global missions) ---
         # Same spirit as the finish detector: the car must have driven far enough AND
@@ -1094,14 +1162,20 @@ class PathPlannerNode(Node):
         # Visibility filter — local planning only. Global (trackdrive) planning needs the
         # entire cone map: the global boundary trace follows each wall around the whole
         # track, which is what disambiguates near-passing walls (figure-8 crossings).
+        # Acceleration also gets the entire map: ft-fsd's AccelerationRelocalizer fits the
+        # straight's heading to >=4 cones on the car's left, and the filtered set (cones
+        # mapped ~15 m ahead, minus those >3 m behind) never held more than 3, so it never
+        # relocalized and laid the path along the car's yaw (replayed bags: 0.3-1.4 m off
+        # the centreline at x=75).
         CONE_VIS_R    = 50.0   # local: large radius for sparse tracks
         CONE_BEHIND_M = 3.0    # small tolerance so the cone pair straddling the car survives
+        use_full_map = self._global_planning or self._mission == 'acceleration'
 
         n_types = len(ConeTypes)
         buckets: list[list] = [[] for _ in range(n_types)]
 
         for (rx, ry), cone_type in self._cone_map.items():
-            if not self._global_planning:
+            if not use_full_map:
                 dx = rx - self._car_pos[0]
                 dy = ry - self._car_pos[1]
                 if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
@@ -1117,13 +1191,19 @@ class PathPlannerNode(Node):
             for b in buckets
         ]
 
-        if self._amz is not None and not self._global_planning:
-            self._plan_amz()
-            return
-
         n_left    = len(buckets[ConeTypes.LEFT])
         n_right   = len(buckets[ConeTypes.RIGHT])
         n_unknown = len(buckets[ConeTypes.UNKNOWN])
+
+        # Colourless local planning: trace the walls instead of guessing sides from the heading.
+        if (not use_full_map and n_left + n_right == 0 and n_unknown > 0
+                and self._unknown_mode in ('trace', 'trace_backend')):
+            self._plan_colourless()
+            return
+
+        if self._amz is not None and not self._global_planning:
+            self._plan_amz()
+            return
         self.get_logger().info(
             f'planner input: left={n_left} right={n_right} unknown={n_unknown} '
             f'pos=({self._car_pos[0]:.1f},{self._car_pos[1]:.1f}) '
@@ -1253,6 +1333,82 @@ class PathPlannerNode(Node):
                 'falling back to raw centerline.',
                 throttle_duration_sec=5.0)
             return centerline
+
+    def _plan_colourless(self) -> None:
+        """Local planning with no cone colours: boundary_tracer labels each wall from the driven
+        trajectory and grows both walls ahead together; the path ends where the paired walls end."""
+        xy = np.array(list(self._cone_map.keys()), dtype=np.float64)
+        d_nearest = float(np.min(np.hypot(xy[:, 0] - self._car_pos[0], xy[:, 1] - self._car_pos[1])))
+        if d_nearest > 20.0:  # same off-map guard as the library path
+            self.get_logger().warn(
+                f'Car is {d_nearest:.0f} m from the nearest mapped cone — off track? '
+                'Skipping planner so the stale-path failsafe stops the car.',
+                throttle_duration_sec=2.0)
+            return
+        res = self._tracer.plan(xy, self._car_pos, self._car_dir)
+        if res is None:
+            self.get_logger().warn(f'boundary tracer: no path ({self._tracer.debug.get("reason")})',
+                                   throttle_duration_sec=2.0)
+            return
+        path, left, right = res.path, res.left, res.right
+        if self._unknown_mode == 'trace_backend':
+            path = self._backend_on_labels(xy, res)
+            if path is None:
+                return
+        optimized = path
+        if self._colourless_raceline and len(path) > 3 and len(left) > 3 and len(right) > 3:
+            optimized = self._racing_line(path, left, right)
+            # The optimizer sizes its corridor from the nearest wall cone; past the end of the shorter
+            # traced wall that is the wrong cone and it pushed the line out of the track (replayed HPF04).
+            # Keep it inside the traced corridor: points outside revert to the centreline.
+            corridor = np.vstack([left, right[::-1]])
+            bad = ~_inside_polygon(optimized, corridor)
+            bad[0] = False
+            if bad.any() and len(optimized) == len(path):
+                bad = np.convolve(bad.astype(float), np.ones(5))[2:2 + len(bad)] > 0   # dilate by 2 points
+                optimized = np.where(bad[:, None], path, optimized)
+        horizon = float(np.sum(np.linalg.norm(np.diff(optimized, axis=0), axis=1))) if len(optimized) > 1 else 0.0
+        self.get_logger().info(
+            f'boundary tracer: left={len(left)} right={len(right)} gates={res.debug.get("n_gates")} '
+            f'labelled={res.debug.get("n_labelled")} horizon={horizon:.1f} m',
+            throttle_duration_sec=2.0)
+        stamp = self.get_clock().now().to_msg()
+        self._pub_centerline.publish(_path_from_xy(optimized, self._map_frame, stamp))
+        if len(left):
+            self._pub_left.publish(_path_from_xy(left, self._map_frame, stamp))
+        if len(right):
+            self._pub_right.publish(_path_from_xy(right, self._map_frame, stamp))
+        self._pub_horizon.publish(Float32(data=horizon))
+
+    def _backend_on_labels(self, xy, res):
+        """Run the configured backend on the tracer's left/right labels (as if they were blue/yellow),
+        then cut its path where the traced walls end (backends extrapolate past the last cones)."""
+        rel = xy - self._car_pos
+        ahead = rel @ self._car_dir >= -3.0
+        Lm = ahead & (res.labels > 0)
+        Rm = ahead & (res.labels < 0)
+        if self._amz is not None:
+            col = np.where(res.labels > 0, 2, np.where(res.labels < 0, 1, 0))   # ConeTypes LEFT=2 RIGHT=1
+            out = self._amz.plan(xy, col, self._car_pos, self._car_dir)
+            if out is None:
+                return None
+            path = out[0]
+        else:
+            cones = [np.zeros((0, 2)) for _ in range(len(ConeTypes))]
+            cones[ConeTypes.LEFT] = xy[Lm]
+            cones[ConeTypes.RIGHT] = xy[Rm]
+            try:
+                path = np.array(self._planner.calculate_path_in_global_frame(
+                    cones, self._car_pos, self._car_dir))[:, 1:3]
+            except Exception as e:
+                self.get_logger().error(f'Path calculation failed: {type(e).__name__}: {e}',
+                                        throttle_duration_sec=2.0)
+                return None
+        if len(path) < 2:
+            return None
+        end = res.path[-1]
+        j = int(np.argmin(np.linalg.norm(path - end, axis=1)))
+        return path[:j + 1] if j >= 1 else None
 
     def _plan_amz(self) -> None:
         """Local planning with the AMZ-style planner over the live cone map.
