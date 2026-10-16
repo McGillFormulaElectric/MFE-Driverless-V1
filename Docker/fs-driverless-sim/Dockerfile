@@ -64,7 +64,9 @@ ENV PATH=/usr/local/cuda/bin:${PATH}
 RUN rosdep init 2>/dev/null || true && rosdep update
 
 # uv — fast pip-compatible installer, used for all Python deps below
-RUN pip3 install --upgrade pip && pip3 install uv
+# setuptools >= 71 needs packaging >= 24.2; the system's packaging 21.3 breaks every ament_python build
+# (TypeError: canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero').
+RUN pip3 install --upgrade pip && pip3 install uv "packaging>=24.2"
 
 # Python deps — install all together so uv respects the numpy<2 constraint
 # numba: compiles the path planner's racing-line optimiser (falls back to pure Python, ~10x slower)
