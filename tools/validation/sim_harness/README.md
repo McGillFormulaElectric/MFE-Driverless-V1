@@ -14,13 +14,35 @@ from `/slam/odom`, and the LiDAR cone detector and SLAM run in the loop. Ground 
   Without a GPU, run with `USE_GPU=false` to use the CPU path.
 - **Image**: build the image once with `bash scripts/docker_build.sh` (builds `mfe-driverless-sim` from
   `Docker/fs-driverless-sim`).
-- **EUFS sim**: clone `MFE26-eufs-sim` to `$EUFS_WS` (default `~/Develop/MFE26-eufs-sim`) and check out branch
-  `mfe-sim-realtime-cmd-fix`. It has the command-delivery and 1.0x real-time pacing fixes. The track CSVs are in
-  `$EUFS_WS/eufs_tracks/csv`. `eufs_msgs` is a separate repo: <https://gitlab.com/eufs/eufs_msgs.git>.
-- **Colcon workspace** `$SIMWS` (default `~/Develop/simws`): its `src/` holds the MFE packages from `ros2/src`
-  and the EUFS packages from `$EUFS_WS` (symlinks are fine). Build it with `colcon build --symlink-install` and
-  check that `$SIMWS/install/setup.bash` exists. The race-car plugin in `eufs_plugins` must come from the
-  `mfe-sim-realtime-cmd-fix` checkout.
+- **Repos and workspace** (the exact steps the from-scratch check runs, with the defaults below):
+
+  ```
+  cd ~/Develop
+  git clone --branch pr47-integration https://github.com/McGillFormulaElectric/MFE-Driverless-V1.git MFE-Driverless-V1
+  git -C MFE-Driverless-V1 submodule update --init ros2/src/fs_msgs
+  git clone --branch mfe-sim-realtime-cmd-fix git@github.com:McGillFormulaElectric/MFE26-eufs-sim.git
+  git clone https://gitlab.com/eufs/eufs_msgs.git && git -C eufs_msgs checkout 9e91868
+  mkdir -p simws/src && cd simws/src
+  ln -s ~/Develop/MFE-Driverless-V1/ros2/src mfe
+  ln -s ~/Develop/eufs_msgs eufs_msgs
+  for p in eufs_models eufs_plugins eufs_racecar eufs_rqt eufs_sensors eufs_tracks eufs_launcher; do
+    ln -s ~/Develop/MFE26-eufs-sim/$p $p; done
+  ```
+
+  `MFE26-eufs-sim` branch `mfe-sim-realtime-cmd-fix` has the race-car plugin's command-delivery and 1.0x
+  real-time pacing fixes; without them commands stall and the sim runs at ~0.8x. `ros2/src/eufs_msgs` in this
+  repo is an empty submodule placeholder with no `.gitmodules` entry, so `eufs_msgs` is cloned separately (pinned
+  to the tested commit). The track CSVs are in `$EUFS_WS/eufs_tracks/csv`.
+- **Build** the workspace inside the container (after "Starting the container" below), without
+  `--symlink-install`:
+
+  ```
+  docker exec mfe-sim-gpu-test bash -c "source /opt/ros/humble/setup.bash && cd ~/Develop/simws && colcon build"
+  ```
+
+  All 24 packages should finish, including `eufs_launcher` (the tracked one at the repo root; without it the car
+  never spawns). `build/lidar_cone_detector/CMakeCache.txt` should show
+  `CMAKE_CUDA_COMPILER` set to nvcc; if not, LiDAR runs on the CPU.
 
 ## Starting the container
 

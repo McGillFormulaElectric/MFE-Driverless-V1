@@ -25,7 +25,9 @@ from mfe_path_planning.path_planner_node import _make_skidpad_path
 
 QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
 _EUFS_MASTER = os.environ.get('EUFS_MASTER', os.path.expanduser('~/Develop/MFE26-eufs-sim'))
-CSV = f'{_EUFS_MASTER}/eufs_sim/eufs_tracks/csv/skidpad.csv'
+# MFE26-eufs-sim keeps the tracks at eufs_tracks/; the older upstream layout nests them under eufs_sim/.
+CSV = next((c for c in (f'{_EUFS_MASTER}/eufs_tracks/csv/skidpad.csv', f'{_EUFS_MASTER}/eufs_sim/eufs_tracks/csv/skidpad.csv')
+            if os.path.exists(c)), f'{_EUFS_MASTER}/eufs_tracks/csv/skidpad.csv')
 
 
 def rigid(a, b):
