@@ -1,21 +1,9 @@
-"""Track-agnostic left/right boundary tracing for cones without colour (LiDAR-only).
+"""Left/right boundary tracing for cones without colour (LiDAR-only). Pure numpy/scipy, no ROS.
 
-Why: with every cone UNKNOWN, labelling a cone left/right by the sign of its offset from the car's
-*current* heading breaks in every corner — the far part of the outer wall curves across the heading
-line and gets the inner wall's label, and the planner then lays a centreline through a wall.
-
-How (no track names, no known geometry — only generic Formula Student cone-layout bounds):
- 1. Passed cones are unambiguous. A cone beside or behind the car is left or right of the trajectory
-    the car actually drove. Those labels are voted every cycle and persist (`_labels`).
- 2. Ahead of the car both walls are grown together from a gate (left cone, right cone) a few metres
-    behind the car, zipper-style: each step adds the next cone to whichever wall gives the shorter new
-    gate, subject to: plausible cone spacing along a wall, limited wall turning, plausible track width,
-    limited gate rotation (a wall that jumps to the opposite wall turns the gate ~90 deg), the new wall
-    segment not crossing the other wall, and persistent labels (a left-labelled cone never joins the
-    right wall).
- 3. The centreline is the sequence of gate midpoints; it ends at the last gate, i.e. where the mapped
-    walls end — nothing is extrapolated. `horizon` is the path length left ahead of the car.
-Pure numpy/scipy; no ROS. Cost per cycle: O(steps * cones), ~1-3 ms for a few hundred cones.
+1. Passed cones are labelled by the side of the driven trajectory they lie on; votes persist (`_labels`).
+2. Ahead of the car both walls grow together from a start gate, zipper-style, with beam search over
+   plausible cone spacing, wall turning, track width, gate rotation, no wall crossing and persistent labels.
+3. The centreline is the sequence of gate midpoints. It ends at the last gate, so nothing is extrapolated.
 """
 from __future__ import annotations
 
@@ -94,17 +82,8 @@ def _seg_intersect(p1, p2, q1, q2) -> bool:
     return 1e-6 < t < 1 - 1e-6 and 1e-6 < u < 1 - 1e-6
 
 
-def _angle(a, b) -> float:
-    """Unsigned angle between vectors a and b (rad)."""
-    na, nb = math.hypot(a[0], a[1]), math.hypot(b[0], b[1])
-    if na < 1e-9 or nb < 1e-9:
-        return 0.0
-    c = (a[0] * b[0] + a[1] * b[1]) / (na * nb)
-    return math.acos(max(-1.0, min(1.0, c)))
-
-
 def _angles(a, V) -> np.ndarray:
-    """Unsigned angles between vector a and each row of V (rad)."""
+    """Unsigned angles (rad) between vector a and each row of V."""
     na = math.hypot(a[0], a[1])
     nv = np.hypot(V[:, 0], V[:, 1])
     c = (V @ a) / np.maximum(na * nv, 1e-12)
@@ -114,24 +93,26 @@ def _angles(a, V) -> np.ndarray:
 class BoundaryTracer:
     def __init__(self, params: TracerParams | None = None):
         self.p = params or TracerParams()
-        self._trail: list = []                  # driven positions, >= trail_step apart
-        self._trail_s: list = []                # cumulative distance at each breadcrumb
-        self._lab_xy = np.zeros((0, 2))         # positions of cones with side votes
-        self._lab_votes = np.zeros(0)           # sum of +1 (left) / -1 (right) votes
+        self._trail: list = []             # driven positions, >= trail_step apart
+        self._trail_s: list = []           # cumulative distance at each breadcrumb
+        self._lab_xy = np.zeros((0, 2))    # positions of cones with side votes
+        self._lab_votes = np.zeros(0)      # sum of +1 (left) / -1 (right) votes
 
     # ------------------------------------------------------------------ trajectory
     def add_pose(self, pos) -> None:
         pos = np.asarray(pos, dtype=float)
         if not self._trail:
-            self._trail.append(pos.copy()); self._trail_s.append(0.0)
+            self._trail.append(pos.copy())
+            self._trail_s.append(0.0)
             return
         step = float(np.linalg.norm(pos - self._trail[-1]))
         if step >= self.p.trail_step:
             self._trail.append(pos.copy()); self._trail_s.append(self._trail_s[-1] + step)
-            # keep memory bounded: only the recent window is ever used
+            # keep memory bounded: only the recent window is used
             if len(self._trail) > 4 * int(self.p.trail_window / self.p.trail_step) + 50:
                 k = len(self._trail) // 2
-                self._trail = self._trail[k:]; self._trail_s = self._trail_s[k:]
+                self._trail = self._trail[k:]
+                self._trail_s = self._trail_s[k:]
 
     def _recent_trail(self, car_pos):
         """Recent driven polyline ending at the car (window of trail_window metres)."""
@@ -146,7 +127,7 @@ class BoundaryTracer:
 
     # ------------------------------------------------------------------ labels
     def _labels_for(self, xy: np.ndarray) -> np.ndarray:
-        """Persistent side vote sum for each cone in xy (0 if never labelled)."""
+        """Persistent side-vote sum for each cone in xy (0 if never labelled)."""
         out = np.zeros(len(xy))
         if len(self._lab_xy) == 0 or len(xy) == 0:
             return out
@@ -162,7 +143,8 @@ class BoundaryTracer:
             d, j = cKDTree(self._lab_xy).query(xy, distance_upper_bound=self.p.assoc_radius)
             hit = np.isfinite(d)
         else:
-            hit = np.zeros(len(xy), bool); j = np.zeros(len(xy), int)
+            hit = np.zeros(len(xy), bool)
+            j = np.zeros(len(xy), int)
         for k in np.flatnonzero(hit):
             self._lab_votes[j[k]] += side[k]
             self._lab_xy[j[k]] = xy[k]           # follow the map's latest estimate
@@ -182,7 +164,7 @@ class BoundaryTracer:
         T = self._recent_trail(car_pos)
         sides = np.zeros(len(near))
         if len(T) < 3:
-            # car has not moved yet: cones abeam/behind the car, in its own frame
+            # car has not moved yet: classify cones abeam or behind, in the car frame
             lat = rel[near, 0] * (-car_dir[1]) + rel[near, 1] * car_dir[0]
             ok = (fwd <= 0.5) & (fwd >= -4.0) & (np.abs(lat) >= p.lat_min) & (np.abs(lat) <= p.lat_max)
             sides[ok] = np.sign(lat[ok])
@@ -229,7 +211,7 @@ class BoundaryTracer:
             self.debug["reason"] = "no start gate (need a cone on each side near the car)"
             return None
         iL, iR, tdir = start
-        # per-cycle precomputation: neighbours within wall spacing range, distance to each labelled side
+        # per-cycle precomputation: neighbours within wall spacing, distance to each labelled side
         tree = cKDTree(xy)
         self._nbrs = [np.asarray(n, dtype=int) for n in tree.query_ball_point(xy, p.d_max)]
         self._clear_lab = {}
@@ -366,8 +348,8 @@ class BoundaryTracer:
         m_new = (xy[hl] + xy[hr]) / 2
         mids = st["mids"] + [m_new]
         length = st["length"] + float(np.linalg.norm(m_new - m_old))
-        # track direction: centreline direction over the last dir_span metres (gate-normal is too noisy:
-        # zipper gates are diagonal by design), blended with the start direction while the centreline is short
+        # track direction: centreline direction over the last dir_span metres (zipper gates are diagonal by
+        # design, so the gate normal is too noisy), blended with the start direction while the centreline is short
         k = len(mids) - 1
         acc = 0.0
         while k > 0 and acc < st["span"]:
@@ -500,7 +482,7 @@ class BoundaryTracer:
         M = mids[keep]
         if len(M) < 2:
             return None
-        # light smoothing of interior points (zipper midpoints alternate slightly)
+        # smooth interior points (zipper midpoints alternate slightly)
         if len(M) >= 3:
             S = M.copy()
             S[1:-1] = 0.25 * M[:-2] + 0.5 * M[1:-1] + 0.25 * M[2:]

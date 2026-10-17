@@ -1,20 +1,14 @@
-"""Compares the main planner's centerline (ground-truth cones, drives the car) with the validation planner's (LiDAR detections + GTSAM SLAM).
+"""Compares the main planner's centerline (ground-truth cones, drives the car) with the validation planner's (LiDAR + SLAM).
 
-Both paths are expressed in their own car frame (main: ground-truth pose, validation: SLAM pose) and only points 0-15 m ahead are
-compared, so the metric is "how wrong is the path the car would see", independent of the global frame offset.
+Both paths are expressed in their own car frame (main: ground-truth pose, validation: SLAM pose) and only points 0-15 m
+ahead are compared, so the metric is how wrong the path the car would see is, independent of the global frame offset.
 """
 import csv, math, os, time
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Path, Odometry
-
-QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
-
-
-def yaw_of(q):
-    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+from mfe_validation.common import QOS, yaw_of
 
 
 def to_car(path_xy, pose):
@@ -38,6 +32,7 @@ class Compare(Node):
         self.declare_parameter('log_csv', '')
         self.declare_parameter('horizon', 15.0)
         self.h = self.get_parameter('horizon').value
+        self.csv = self.get_parameter('log_csv').value
         self.main = self.val = None; self.gt = self.slam = None
         self.create_subscription(Path, '/planning/centerline', lambda m: setattr(self, 'main', m), QOS)
         self.create_subscription(Path, '/validation/centerline', self.on_val, QOS)
@@ -45,7 +40,6 @@ class Compare(Node):
         self.create_subscription(Odometry, '/slam/odom', lambda m: setattr(self, 'slam', self.pose(m)), QOS)
         self.dev, self.n_val, self.n_miss = [], 0, 0
         self.create_timer(10.0, self.report)
-        self.csv = self.get_parameter('log_csv').value
 
     @staticmethod
     def pose(m):
