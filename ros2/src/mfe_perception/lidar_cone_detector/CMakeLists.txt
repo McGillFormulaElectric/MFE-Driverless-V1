@@ -88,10 +88,6 @@ if(CMAKE_CUDA_COMPILER AND LIDAR_GPU_OK)
   target_link_libraries(lidar_perception_node lidar_gpu_filter)
   target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_DESKTOP_GPU)
 
-  # Offline CPU-vs-GPU equivalence + latency benchmark (not installed).
-  add_executable(lidar_gpu_bench bench/lidar_gpu_bench.cpp)
-  target_include_directories(lidar_gpu_bench PRIVATE ${PCL_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS})
-  target_link_libraries(lidar_gpu_bench lidar_gpu_filter ${PCL_LIBRARIES})
   message(STATUS "lidar_perception_node: GPU filters enabled (CUDA ${CMAKE_CUDA_COMPILER_VERSION}, sm_${LIDAR_CUDA_ARCH})")
 elseif(NOT CMAKE_CUDA_COMPILER)
   message(STATUS "No CUDA compiler found: lidar_perception_node will use CPU PCL only")
