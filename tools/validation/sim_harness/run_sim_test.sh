@@ -63,7 +63,11 @@ grep -q "Gazebo ready" $LOG/sim.log || { echo "sim did not come up, see $LOG/sim
 sleep 15
 
 # 2. LiDAR detector + SLAM
-setsid bash -c "source $ENVSH; exec ros2 launch mfe_validation lidar_only.launch.py color_mode:=$COLOR min_obs:=${MIN_OBS:-2} skidpad:=${SKIDPAD:-false} cones_topic:=${CONES_TOPIC:-/planning/cones} use_gpu:=${USE_GPU:-true}" > $LOG/stack.log 2>&1 &
+# SLAM lateral velocity (corner sideslip in the odometry): on for autocross/trackdrive, where it fixed comp_2021's
+# heading drift (8/8 clean on the regression tracks); off for accel/skidpad, where it made accel worse (3/6 clean,
+# up to 1.1 m sideways, vs 4/4 clean without). SLAM_LATVEL overrides.
+case "$EVENT" in accel|acceleration|skidpad) LATVEL_DEFAULT=false ;; *) LATVEL_DEFAULT=true ;; esac
+setsid bash -c "source $ENVSH; exec ros2 launch mfe_validation lidar_only.launch.py color_mode:=$COLOR min_obs:=${MIN_OBS:-2} skidpad:=${SKIDPAD:-false} cones_topic:=${CONES_TOPIC:-/planning/cones} use_gpu:=${USE_GPU:-true} slam_lateral_vel:=${SLAM_LATVEL:-$LATVEL_DEFAULT}" > $LOG/stack.log 2>&1 &
 STACK_PID=$!
 for i in $(seq 1 20); do grep -q "slam_node up" $LOG/stack.log 2>/dev/null && break; sleep 2; done
 sleep 15

@@ -93,6 +93,7 @@ Run options (read by `run_sim_test.sh` and `launch_sim_local.sh`):
 | `MAX_SPEED` | bringup default | pure pursuit `max_speed` override |
 | `LOOKAHEAD` | unset | pure pursuit lookahead override |
 | `UNKNOWN_CONE_MODE` | stack default (`trace`) | cone sorting for uncoloured cones: `trace` = wall tracer (default); `trace_backend`; `fasttube` = ft-fsd's own colourless cone sorting; `heading` = legacy |
+| `SLAM_LATVEL` | `true` for autocross/trackdrive, `false` for accel/skidpad | SLAM odometry integrates the INS lateral velocity (corner sideslip). Fixed comp_2021 heading drift; made accel worse, hence off there |
 | `REC` | `$RESULTS/bags/single_<event>_<time>` | bag output directory (`run_sim_test.sh`) |
 | `VIDEO_LABEL` | empty | label in the video title (`render_lap_video.py`) |
 

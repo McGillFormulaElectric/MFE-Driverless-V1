@@ -35,12 +35,18 @@ class SlamNode(Node):
         super().__init__('slam_node')
         for k, v in dict(track_csv='', keyframe_m=1.5, gate=1.0, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
                          min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
-                         cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6).items():
+                         cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
+                         use_lateral_vel=False).items():
             self.declare_parameter(k, v)
         p = lambda k: self.get_parameter(k).value
         self.keyframe_m, self.gate, self.max_range = p('keyframe_m'), p('gate'), p('max_range')
         self.color_mode, self.keyframe_dt = p('color_mode'), p('keyframe_dt')
         self.p_freeze, self.p_dup = p('freeze'), p('dup_radius')
+        # use_lateral_vel: integrate the INS body-frame lateral velocity as well as forward speed. The car slides
+        # sideways in corners (sim: median 0.6 m/s while moving); forward-speed-only odometry puts keyframes metres
+        # off through a turn, the LiDAR landmarks disagree, and the optimiser resolves it by twisting the heading
+        # (comp_2021: -3 to -4 deg at 80 m, 1.3-2 m pose error at 110 m; with it ~1 deg and 0.3-0.6 m).
+        self.use_vy = bool(p('use_lateral_vel'))
         self.min_obs, self.pub_radius, self.color_radius = p('min_obs_publish'), p('publish_radius'), p('color_radius')
         self.obs_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345),
             gtsam.noiseModel.Diagonal.Sigmas(np.array([p('brg_sigma'), p('rng_sigma')])))
@@ -86,7 +92,7 @@ class SlamNode(Node):
     def on_odom(self, m):
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
         self.xs_pose = (m.pose.pose.position.x, m.pose.pose.position.y)
-        self.samples.append((t, yaw_of(m.pose.pose.orientation), m.twist.twist.linear.x))
+        self.samples.append((t, yaw_of(m.pose.pose.orientation), m.twist.twist.linear.x, m.twist.twist.linear.y))
         if len(self.samples) % 5 == 0 and self.kf_t is not None:
             self.publish_pose(m.header.stamp)
 
@@ -96,7 +102,9 @@ class SlamNode(Node):
             return gtsam.Pose2(0, 0, 0)
         a = np.array(s); dt = np.diff(a[:, 0]); th = np.array([wrap(y - a[0, 1]) for y in a[:, 1]])
         mid = 0.5 * (th[1:] + th[:-1])
-        return gtsam.Pose2(float((a[1:, 2] * dt * np.cos(mid)).sum()), float((a[1:, 2] * dt * np.sin(mid)).sum()), float(th[-1]))
+        vx = a[1:, 2]; vy = a[1:, 3] if self.use_vy else 0.0 * vx
+        return gtsam.Pose2(float(((vx * np.cos(mid) - vy * np.sin(mid)) * dt).sum()),
+                           float(((vx * np.sin(mid) + vy * np.cos(mid)) * dt).sum()), float(th[-1]))
 
     def publish_pose(self, stamp):
         pose = self.kf_pose.compose(self.delta_since_kf())

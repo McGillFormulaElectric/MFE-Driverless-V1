@@ -25,13 +25,14 @@ def generate_launch_description():
         DeclareLaunchArgument('freeze', default_value='true'),   # publish each landmark once, at a fixed position
         DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | unknown (no colour; planner infers sides)
         DeclareLaunchArgument('use_gpu', default_value='true'),   # false: LiDAR cone pipeline on the CPU (PCL), for load comparisons
+        DeclareLaunchArgument('slam_lateral_vel', default_value='false'),   # true: SLAM odometry integrates INS lateral velocity (corner sideslip)
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='lidar_perception_node', output='log',
              parameters=[{'gpu_voxel': False, 'leaf_size': 0.05, 'ground_threshold': 0.04, 'cluster_tolerance': 0.3,
                           'min_cluster_size': 1, 'far_min_cluster_size': 1, 'max_cluster_size': 50, 'cluster_2d': True,
                           'height_min': 0.02, 'enable_motion_distortion': False,
                           'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
-             parameters=[{'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
+             parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool), 'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
                           'max_range': ParameterValue(LC('max_range'), value_type=float), 'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),
                           'freeze': ParameterValue(LC('freeze'), value_type=bool)}]),
         Node(package='mfe_validation', executable='skidpad_planner', name='skidpad_planner', output='screen', condition=IfCondition(LC('skidpad')),
