@@ -47,6 +47,7 @@ class TracerParams:
     max_steps: int = 60
     branch: int = 2                # beam search: candidates tried per step
     beam_width: int = 4
+    branch_both: bool = True       # also branch on the other wall's best step (hairpin tips)
     prune_margin: float = 1.5      # drop branches this much worse than the best one
     branch_margin: float = 0.5     # ... and only on alternatives costing at most this much more than the best
     progress_gain: float = 0.3     # beam ranking: cost - gain * corridor length
@@ -316,6 +317,11 @@ class BoundaryTracer:
                     if cost > c0 + p.branch_margin:   # branch only where the choice is ambiguous
                         break
                     grown.append(self._extend(xy, st, side, k, cost, gw))
+                # also let the other wall move first: at a hairpin tip the shortest new gate can come from the
+                # inner wall stepping onto the outer wall's next cone, before the outer wall claims it
+                if p.branch_both and opts[-side]:
+                    k, cost, gw = opts[-side][0]
+                    grown.append(self._extend(xy, st, -side, k, cost, gw))
             if not grown:
                 break
             grown.sort(key=lambda st: st["cost"] - p.progress_gain * st["length"])
