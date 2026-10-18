@@ -29,6 +29,7 @@ _PARAM_DEFAULTS = {
     'ld_max': 15.0,
     'max_speed': 10.0,
     'wheelbase': 1.56,
+    'rear_axle_offset': 0.0,          # pose origin to rear axle (m); pure pursuit geometry is about the rear axle
     'max_steering_deg': 25.0,
     'map_frame': 'map',
     'max_lateral_accel': 8.0,
@@ -78,6 +79,7 @@ class PurePursuitNode(Node):
         self._ld_max = p['ld_max']
         self._max_speed = p['max_speed']
         self._wheelbase = p['wheelbase']
+        self._rear_axle_offset = p['rear_axle_offset']
         self._max_steering_rad = math.radians(p['max_steering_deg'])
         self._map_frame = p['map_frame']
         self._max_lateral_accel = p['max_lateral_accel']
@@ -105,6 +107,7 @@ class PurePursuitNode(Node):
         self._path_idx = 0
         self._target_speeds = []
         self._horizon_time = None  # node-clock receipt time of the last /planning/path_horizon
+        self._path_time = None     # ... and of the last path
         self._speed_integral = 0.0
 
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
@@ -147,13 +150,14 @@ class PurePursuitNode(Node):
         if not msg.poses:
             return
         self._path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+        self._path_time = self.get_clock().now().nanoseconds * 1e-9
         self._path_idx = 0
         self._speed_path = smooth_path(self._path, self._speed_smooth_window)
 
     def _odom_callback(self, msg: Odometry):
-        self._car_x = msg.pose.pose.position.x
-        self._car_y = msg.pose.pose.position.y
         self._car_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+        self._car_x = msg.pose.pose.position.x - self._rear_axle_offset * math.cos(self._car_yaw)
+        self._car_y = msg.pose.pose.position.y - self._rear_axle_offset * math.sin(self._car_yaw)
         self._car_speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
 
     # Control loop
@@ -199,8 +203,9 @@ class PurePursuitNode(Node):
         """Limit speed so the car can stop before the end of a horizon-truncated path."""
         if self._horizon_time is None:
             return v_target
-        if self.get_clock().now().nanoseconds * 1e-9 - self._horizon_time > 1.0:
-            return v_target   # planner stopped publishing horizons
+        if self._path_time - self._horizon_time > 1.0:
+            return v_target   # paths now come without horizons (e.g. a locked full-lap path)
+        # No new path at all keeps the cap: the car stops at the end of the last one.
         v_stop = path_end_speed_cap(
             remaining_length(self._path, self._path_idx), self._path_end_decel, self._path_end_margin)
         return min(v_target, v_stop)

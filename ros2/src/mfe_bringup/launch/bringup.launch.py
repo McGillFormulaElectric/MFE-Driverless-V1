@@ -398,7 +398,10 @@ def generate_launch_description():
         # uses a 'vehicle:' namespace, not a valid ROS2 params-file format)
         params = {
             'wheelbase': 1.56,
-            'max_steering_deg': 28.0,
+            # The pose (SLAM/EKF) is the CG, 0.69 m ahead of the rear axle (cg_x 0.44 x wheelbase 1.56), but tracking
+            # from the rear axle made sim laps ~20% slower with cone touches, so it is off by default
+            'rear_axle_offset': float(os.environ.get('REAR_AXLE_OFFSET', '0.0')),
+            'max_steering_deg': float(os.environ.get('MAX_STEER_DEG', '28.0')),
             'max_lateral_accel': 8.0,
             'max_deceleration': 10.0,
         }
