@@ -6,13 +6,12 @@ ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 ENV EUFS_MASTER=/root/Develop/MFE26-eufs-sim
 
-# Generate locale so bash doesn't warn on every invocation
+# Avoids locale warnings in bash
 RUN apt-get update && apt-get install -y --no-install-recommends locales \
     && locale-gen en_US.UTF-8 \
     && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-# System deps: Gazebo 11, ROS bridge packages, perception libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget git tmux \
     build-essential cmake \
@@ -49,25 +48,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# NOTE: cuda-pcl (NVIDIA-AI-IOT/cuda-pcl) ships pre-built ARM aarch64 .so files only —
-# no x86_64 build path exists. On x86_64 (desktop/sim), lidar_perception_node falls back
-# to CPU PCL automatically (see CMakeLists.txt). On Jetson, build natively without Docker.
+# CUDA 12.8 is the first toolkit with sm_120 (RTX 50-series). cuda-pcl's aarch64 libs are not used;
+# the driver comes from the host (run with --gpus all). Without a GPU the node falls back to CPU PCL.
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && \
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb && \
+    apt-get update && apt-get install -y --no-install-recommends cuda-toolkit-12-8 && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/local/cuda/bin:${PATH}
 
-# rosdep
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# uv — fast pip-compatible installer, used for all Python deps below
-RUN pip3 install --upgrade pip && pip3 install uv
+# setuptools >= 71 needs packaging >= 24.2; the system's packaging 21.3 breaks ament_python builds.
+RUN pip3 install --upgrade pip && pip3 install uv "packaging>=24.2"
 
-# Python deps — install all together so uv respects the numpy<2 constraint
-RUN uv pip install --system "numpy<2" "scipy>=1.13" scikit-learn icecream pandas
+# One uv call so the numpy<2 constraint is respected.
+# numba: path planner speed (pure-Python fallback is ~10x slower).
+RUN uv pip install --system "numpy<2" "scipy>=1.13" scikit-learn icecream pandas numba
 
-# ft-fsd-path-planning (PyPI name is broken; must install from source)
+# PyPI name is broken; install from source.
 RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /opt/ft-fsd-path-planning && \
     uv pip install --system /opt/ft-fsd-path-planning && \
     python3 -c "import fsd_path_planning; print('fsd_path_planning OK')"
 
-# Shell: source ROS in every bash session inside the container
+# gtsam 4.2: x86_64 wheel only. Jetson builds lib/gtsam (pinned 4.2.0 submodule) instead.
+RUN pip3 install --retries 10 --timeout 120 "gtsam==4.2" && \
+    python3 -c "import gtsam; print('gtsam OK')"
+
+# Without torch/ultralytics the node dies on import (perception then runs LiDAR-only).
+# CPU torch wheels: ~250 MB vs ~4.5 GB for CUDA, and YOLO11n on CPU keeps up with the sim camera.
+# For GPU on RTX 50xx use the cu128 index (https://download.pytorch.org/whl/cu128), the first Blackwell CUDA build.
+# numpy<2 repeated in each command so pip's resolver never upgrades it.
+# sympy: the base image's distutils-installed 1.9 cannot be uninstalled; --ignore-installed overlays it.
+RUN pip3 install --retries 10 --timeout 120 --ignore-installed "sympy>=1.13" && \
+    pip3 install --retries 10 --timeout 120 "numpy<2" torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip3 install --retries 10 --timeout 120 "numpy<2" ultralytics && \
+    python3 -c "import torch, ultralytics; print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
+
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 
 WORKDIR /root/Develop

@@ -1,35 +1,27 @@
 #!/usr/bin/env python3
-"""
-ft-fsd-path-planning ROS 2 wrapper node.
-
-Library: https://github.com/papalotis/ft-fsd-path-planning
-Install: pip install ft-fsd-path-planning
+"""ROS 2 path planner: fused cone map -> centerline, boundaries and an optional race line.
 
 Subscribes:
-    /planning/cones       (mfe_msgs/Track)        — fused, colored cone list
-    /ekf/output           (nav_msgs/Odometry)      — vehicle pose + heading
-
+    /planning/cones       (mfe_msgs/Track)        fused, colored cone list
+    /ekf/output           (nav_msgs/Odometry)     vehicle pose + twist
 Publishes:
-    /planning/centerline  (nav_msgs/Path)          — computed centerline
-    /planning/track_left  (nav_msgs/Path)          — left boundary
-    /planning/track_right (nav_msgs/Path)          — right boundary
+    /planning/centerline  (nav_msgs/Path)
+    /planning/track_left  (nav_msgs/Path)
+    /planning/track_right (nav_msgs/Path)
+    /planning/path_horizon (std_msgs/Float32)     colourless local planning: path length ahead (m)
 """
 
 import math
+from dataclasses import dataclass, field
+from typing import Optional
+
 import numpy as np
-
-try:
-    from scipy.optimize import minimize as _sp_minimize
-    _SCIPY_AVAILABLE = True
-except ImportError:
-    _SCIPY_AVAILABLE = False
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from nav_msgs.msg import Path, Odometry
-from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Float32
 from mfe_msgs.msg import Cone, Track
 
 try:
@@ -42,397 +34,68 @@ except ImportError:
     except ImportError:
         _LIB_AVAILABLE = False
 
+from mfe_path_planning.boundary_tracer import BoundaryTracer
+from mfe_path_planning.planner_utils import (
+    arc_length, clamp_to_corridor, clearance_guard, closed_resample, cone_arrays,
+    extend_trail, make_skidpad_path as _make_skidpad_path, midpoint_walk, path_from_xy,
+    smooth_cyclic, yaw_from_quaternion,
+)
+from mfe_path_planning.racing_line import (
+    _backward_pass, _forward_pass, _menger_kappa, _min_curvature_path, _pso_raceline,
+)
+
 
 _QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10,
 )
+# Depth 1: every /planning/cones message carries the whole cone map, so only the newest matters.
+_QOS_LATEST = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
-# mfe_msgs/Cone color enum → fsd_path_planning ConeTypes
-# BLUE=0 is left boundary, YELLOW=1 is right boundary (FSAE standard)
-# fsd_path_planning ConeTypes: UNKNOWN=0, RIGHT=1, LEFT=2,
-#   START_FINISH_AREA=3, START_FINISH_LINE=4
+# mfe_msgs/Cone colour -> fsd_path_planning ConeTypes. BLUE is the left wall, YELLOW the right.
+# Orange pylons are the start/finish gate: UNKNOWN so the planner's finish logic is not triggered.
 if _LIB_AVAILABLE:
     _MFE_TO_FSD = {
-        Cone.BLUE:         ConeTypes.LEFT,
-        Cone.YELLOW:       ConeTypes.RIGHT,
-        Cone.ORANGE_BIG:   ConeTypes.UNKNOWN,   # keep planner from triggering finish logic
+        Cone.BLUE: ConeTypes.LEFT,
+        Cone.YELLOW: ConeTypes.RIGHT,
+        Cone.ORANGE_BIG: ConeTypes.UNKNOWN,
         Cone.ORANGE_SMALL: ConeTypes.UNKNOWN,
-        Cone.UNKNOWN:      ConeTypes.UNKNOWN,
+        Cone.UNKNOWN: ConeTypes.UNKNOWN,
     }
 else:
     _MFE_TO_FSD = {}
 
-
-def _yaw_from_quaternion(q) -> float:
-    """Extract yaw angle (radians) from a geometry_msgs/Quaternion."""
-    return math.atan2(
-        2.0 * (q.w * q.z + q.x * q.y),
-        1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-    )
-
-
-def _path_from_xy(xy: np.ndarray, frame_id: str, stamp) -> Path:
-    """Convert Nx2 numpy array of (x,y) points to nav_msgs/Path."""
-    path = Path()
-    path.header.frame_id = frame_id
-    path.header.stamp = stamp
-    for point in xy:
-        ps = PoseStamped()
-        ps.header.frame_id = frame_id
-        ps.header.stamp = stamp
-        ps.pose.position.x = float(point[0])
-        ps.pose.position.y = float(point[1])
-        ps.pose.position.z = 0.0
-        ps.pose.orientation.w = 1.0
-        path.poses.append(ps)
-    return path
+_GRID = 0.5                # cone map key resolution (m)
+_MAP_CAP = 1000            # cone map size cap (local planning / global missions)
+_SKIDPAD_MAP_CAP = 500
+_CONE_VIS_R = 50.0         # local planning visibility radius (m)
+_CONE_BEHIND_M = 3.0       # tolerance behind the car for the visibility filter
+_OFF_MAP_M = 20.0          # car this far from every mapped cone: off track, publish nothing
+_CIRCLE_LAP_DIST = 40.0    # skidpad lap closure: min distance driven (m) ...
+_CIRCLE_MAX_R = 10.0       # ... min excursion from the circle start (m) ...
+_CIRCLE_CLOSE_R = 4.0      # ... and back within this of the start
+_YAW_HIST_LEN = 5
+_YAW_RATE_THRESH = 0.1     # rad/s sustained turn threshold
 
 
-# Peanut figure-8 centerline — right loop first, then left loop.
-# Generated from EUFS peanut.csv boundary cones (midpoint of blue/yellow).
-# Driving sequence: (0,0) → gate (x≈6) → right loop → crossing → left loop → (0,0)
-_PEANUT_PATH = np.array([
-    [0.0000, 0.0000], [1.5000, 0.0000], [3.0000, -0.0500], [4.5000, -0.0500],
-    [6.4599, -0.0319], [7.1290, -0.1867], [7.7982, -0.3415], [8.4673, -0.4963],
-    [9.1041, -0.7449], [9.7345, -1.0104], [10.3404, -1.3364], [10.9105, -1.7183],
-    [11.4670, -2.1226], [12.0558, -2.4656], [12.6917, -2.7201], [13.3275, -2.9747],
-    [14.0055, -3.0360], [14.6929, -3.0379], [15.3705, -2.9622], [16.0337, -2.8081],
-    [16.6901, -2.6109], [17.3474, -2.4135], [17.9904, -2.1686], [18.5806, -1.8404],
-    [19.0732, -1.3613], [19.5446, -0.8631], [19.9219, -0.2917], [20.2769, 0.2944],
-    [20.6280, 0.8785], [20.9181, 1.4823], [21.1407, 2.1259], [21.3530, 2.7756],
-    [21.4752, 3.4380], [21.5358, 4.1193], [21.5963, 4.8005], [21.5458, 5.4801],
-    [21.4670, 6.1593], [21.3582, 6.8272], [21.1483, 7.4584], [20.9381, 8.0896],
-    [20.6231, 8.6745], [20.2607, 9.2099], [19.8520, 9.7260], [19.4037, 10.1961],
-    [18.9085, 10.5554], [18.3547, 10.8738], [17.8009, 11.1922], [17.2717, 11.3447],
-    [16.7212, 11.4423], [16.1815, 11.5277], [15.6796, 11.5247], [15.1473, 11.4773],
-    [14.6149, 11.4298], [14.0403, 11.2664], [13.4647, 11.1006], [12.8921, 10.8660],
-    [12.3140, 10.5494], [11.7215, 10.2462], [11.1594, 9.8687], [10.6075, 9.4659],
-    [10.0215, 9.1201], [9.4631, 8.7399], [8.9085, 8.3550], [8.3674, 7.9559],
-    [7.8266, 7.5566], [7.2732, 7.2286], [6.7144, 6.9227], [6.1520, 6.6612],
-    [5.5796, 6.4637], [4.9792, 6.4180], [4.3439, 6.4891], [3.7133, 6.6530],
-    [3.1570, 7.0577], [2.6054, 7.4677], [2.1336, 7.9614], [1.7003, 8.4933],
-    [1.2575, 9.0160], [0.7693, 9.4997], [0.2674, 9.9705], [-0.2362, 10.4393],
-    [-0.7717, 10.8697], [-1.3099, 11.2968], [-1.8601, 11.7064], [-2.4224, 12.1000],
-    [-2.9888, 12.4859], [-3.5770, 12.8373], [-4.1741, 13.1768], [-4.7888, 13.4655],
-    [-5.4438, 13.6613], [-6.1047, 13.8455], [-6.7748, 13.9741], [-7.4606, 14.0236],
-    [-8.1464, 14.0730], [-8.8262, 14.0359], [-9.5026, 13.9092], [-10.1732, 13.7690],
-    [-10.7608, 13.4281], [-11.3332, 13.0470], [-11.8912, 12.6487], [-12.3815, 12.1724],
-    [-12.8444, 11.6657], [-13.2777, 11.1313], [-13.6871, 10.5809], [-14.0290, 9.9838],
-    [-14.3675, 9.3851], [-14.6298, 8.7532], [-14.8555, 8.1037], [-15.0677, 7.4508],
-    [-15.2199, 6.7808], [-15.3722, 6.1109], [-15.4953, 5.4346], [-15.5265, 4.7552],
-    [-15.5349, 4.0734], [-15.5075, 3.3878], [-15.4625, 2.7060], [-15.3335, 2.0335],
-    [-15.1873, 1.3623], [-15.0104, 0.6990], [-14.7959, 0.0455], [-14.5761, -0.6057],
-    [-14.2418, -1.2047], [-13.8850, -1.7919], [-13.5202, -2.3746], [-13.1076, -2.9144],
-    [-12.6772, -3.4398], [-12.2104, -3.9302], [-11.6948, -4.3306], [-11.1218, -4.6770],
-    [-10.5360, -4.9343], [-9.9510, -5.0921], [-9.3427, -5.2034], [-8.7321, -5.1111],
-    [-8.1271, -5.0087], [-7.5291, -4.8414], [-6.9572, -4.6012], [-6.3854, -4.3609],
-    [-5.8160, -4.1037], [-5.2622, -3.7484], [-4.7084, -3.3932], [-4.1489, -3.0273],
-    [-3.6105, -2.5990], [-3.0583, -2.1985], [-2.4759, -1.8690], [-1.9006, -1.5312],
-    [-1.3130, -1.2400], [-0.6864, -1.0161], [-0.0599, -0.7922], [0.5845, -0.5989],
-    [1.2445, -0.4270], [1.9211, -0.3349], [2.6079, -0.3042], [3.2953, -0.2969],
-    [3.9801, -0.2572], [4.6649, -0.2176],
-    [3.5000, -0.1000], [2.0000, -0.0500], [0.5000, 0.0000], [0.0000, 0.0000],
-])
+@dataclass
+class _Circle:
+    """One skidpad circle: driven trail since the last lap start, excursion stats, locked path."""
+    start: np.ndarray
+    trail: list = field(default_factory=list)
+    dist: float = 0.0
+    max_r: float = 0.0
+    laps: int = 0
+    locked: Optional[np.ndarray] = None
 
 
-def _make_skidpad_path() -> np.ndarray:
-    """
-    Generate the full skidpad trajectory for the EUFS Gazebo track.
-
-    Sequence (per user spec): 2 laps LEFT (upper circle, counterclockwise)
-    then 2 laps RIGHT (lower circle, clockwise), then exit.
-
-    Parameters tuned to the EUFS standard skidpad track dimensions:
-      inner cone radius = 7.625 m (standard FSAE), outer = 10.6 m
-      path radius = midpoint = 9.1 m, circle centres at (14.4, ±9.3)
-    """
-    cx, cy_l, cy_r = 14.4, 9.3, -9.3   # x shared, y for left/right circles
-    R = 9.1                              # centreline radius
-
-    N = 50    # waypoints per full lap (keep message small; ~220 total waypoints)
-
-    # Entry straight from (0,0) to left-circle 6-o'clock entry
-    n_entry = 40
-    entry = np.column_stack([
-        np.linspace(0, cx, n_entry),
-        np.zeros(n_entry),
-    ])
-
-    # Left circle (upper, counterclockwise): entry at 6 o'clock (θ = -π/2), car moving +x
-    theta_l = np.linspace(-math.pi / 2, -math.pi / 2 + 4 * math.pi, N * 2 + 1)
-    left_circ = np.column_stack([cx + R * np.cos(theta_l), cy_l + R * np.sin(theta_l)])
-
-    # Right circle (lower, clockwise): entry at 12 o'clock (θ = +π/2), car moving +x
-    theta_r = np.linspace(math.pi / 2, math.pi / 2 - 4 * math.pi, N * 2 + 1)
-    right_circ = np.column_stack([cx + R * np.cos(theta_r), cy_r + R * np.sin(theta_r)])
-
-    # Exit straight from right-circle 12 o'clock back to y=0 then to end zone
-    n_exit = 40
-    exit_pts = np.column_stack([
-        np.linspace(cx, 40.0, n_exit),
-        np.zeros(n_exit),
-    ])
-
-    # Stitch: omit duplicate junction point between sections
-    return np.vstack([entry[:-1], left_circ, right_circ, exit_pts])
-
-
-# ---------------------------------------------------------------------------
-# MFE25 vehicle physical constants (from vehicle.yaml)
-# ---------------------------------------------------------------------------
-_M             = 268.0     # kg  total mass (vehicle + driver)
-_G             = 9.81      # m/s²
-_RHO           = 1.225     # kg/m³ air density
-_CD            = 1.77      # drag coefficient
-_CL            = 4.26      # downforce coefficient
-_AREF          = 1.106     # m² frontal area
-_MU            = 1.6       # tyre friction coefficient (slicks, dry)
-_CRR           = 0.012     # rolling resistance coefficient
-_P_MAX         = 66700.0   # W  max pack power
-_F_ENGINE_MAX  = 7676.0    # N  peak tractive force
-
-
-# ---------------------------------------------------------------------------
-# Physics helpers for PSO lap-time fitness
-# ---------------------------------------------------------------------------
-
-def _menger_kappa(path):
-    """Menger curvature at each waypoint of path (N, 2)."""
-    N = len(path)
-    kappa = np.zeros(N)
-    for i in range(1, N - 1):
-        a, b, c = path[i - 1], path[i], path[i + 1]
-        ab = np.linalg.norm(b - a)
-        bc = np.linalg.norm(c - b)
-        ca = np.linalg.norm(a - c)
-        cross = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
-        denom = ab * bc * ca
-        kappa[i] = (2 * cross / denom) if denom > 1e-9 else 0.0
-    kappa[0] = kappa[1]
-    kappa[-1] = kappa[-2]
-    return kappa
-
-
-def _grip_speed(kappa):
-    """Lateral-grip speed limit (m/s) at each point, aero-corrected."""
-    r = np.where(kappa > 1e-4, 1.0 / kappa, 1e6)
-    denom = _M - _MU * 0.5 * _RHO * _CL * _AREF * r
-    denom = np.maximum(denom, 1.0)
-    v2 = _MU * _M * _G * r / denom
-    return np.sqrt(np.clip(v2, 0, 900))   # cap at 30 m/s
-
-
-def _backward_pass(v_lat, ds):
-    """Backward deceleration pass: ensure car can brake to each corner speed."""
-    v = v_lat.copy()
-    for i in range(len(v) - 2, -1, -1):
-        f_drag = 0.5 * _RHO * _CD * _AREF * v[i + 1] ** 2
-        f_net_brake = (_MU * (_M * _G + 0.5 * _RHO * _CL * _AREF * v[i + 1] ** 2)
-                       - f_drag - _CRR * _M * _G)
-        a_max_brake = f_net_brake / _M
-        v_reachable = math.sqrt(v[i + 1] ** 2 + 2 * a_max_brake * ds[i])
-        v[i] = min(v[i], v_reachable)
-    return v
-
-
-def _forward_pass(v_after_backward, ds):
-    """Forward acceleration pass with pack-power and force limits."""
-    v = v_after_backward.copy()
-    for i in range(len(v) - 1):
-        f_drag = 0.5 * _RHO * _CD * _AREF * v[i] ** 2
-        f_engine = min(_F_ENGINE_MAX, _P_MAX / max(v[i], 0.1))
-        f_net = f_engine - f_drag - _CRR * _M * _G
-        a = max(f_net / _M, 0.0)
-        v_next = math.sqrt(v[i] ** 2 + 2 * a * ds[i])
-        v[i + 1] = min(v[i + 1], v_next)
-    return v
-
-
-def _lap_time(v, ds):
-    """Estimated lap time (s) from velocity profile and arc-lengths."""
-    v_avg = 0.5 * (v[:-1] + v[1:])
-    v_avg = np.maximum(v_avg, 0.1)
-    return float(np.sum(ds / v_avg))
-
-
-# ---------------------------------------------------------------------------
-# PSO race-line optimizer
-# ---------------------------------------------------------------------------
-
-def _pso_raceline(centerline_xy, left_xy, right_xy, safety=0.8,
-                  n_particles=30, n_iter=200, penalty_weight=5.0):
-    """
-    PSO race line optimizer. Finds lateral offsets alpha_i from centerline
-    that minimise physics-simulated lap time.
-
-    Returns optimised path (N, 2) array. Falls back to centerline on failure.
-    """
-    import random  # noqa: F401 — kept for spec compliance; np.random used internally
-    N = len(centerline_xy)
-    if N < 4 or len(left_xy) == 0 or len(right_xy) == 0:
-        return centerline_xy
-
-    # Unit tangents and left-pointing normals (same as _min_curvature_path)
-    tg = np.zeros_like(centerline_xy)
-    tg[1:-1] = centerline_xy[2:] - centerline_xy[:-2]
-    tg[0] = centerline_xy[1] - centerline_xy[0]
-    tg[-1] = centerline_xy[-1] - centerline_xy[-2]
-    norm_mag = np.linalg.norm(tg, axis=1, keepdims=True).clip(1e-9)
-    tg /= norm_mag
-    nrm = np.column_stack([-tg[:, 1], tg[:, 0]])
-
-    def _hw(boundary):
-        w = np.empty(N)
-        for i in range(N):
-            w[i] = np.linalg.norm(boundary - centerline_xy[i], axis=1).min()
-        return w * safety
-
-    w_l = _hw(left_xy)
-    w_r = _hw(right_xy)
-
-    def fitness(alpha):
-        path = centerline_xy + alpha[:, None] * nrm
-        # Boundary penalty
-        penalty = float(np.sum(
-            np.maximum(0, alpha - w_l) ** 2 + np.maximum(0, -alpha - w_r) ** 2
-        ))
-        # Arc lengths
-        diff = np.diff(path, axis=0)
-        ds = np.linalg.norm(diff, axis=1).clip(1e-6)
-        # Physics
-        kappa = _menger_kappa(path)
-        v_lat = _grip_speed(kappa)
-        v = _backward_pass(v_lat, ds)
-        v = _forward_pass(v, ds)
-        t = _lap_time(v, ds)
-        return t + penalty_weight * penalty
-
-    # Initialise particles; first particle starts at centerline (alpha=0)
-    pos = np.zeros((n_particles, N))
-    pos[1:] = (np.random.uniform(-1, 1, (n_particles - 1, N))
-               * np.minimum(w_l, w_r) * 0.3)
-    vel = np.zeros_like(pos)
-    pbest = pos.copy()
-    pbest_fit = np.array([fitness(p) for p in pos])
-    gbest_idx = int(np.argmin(pbest_fit))
-    gbest = pbest[gbest_idx].copy()
-    gbest_fit = pbest_fit[gbest_idx]
-
-    stagnant = 0
-    for it in range(n_iter):
-        # Dynamic PSO coefficients (Negura et al. 2025)
-        frac = it / max(n_iter - 1, 1)
-        w_inertia = 0.8 - 0.7 * frac   # 0.8 → 0.1
-        c1 = 1.5 - 1.0 * frac          # 1.5 → 0.5
-        c2 = 1.5 + 1.0 * frac          # 1.5 → 2.5
-
-        r1 = np.random.rand(n_particles, N)
-        r2 = np.random.rand(n_particles, N)
-        vel = (w_inertia * vel
-               + c1 * r1 * (pbest - pos)
-               + c2 * r2 * (gbest - pos))
-        pos = pos + vel
-        # Clamp to track bounds
-        pos = np.clip(pos, -w_r, w_l)
-
-        improved = False
-        for i, p in enumerate(pos):
-            f = fitness(p)
-            if f < pbest_fit[i]:
-                pbest[i] = p.copy()
-                pbest_fit[i] = f
-                if f < gbest_fit:
-                    gbest = p.copy()
-                    gbest_fit = f
-                    improved = True
-
-        if not improved:
-            stagnant += 1
-        else:
-            stagnant = 0
-
-        # Escape local optima: perturb worst 20 % of swarm near gbest
-        if stagnant >= 10:
-            n_perturb = max(1, n_particles // 5)
-            worst_idx = np.argsort(pbest_fit)[-n_perturb:]
-            for idx in worst_idx:
-                noise = np.random.randn(N) * np.minimum(w_l, w_r) * 0.1
-                pos[idx] = np.clip(gbest + noise, -w_r, w_l)
-                vel[idx] = 0.0
-            stagnant = 0
-
-    return centerline_xy + gbest[:, None] * nrm
-
-
-def _min_curvature_path(
-        centerline_xy: np.ndarray,
-        left_xy: np.ndarray,
-        right_xy: np.ndarray,
-        safety: float = 0.8) -> np.ndarray:
-    """
-    Minimum curvature racing line optimizer (Heilmeier et al. 2019, QP formulation).
-
-    Each centerline waypoint slides laterally by alpha_i within the track
-    boundaries.  Minimises sum||q_{i+1} - 2*q_i + q_{i-1}||² subject to
-    alpha_i in [-w_right_i, w_left_i], which maximises effective corner
-    radii → outside-inside-outside racing line.
-
-    No new dependencies: uses scipy.optimize which is already present.
-    Falls back to the original centerline if scipy is missing or inputs are thin.
-    """
-    if not _SCIPY_AVAILABLE:
-        return centerline_xy
-
-    N = len(centerline_xy)
-    if N < 4 or len(left_xy) == 0 or len(right_xy) == 0:
-        return centerline_xy
-
-    # Unit tangents (central differences) and left-pointing normals
-    tg = np.zeros_like(centerline_xy)
-    tg[1:-1] = centerline_xy[2:] - centerline_xy[:-2]
-    tg[0]    = centerline_xy[1]  - centerline_xy[0]
-    tg[-1]   = centerline_xy[-1] - centerline_xy[-2]
-    tg /= np.linalg.norm(tg, axis=1, keepdims=True).clip(1e-9)
-    nrm = np.column_stack([-tg[:, 1], tg[:, 0]])  # rotate 90° CCW → left
-
-    # Half-widths: distance from each centerline point to the nearest
-    # left / right boundary cone, scaled by the safety margin.
-    def _half_widths(boundary_xy: np.ndarray) -> np.ndarray:
-        w = np.empty(N)
-        for i in range(N):
-            w[i] = np.linalg.norm(boundary_xy - centerline_xy[i], axis=1).min()
-        return w * safety
-
-    w_l = _half_widths(left_xy)
-    w_r = _half_widths(right_xy)
-    bounds = [(-w_r[i], w_l[i]) for i in range(N)]
-
-    # Objective: sum of squared discrete curvatures, with analytic gradient.
-    # q_i = centerline_i + alpha_i * normal_i
-    # d2_i = q_{i+1} - 2*q_i + q_{i-1}   (discrete second derivative)
-    # d(||d2_i||²)/d(alpha_j):
-    #   j == i-1 → +1 coefficient on path[i-1]  → dot(2*d2_i,  nrm[j])
-    #   j == i   → -2 coefficient on path[i]    → dot(2*d2_i, -2*nrm[j])
-    #   j == i+1 → +1 coefficient on path[i+1]  → dot(2*d2_i,  nrm[j])
-    def _f_and_g(alpha: np.ndarray):
-        q  = centerline_xy + alpha[:, None] * nrm
-        d2 = q[2:] - 2.0 * q[1:-1] + q[:-2]          # (N-2, 2)
-        obj = float(np.einsum('ij,ij->', d2, d2))
-        td  = 2.0 * d2                                  # (N-2, 2)
-        grad = np.zeros(N)
-        grad[:-2]  += np.einsum('ij,ij->i', td,          nrm[:-2])
-        grad[1:-1] += np.einsum('ij,ij->i', td, -2.0  * nrm[1:-1])
-        grad[2:]   += np.einsum('ij,ij->i', td,          nrm[2:])
-        return obj, grad
-
-    res = _sp_minimize(
-        _f_and_g, np.zeros(N), jac=True, bounds=bounds,
-        method='L-BFGS-B',
-        options={'maxiter': 500, 'ftol': 1e-10, 'gtol': 1e-6},
-    )
-    return centerline_xy + res.x[:, None] * nrm
+def _counts(buckets):
+    return len(buckets[ConeTypes.LEFT]), len(buckets[ConeTypes.RIGHT]), len(buckets[ConeTypes.UNKNOWN])
 
 
 class PathPlannerNode(Node):
@@ -445,189 +108,267 @@ class PathPlannerNode(Node):
                 'ft_fsd_path_planning is not installed. '
                 'Run: pip install ft-fsd-path-planning')
 
-        # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
-        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad
+        self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
+        self.declare_parameter('skidpad_mode', 'cone_based')  # cone_based | hardcoded
         self.declare_parameter('use_pso_optimizer', True)
+        # Local (non-global) backend: fasttube = fsd_path_planning.
+        self.declare_parameter('planner_backend', 'fasttube')
+        # Uncoloured cones (LiDAR-only), local missions:
+        #   trace         — boundary_tracer labels the walls; its gate-midpoint centreline is used directly
+        #   trace_backend — same wall labels fed to the backend as left/right
+        #   heading       — legacy: side of the car's heading (fails in corners)
+        #   fasttube      — uncoloured cones go to ft-fsd unchanged; its own sorting picks the sides
+        self.declare_parameter('unknown_cone_mode', 'trace')
+        # Racing-line optimiser on colourless (traced) paths. Off by default: traced paths are short and the
+        # optimiser's ~0.27 s per cycle made the path lag the car.
+        self.declare_parameter('colourless_raceline', False)
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
         self._use_pso_optimizer = self.get_parameter('use_pso_optimizer').value
+        if self._use_pso_optimizer:  # compile the PSO hot loops now, not on the first planning cycle
+            _w = np.c_[np.linspace(0.0, 3.0, 4), np.zeros(4)]
+            _backward_pass(_forward_pass(_menger_kappa(_w), np.ones(3)), np.ones(3))
         self._mission = mission_str
+        self._skidpad_mode = self.get_parameter('skidpad_mode').value
+        self._backend = self.get_parameter('planner_backend').value
+        self._unknown_mode = self.get_parameter('unknown_cone_mode').value
+        self._colourless_raceline = bool(self.get_parameter('colourless_raceline').value)
+        self._tracer = BoundaryTracer()
 
-        _HARDCODED_MISSIONS = {'skidpad', 'peanut'}
-        if _LIB_AVAILABLE and mission_str not in _HARDCODED_MISSIONS:
+        # Trackdrive plans GLOBALLY over the full cone map: the global boundary trace follows each wall
+        # around the whole track, which disambiguates walls that pass near each other (figure-8 crossings).
+        # Other missions use the local visibility filter.
+        self._global_planning = False
+        self._planner = None
+        if _LIB_AVAILABLE and not self._hardcoded_skidpad():
+            # No per-track entries: an unknown mission string (e.g. a track name) plans as autocross.
             mission_map = {
-                'autocross':   MissionTypes.autocross,
-                'trackdrive':  MissionTypes.trackdrive,
+                'autocross': MissionTypes.autocross,
+                'trackdrive': MissionTypes.trackdrive,
                 'acceleration': MissionTypes.acceleration,
+                'skidpad': MissionTypes.autocross,
             }
             mission = mission_map.get(mission_str, MissionTypes.autocross)
             self._planner = PathPlanner(mission)
-        else:
-            self._planner = None
-
-        # Pre-compute hardcoded paths for missions ft-fsd can't handle
-        self._skidpad_path_published = False
-        if mission_str == 'skidpad':
-            self._skidpad_path = _make_skidpad_path()
-            self._peanut_path  = None
-            self.get_logger().info(
-                f'PathPlannerNode started. Mission: skidpad | '
-                f'hardcoded path: {len(self._skidpad_path)} waypoints, '
-                f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
-        elif mission_str == 'peanut':
-            self._skidpad_path = None
-            self._peanut_path  = _PEANUT_PATH
-            self.get_logger().info(
-                f'PathPlannerNode started. Mission: peanut | '
-                f'hardcoded path: {len(self._peanut_path)} waypoints, '
-                f'sequence: (0,0) → right loop → crossing → left loop → (0,0)')
-        else:
-            self._skidpad_path = None
-            self._peanut_path  = None
-            self.get_logger().info(f'PathPlannerNode started. Mission: {mission_str}')
+            self._global_planning = (mission == MissionTypes.trackdrive)
+            if mission == MissionTypes.acceleration and self._planner.relocalizer is not None:
+                self._trim_accel_known_path()
 
         # ---------- State ----------
         self._car_pos = np.array([0.0, 0.0])
         self._car_dir = np.array([1.0, 0.0])   # unit vector, default facing +X
+        self._car_yaw_rate = 0.0
         self._odom_received = False
+        self._cone_map: dict = {}              # (x, y) on the 0.5 m grid -> ConeTypes
+        self._skidpad_path_published = False
+        self._skidpad_path = None
+        self._reset_skidpad_state()
 
-        # Cone map: accumulated global map of all seen cones across frames.
-        # Key: (rx, ry) rounded to nearest 0.5 m grid. Value: cone color (ConeTypes).
-        self._cone_map: dict = {}
+        # Lap-1 lock-in (global missions): record the driven trail; on closing the loop, build the full-lap
+        # centerline from the cone map ordered by the trail, optimise it once and lock it.
+        self._trail: list = []
+        self._trail_dist = 0.0
+        self._trail_max_r = 0.0
+        self._locked_path = None
 
-        # ---------- Subscribers ----------
-        self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS)
+        if mission_str == 'skidpad':
+            if self._skidpad_mode == 'hardcoded':
+                self._skidpad_path = _make_skidpad_path()
+                self.get_logger().info(
+                    f'PathPlannerNode started. Mission: skidpad (hardcoded mode) | '
+                    f'path: {len(self._skidpad_path)} waypoints, '
+                    f'sequence: 2 laps LEFT + 2 laps RIGHT + exit')
+            else:
+                self.get_logger().info(
+                    'PathPlannerNode started. Mission: skidpad (cone_based mode) | '
+                    'state machine initialized')
+        else:
+            self.get_logger().info(
+                f'PathPlannerNode started. Mission: {mission_str} | local planner: {self._backend}')
+
+        # ---------- Subscribers / publishers ----------
+        self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS_LATEST)
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, _QOS)
-
-        # ---------- Publishers ----------
         self._pub_centerline = self.create_publisher(Path, '/planning/centerline', _QOS)
-        self._pub_left       = self.create_publisher(Path, '/planning/track_left',  _QOS)
-        self._pub_right      = self.create_publisher(Path, '/planning/track_right', _QOS)
+        self._pub_left = self.create_publisher(Path, '/planning/track_left', _QOS)
+        self._pub_right = self.create_publisher(Path, '/planning/track_right', _QOS)
+        self._pub_horizon = self.create_publisher(Float32, '/planning/path_horizon', _QOS)
 
-    # ------------------------------------------------------------------ #
+    def _hardcoded_skidpad(self) -> bool:
+        return self._mission == 'skidpad' and self._skidpad_mode == 'hardcoded'
+
+    def _trim_accel_known_path(self) -> None:
+        """ft-fsd's known acceleration path is a loop; its pathing splices the return leg into the path
+        (replayed HA02: 7 deg swerve). Keep only the outbound straight."""
+        known = self._planner.relocalizer.get_known_global_path()
+        ret = known[:, 1] > 1.0
+        if ret.any():
+            known = known[:int(np.argmax(ret))]
+            self._planner.relocalizer.get_known_global_path = lambda: known
+
+    def _reset_skidpad_state(self) -> None:
+        self._skidpad_state = 'APPROACH'   # APPROACH -> LEFT_CIRCLE -> RIGHT_CIRCLE -> EXIT
+        self._skidpad_left: Optional[_Circle] = None
+        self._skidpad_right: Optional[_Circle] = None
+        self._skidpad_sustained_yaw_rate_sign = None   # +1 (left/CCW), -1 (right/CW), None
+        self._skidpad_yaw_rate_history = []
+
+    # ------------------------------------------------------------------ callbacks
 
     def _odom_cb(self, msg: Odometry) -> None:
         pos = msg.pose.pose.position
         self._car_pos = np.array([pos.x, pos.y])
-        yaw = _yaw_from_quaternion(msg.pose.pose.orientation)
+        yaw = yaw_from_quaternion(msg.pose.pose.orientation)
         self._car_dir = np.array([math.cos(yaw), math.sin(yaw)])
+        self._car_yaw_rate = float(msg.twist.twist.angular.z)
         self._odom_received = True
+        self._tracer.add_pose(self._car_pos)
+
+        if self._global_planning and self._locked_path is None:
+            step = extend_trail(self._trail, self._car_pos)
+            if step is not None:
+                self._trail_dist += step
+                self._trail_max_r = max(
+                    self._trail_max_r, float(np.linalg.norm(self._car_pos - self._trail[0])))
 
     def _cones_cb(self, msg: Track) -> None:
-        # Hardcoded missions: publish pre-computed path on every cone callback
-        # so pure_pursuit picks it up reliably on startup.
-        if self._mission in ('skidpad', 'peanut'):
-            if self._odom_received:
-                hardcoded = self._skidpad_path if self._mission == 'skidpad' else self._peanut_path
-                stamp = self.get_clock().now().to_msg()
-                self._pub_centerline.publish(
-                    _path_from_xy(hardcoded, self._map_frame, stamp))
-                if not self._skidpad_path_published:
-                    self._skidpad_path_published = True
-                    self.get_logger().info(
-                        f'{self._mission} path first publish: {len(hardcoded)} waypoints')
+        if self._locked_path is not None:
+            self._publish_centerline(self._locked_path)
+            return
+
+        if self._mission == 'skidpad':
+            if self._skidpad_mode == 'hardcoded':
+                if self._odom_received:
+                    self._publish_centerline(self._skidpad_path)
+                    if not self._skidpad_path_published:
+                        self._skidpad_path_published = True
+                        self.get_logger().info(
+                            f'skidpad hardcoded path first publish: {len(self._skidpad_path)} waypoints')
+            else:
+                self._handle_skidpad_cone_based(msg)
             return
 
         if not _LIB_AVAILABLE or self._planner is None:
             return
-
         if not self._odom_received:
             self.get_logger().warn('No odometry yet — skipping path calculation.', throttle_duration_sec=5.0)
             return
-
         if not msg.track:
             return
 
-        # --- Cone map accumulation ---
-        # Merge incoming cones into the global map (rounded to 0.5 m grid).
-        # This builds up a global picture of all seen cones as the car drives.
-        _GRID = 0.5
-        _CONE_MAP_MAX = 500
-        for cone in msg.track:
-            rx = round(cone.location.x / _GRID) * _GRID
-            ry = round(cone.location.y / _GRID) * _GRID
-            key = (rx, ry)
-            if key not in self._cone_map:
-                if len(self._cone_map) >= _CONE_MAP_MAX:
-                    # Remove an arbitrary oldest entry to stay within cap
-                    self._cone_map.pop(next(iter(self._cone_map)))
-                self._cone_map[key] = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
-            else:
-                # If we get a colored update for a previously unknown cone, upgrade it
-                new_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
-                if self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
-                    self._cone_map[key] = new_type
+        self._merge_cones(msg)
+        self._evict_far_cones(_MAP_CAP)
 
-        # Build cones_by_type: list of Nx2 arrays indexed by ConeTypes enum value
-        # ft-fsd-path-planning expects: [unknown[], right[], left[], orange_big[], orange_small[]]
-        #
-        # Visibility filter: keep only cones from the accumulated map that are:
-        #   (a) within CONE_VIS_R metres of the car, AND
-        #   (b) not more than CONE_BEHIND_M metres behind the car's heading direction.
-        # This prevents far-away and behind-car cones on crossing tracks (figure-8/peanut)
-        # from confusing the planner with cones from the other loop.
-        # The full accumulated map (not just the current frame) is used so perception mode
-        # builds up a global picture as the car drives around.
-        CONE_VIS_R    = 20.0   # max radius (m) — keep large for sparse tracks (small_track has 17m gaps)
-        CONE_BEHIND_M = 12.0   # allow up to 12 m behind car — 6m was cutting left-boundary cones mid-turn
-        n_types = len(ConeTypes)
-        buckets: list[list] = [[] for _ in range(n_types)]
+        if (self._global_planning and self._trail and self._trail_dist > 60.0
+                and self._trail_max_r > 15.0
+                and float(np.linalg.norm(self._car_pos - self._trail[0])) < 4.0):
+            locked = self._build_locked_loop()
+            if locked is not None:
+                self._locked_path = locked
+                self.get_logger().info(
+                    f'Lap 1 complete — locked full-loop path: {len(locked)} waypoints, '
+                    f'{arc_length(locked):.1f} m, built from {len(self._cone_map)} live-mapped cones. '
+                    f'Re-planning stopped.')
+                self._publish_centerline(locked)
+                return
 
-        for (rx, ry), cone_type in self._cone_map.items():
-            dx = rx - self._car_pos[0]
-            dy = ry - self._car_pos[1]
-            if dx * dx + dy * dy > CONE_VIS_R * CONE_VIS_R:
-                continue
-            # forward projection: positive = ahead of car, negative = behind
-            fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
-            if fwd < -CONE_BEHIND_M:
-                continue
-            buckets[cone_type].append([rx, ry])
+        # Acceleration also gets the full map: ft-fsd's AccelerationRelocalizer needs >= 4 cones on the
+        # car's left, and the visibility-filtered set never held more than 3 (replayed bags: 0.3-1.4 m off).
+        use_full_map = self._global_planning or self._mission == 'acceleration'
+        buckets = self._bucket_cones(visible_only=not use_full_map)
+        cones_by_type = cone_arrays(buckets)
+        n_left, n_right, n_unknown = _counts(buckets)
 
-        cones_by_type = [
-            np.array(b, dtype=np.float64).reshape(-1, 2) if b
-            else np.zeros((0, 2), dtype=np.float64)
-            for b in buckets
-        ]
+        # Colourless local planning: trace the walls instead of guessing sides from the heading.
+        if (not use_full_map and n_left + n_right == 0 and n_unknown > 0
+                and self._unknown_mode in ('trace', 'trace_backend')):
+            self._plan_colourless()
+            return
 
-        n_left    = len(buckets[ConeTypes.LEFT])
-        n_right   = len(buckets[ConeTypes.RIGHT])
-        n_unknown = len(buckets[ConeTypes.UNKNOWN])
         self.get_logger().info(
             f'planner input: left={n_left} right={n_right} unknown={n_unknown} '
             f'pos=({self._car_pos[0]:.1f},{self._car_pos[1]:.1f}) '
             f'dir=({self._car_dir[0]:.2f},{self._car_dir[1]:.2f})',
             throttle_duration_sec=2.0)
 
-        if n_left + n_right == 0 and n_unknown > 0:
-            # No colored cones (LiDAR-only mode) — assign UNKNOWN cones geometrically.
-            # Cross product of car heading with cone direction: positive = left, negative = right.
-            for (rx, ry), cone_type in self._cone_map.items():
-                if cone_type != ConeTypes.UNKNOWN:
-                    continue
-                dx = rx - self._car_pos[0]
-                dy = ry - self._car_pos[1]
-                fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
-                if fwd < -CONE_BEHIND_M:
-                    continue
-                cross_z = self._car_dir[0] * dy - self._car_dir[1] * dx
-                if cross_z > 0:
-                    buckets[ConeTypes.LEFT].append([rx, ry])
-                else:
-                    buckets[ConeTypes.RIGHT].append([rx, ry])
-            buckets[ConeTypes.UNKNOWN] = []
-            cones_by_type = [
-                np.array(b, dtype=np.float64).reshape(-1, 2) if b
-                else np.zeros((0, 2), dtype=np.float64)
-                for b in buckets
-            ]
-            n_left  = len(buckets[ConeTypes.LEFT])
-            n_right = len(buckets[ConeTypes.RIGHT])
+        # fasttube: hand uncoloured cones to ft-fsd unchanged so its own sorting picks the sides.
+        colourless_native = (n_left + n_right == 0 and n_unknown > 0 and self._unknown_mode == 'fasttube')
+        if n_left + n_right == 0 and n_unknown > 0 and not colourless_native:
+            self._assign_unknown_sides(buckets)
+            cones_by_type = cone_arrays(buckets)
+            n_left, n_right = len(buckets[ConeTypes.LEFT]), len(buckets[ConeTypes.RIGHT])
             self.get_logger().info(
                 f'LiDAR-only: geometry L/R assignment → left={n_left} right={n_right}',
                 throttle_duration_sec=2.0)
+
+        if n_left + n_right == 0 and not colourless_native:
+            self.get_logger().warn(
+                'No colored or assignable cones — skipping planner.',
+                throttle_duration_sec=5.0)
+            return
+
+        result = self._run_library(cones_by_type, n_left, n_right, n_unknown)
+        if result is None:
+            return
+        path_xy, left_xy, right_xy = result
+        self.get_logger().info(
+            f'planner OK: path_pts={len(path_xy) if path_xy is not None else 0}',
+            throttle_duration_sec=2.0)
+
+        # final_path columns: (spline_parameter, x, y, curvature); boundaries are already (x, y).
+        centerline = None
+        if path_xy is not None and len(path_xy) > 0:
+            centerline = np.array(path_xy)[:, 1:3]
+            # Race line for local missions. Not during global exploration: those paths are ephemeral (the
+            # lap-1 lock-in optimises once) and a per-cycle optimiser pushes the replan period past pure
+            # pursuit's stale threshold.
+            if (not self._global_planning
+                    and (self._colourless_raceline or not colourless_native)
+                    and len(path_xy) > 3
+                    and left_xy is not None and len(left_xy) > 3
+                    and right_xy is not None and len(right_xy) > 3):
+                centerline = self._racing_line(centerline, np.array(left_xy)[:, :2], np.array(right_xy)[:, :2])
+        self._publish_plan(centerline, left_xy, right_xy)
+
+    def _handle_skidpad_cone_based(self, msg: Track) -> None:
+        """Skidpad state machine: APPROACH (local) -> LEFT_CIRCLE (lock after 1 lap, 2 laps) ->
+        RIGHT_CIRCLE (same) -> EXIT (local). Yaw-rate sign picks the circle; the cone colour and the
+        trail give the lap count."""
+        if not self._odom_received:
+            return
+
+        self._update_skidpad_yaw_rate_sign()
+        self._merge_cones(msg, insert_cap=_SKIDPAD_MAP_CAP)
+
+        if self._skidpad_state == 'LEFT_CIRCLE':
+            self._advance_circle(self._skidpad_left)
+        elif self._skidpad_state == 'RIGHT_CIRCLE':
+            self._advance_circle(self._skidpad_right)
+        self._step_skidpad_state()
+
+        circle = {'LEFT_CIRCLE': self._skidpad_left, 'RIGHT_CIRCLE': self._skidpad_right}.get(self._skidpad_state)
+        if circle is not None and circle.locked is not None:
+            self._publish_centerline(circle.locked)
+            return
+
+        self._handle_local_cone_planning(msg)
+
+    def _handle_local_cone_planning(self, msg: Track) -> None:
+        """Local ft-fsd planning for skidpad states without a locked circle (APPROACH, EXIT, incomplete)."""
+        if not _LIB_AVAILABLE or self._planner is None:
+            return
+        if not msg.track:
+            return
+
+        buckets = self._bucket_cones(visible_only=True)
+        cones_by_type = cone_arrays(buckets)
+        n_left, n_right, n_unknown = _counts(buckets)
+        if n_left + n_right == 0 and n_unknown > 0:
+            self._assign_unknown_sides(buckets)
+            cones_by_type = cone_arrays(buckets)
+            n_left, n_right = len(buckets[ConeTypes.LEFT]), len(buckets[ConeTypes.RIGHT])
 
         if n_left + n_right == 0:
             self.get_logger().warn(
@@ -635,75 +376,339 @@ class PathPlannerNode(Node):
                 throttle_duration_sec=5.0)
             return
 
+        result = self._run_library(cones_by_type, n_left, n_right, n_unknown)
+        if result is None:
+            return
+        path_xy, left_xy, right_xy = result
+        centerline = None
+        if path_xy is not None and len(path_xy) > 0:
+            centerline = np.array(path_xy)[:, 1:3]
+            if (len(path_xy) > 3
+                    and left_xy is not None and len(left_xy) > 3
+                    and right_xy is not None and len(right_xy) > 3):
+                try:
+                    centerline = _min_curvature_path(
+                        centerline, np.array(left_xy)[:, :2], np.array(right_xy)[:, :2], safety=0.7)
+                except Exception as opt_e:
+                    self.get_logger().debug(f'Optimizer failed: {opt_e}')
+        self._publish_plan(centerline, left_xy, right_xy)
+
+    # ------------------------------------------------------------------ cone map
+
+    def _merge_cones(self, msg: Track, insert_cap: Optional[int] = None) -> None:
+        """Merge cones into the map on the 0.5 m grid. Colour only upgrades UNKNOWN cones.
+
+        With insert_cap, the oldest entry is evicted before a new key would exceed the cap.
+        """
+        for cone in msg.track:
+            if cone.color in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL):
+                continue
+            # one non-finite cone (bad depth pixel upstream) must not kill the planner: round(NaN) raises
+            if not (math.isfinite(cone.location.x) and math.isfinite(cone.location.y)):
+                continue
+            rx = round(cone.location.x / _GRID) * _GRID
+            ry = round(cone.location.y / _GRID) * _GRID
+            key = (rx, ry)
+            new_type = _MFE_TO_FSD.get(cone.color, ConeTypes.UNKNOWN)
+            if key not in self._cone_map:
+                if insert_cap is not None and len(self._cone_map) >= insert_cap:
+                    self._cone_map.pop(next(iter(self._cone_map)))
+                self._cone_map[key] = new_type
+            elif self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
+                self._cone_map[key] = new_type
+
+    def _evict_far_cones(self, cap: int) -> None:
+        """Over the cap, drop the cones farthest from the car. (Evicting the oldest key instead churned the
+        map every message once it held more than the cap, dropping cones next to the car.)"""
+        if len(self._cone_map) > cap:
+            keys = list(self._cone_map.keys())
+            d2 = np.sum((np.array(keys) - self._car_pos) ** 2, axis=1)
+            for i in np.argsort(d2)[cap:]:
+                del self._cone_map[keys[i]]
+
+    def _cone_xy(self) -> np.ndarray:
+        return np.array(list(self._cone_map.keys()), dtype=np.float64)
+
+    def _map_walls(self):
+        """Blue (left) and yellow (right) cone positions in the map."""
+        blue = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.LEFT])
+        yellow = np.array([k for k, v in self._cone_map.items() if v == ConeTypes.RIGHT])
+        return blue, yellow
+
+    def _bucket_cones(self, visible_only: bool):
+        """Map cones grouped by ConeTypes. visible_only keeps those within _CONE_VIS_R and not behind the car."""
+        buckets = [[] for _ in range(len(ConeTypes))]
+        for (rx, ry), cone_type in self._cone_map.items():
+            if visible_only:
+                dx = rx - self._car_pos[0]
+                dy = ry - self._car_pos[1]
+                if dx * dx + dy * dy > _CONE_VIS_R * _CONE_VIS_R:
+                    continue
+                if dx * self._car_dir[0] + dy * self._car_dir[1] < -_CONE_BEHIND_M:
+                    continue
+            buckets[cone_type].append([rx, ry])
+        return buckets
+
+    def _assign_unknown_sides(self, buckets) -> None:
+        """LiDAR-only: sort UNKNOWN cones into LEFT/RIGHT by the sign of their cross product with the heading."""
+        for (rx, ry), cone_type in self._cone_map.items():
+            if cone_type != ConeTypes.UNKNOWN:
+                continue
+            dx = rx - self._car_pos[0]
+            dy = ry - self._car_pos[1]
+            fwd = dx * self._car_dir[0] + dy * self._car_dir[1]
+            if fwd < -_CONE_BEHIND_M:
+                continue
+            cross_z = self._car_dir[0] * dy - self._car_dir[1] * dx
+            buckets[ConeTypes.LEFT if cross_z > 0 else ConeTypes.RIGHT].append([rx, ry])
+        buckets[ConeTypes.UNKNOWN] = []
+
+    # ------------------------------------------------------------------ skidpad
+
+    def _update_skidpad_yaw_rate_sign(self) -> None:
+        """Sign of the sustained yaw rate over the last few frames (filters noise)."""
+        if self._mission != 'skidpad' or self._skidpad_mode != 'cone_based':
+            return
+        hist = self._skidpad_yaw_rate_history
+        hist.append(self._car_yaw_rate)
+        if len(hist) > _YAW_HIST_LEN:
+            hist.pop(0)
+        avg_yaw_rate = float(np.mean(hist))
+        if abs(avg_yaw_rate) > _YAW_RATE_THRESH:
+            new_sign = 1 if avg_yaw_rate > 0 else -1
+            if self._skidpad_sustained_yaw_rate_sign != new_sign:
+                self._skidpad_sustained_yaw_rate_sign = new_sign
+                circle_dir = 'LEFT (CCW)' if new_sign > 0 else 'RIGHT (CW)'
+                self.get_logger().debug(f'Skidpad: detected sustained turn {circle_dir}')
+
+    def _advance_circle(self, circle: Optional[_Circle]) -> None:
+        if circle is None:
+            return
+        step = extend_trail(circle.trail, self._car_pos)
+        if step is not None:
+            circle.dist += step
+            circle.max_r = max(circle.max_r, float(np.linalg.norm(self._car_pos - circle.start)))
+
+    def _lap_closed(self, circle: _Circle) -> bool:
+        return (circle.dist > _CIRCLE_LAP_DIST and circle.max_r > _CIRCLE_MAX_R
+                and float(np.linalg.norm(self._car_pos - circle.start)) < _CIRCLE_CLOSE_R)
+
+    def _enter_circle(self, left: bool) -> None:
+        circle = _Circle(start=self._car_pos.copy(), trail=[self._car_pos.copy()])
+        if left:
+            self._skidpad_left = circle
+            self._skidpad_state = 'LEFT_CIRCLE'
+        else:
+            self._skidpad_right = circle
+            self._skidpad_state = 'RIGHT_CIRCLE'
+
+    def _step_skidpad_state(self) -> None:
+        sign = self._skidpad_sustained_yaw_rate_sign
+        if self._skidpad_state == 'APPROACH':
+            if sign is not None:
+                left = sign > 0
+                self.get_logger().info(f'Skidpad: entering {"LEFT" if left else "RIGHT"}_CIRCLE')
+                self._enter_circle(left)
+
+        elif self._skidpad_state == 'LEFT_CIRCLE':
+            circle = self._skidpad_left
+            if self._lap_closed(circle):
+                if circle.locked is None:
+                    self._lock_circle(circle, 'LEFT')
+                elif circle.laps == 1:
+                    circle.laps = 2
+                    self.get_logger().info('Skidpad LEFT lap 2 complete — transitioning to RIGHT_CIRCLE')
+                    if sign is not None and sign < 0:
+                        self._enter_circle(left=False)
+                        self._skidpad_yaw_rate_history.clear()
+                    else:
+                        self.get_logger().warn('Skidpad: expected right turn to enter RIGHT_CIRCLE, still turning left')
+
+        elif self._skidpad_state == 'RIGHT_CIRCLE':
+            circle = self._skidpad_right
+            if self._lap_closed(circle):
+                if circle.locked is None:
+                    self._lock_circle(circle, 'RIGHT')
+                elif circle.laps == 1:
+                    circle.laps = 2
+                    self.get_logger().info('Skidpad RIGHT lap 2 complete — transitioning to EXIT')
+                    self._skidpad_state = 'EXIT'
+                    self._skidpad_yaw_rate_history.clear()
+
+    def _lock_circle(self, circle: _Circle, name: str) -> None:
+        locked = self._build_skidpad_circle(circle.trail, circle.start)
+        if locked is None:
+            return
+        circle.locked = locked
+        circle.laps = 1
+        self.get_logger().info(
+            f'Skidpad {name} lap 1 complete — locked circle: {len(locked)} waypoints, '
+            f'{arc_length(locked):.1f} m')
+        circle.trail = [self._car_pos.copy()]
+        circle.dist = 0.0
+        circle.max_r = 0.0
+
+    def _build_skidpad_circle(self, trail: list, trail_start) -> Optional[np.ndarray]:
+        """Closed (first ~ last) path for one skidpad circle, from the trail and the map walls."""
+        if trail_start is None:
+            return None
+        blue, yellow = self._map_walls()
+        if len(blue) < 4 or len(yellow) < 4 or len(trail) < 15:
+            return None
+        centerline = midpoint_walk(np.array(trail), blue, yellow)
+        if len(centerline) < 8:
+            return None
+        return self._finish_loop(centerline, blue, yellow, min_n=15, label='Skidpad circle')
+
+    def _finish_loop(self, centerline, blue, yellow, min_n: int, label: str) -> np.ndarray:
+        """Smooth a midpoint loop, optimise it inside the walls, revert waypoints near cones, resample."""
+        centerline = smooth_cyclic(centerline)
+        raw = centerline.copy()
         try:
-            result = self._planner.calculate_path_in_global_frame(
-                cones_by_type,
-                self._car_pos,
-                self._car_dir,
+            centerline = _min_curvature_path(centerline, blue, yellow, safety=0.5)
+        except Exception as e:
+            self.get_logger().warn(
+                f'{label} optimizer failed ({type(e).__name__}: {e}) — using raw centerline.')
+        reverted = clearance_guard(centerline, raw, np.vstack([blue, yellow]))
+        if reverted:
+            self.get_logger().info(f'{label} clearance guard reverted {reverted} waypoints.')
+        return closed_resample(centerline, min_n)
+
+    # ------------------------------------------------------------------ global lock-in
+
+    def _build_locked_loop(self) -> Optional[np.ndarray]:
+        """Full-lap closed centerline from the cone map, ordered by the lap-1 trail (handles figure-8s)."""
+        blue, yellow = self._map_walls()
+        if len(blue) < 4 or len(yellow) < 4 or len(self._trail) < 20:
+            self.get_logger().warn(
+                f'Loop closed but map too thin to lock '
+                f'(blue={len(blue)} yellow={len(yellow)} trail={len(self._trail)})')
+            return None
+        centerline = midpoint_walk(np.array(self._trail), blue, yellow)
+        if len(centerline) < 10:
+            return None
+        return self._finish_loop(centerline, blue, yellow, min_n=20, label='Lock-in')
+
+    # ------------------------------------------------------------------ planning helpers
+
+    def _off_map(self, xy: np.ndarray) -> bool:
+        """True (and warns) when the car is far from every mapped cone: publish nothing, so pure
+        pursuit's stale-path failsafe brakes."""
+        d_nearest = float(np.min(np.hypot(xy[:, 0] - self._car_pos[0], xy[:, 1] - self._car_pos[1])))
+        if d_nearest > _OFF_MAP_M:
+            self.get_logger().warn(
+                f'Car is {d_nearest:.0f} m from the nearest mapped cone — off track? '
+                'Skipping planner so the stale-path failsafe stops the car.',
+                throttle_duration_sec=2.0)
+            return True
+        return False
+
+    def _run_library(self, cones_by_type, n_left, n_right, n_unknown):
+        """ft-fsd call. Returns (path, left, right) or None when skipped or failed."""
+        if self._off_map(self._cone_xy()):
+            return None
+        try:
+            path_xy, left_xy, right_xy, *_ = self._planner.calculate_path_in_global_frame(
+                cones_by_type, self._car_pos, self._car_dir,
                 return_intermediate_results=True,
             )
-            path_xy, left_xy, right_xy, *_ = result
         except Exception as e:
             self.get_logger().error(
                 f'Path calculation failed ({type(e).__name__}): {e} | '
                 f'left={n_left} right={n_right} unknown={n_unknown}',
                 throttle_duration_sec=2.0)
-            return
+            return None
+        return path_xy, left_xy, right_xy
 
-        self.get_logger().info(
-            f'planner OK: path_pts={len(path_xy) if path_xy is not None else 0}',
-            throttle_duration_sec=2.0)
+    def _racing_line(self, centerline, left, right):
+        """Race line through the corridor: PSO (if enabled) with the curvature minimiser as fallback,
+        else the curvature minimiser alone; the raw centerline if both fail. Shared by all backends."""
+        if self._use_pso_optimizer:
+            try:
+                out = _pso_raceline(centerline, left, right, safety=0.7)
+                self.get_logger().info('PSO race line optimizer applied.', throttle_duration_sec=5.0)
+                return out
+            except Exception as opt_e:
+                self.get_logger().warn(
+                    f'PSO optimizer failed: {opt_e} — falling back to curvature minimizer',
+                    throttle_duration_sec=5.0)
+        try:
+            out = _min_curvature_path(centerline, left, right, safety=0.7)
+            self.get_logger().info('Racing line optimizer applied.', throttle_duration_sec=5.0)
+            return out
+        except Exception as opt_e:
+            self.get_logger().warn(
+                f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
+                'falling back to raw centerline.',
+                throttle_duration_sec=5.0)
+            return centerline
 
+    def _publish_centerline(self, xy: np.ndarray) -> None:
         stamp = self.get_clock().now().to_msg()
-        frame = self._map_frame
+        self._pub_centerline.publish(path_from_xy(xy, self._map_frame, stamp))
 
-        # final_path columns: (spline_parameter, path_x, path_y, curvature)
-        # Use columns 1:3 for actual (x, y); col 0 is the spline parameter, not a coordinate.
-        # sorted_left / sorted_right are Mx2 (x,y) already — use :2
-        if path_xy is not None and len(path_xy) > 0:
-            centerline = np.array(path_xy)[:, 1:3]
+    def _publish_plan(self, centerline, left, right) -> None:
+        """Publish centerline (skipped when None), then left and right walls (when non-empty)."""
+        stamp = self.get_clock().now().to_msg()
+        if centerline is not None:
+            self._pub_centerline.publish(path_from_xy(centerline, self._map_frame, stamp))
+        if left is not None and len(left) > 0:
+            self._pub_left.publish(path_from_xy(np.array(left)[:, :2], self._map_frame, stamp))
+        if right is not None and len(right) > 0:
+            self._pub_right.publish(path_from_xy(np.array(right)[:, :2], self._map_frame, stamp))
 
-            # Run racing line optimizer when we have enough points and boundaries
-            if (len(path_xy) > 3
-                    and left_xy is not None and len(left_xy) > 3
-                    and right_xy is not None and len(right_xy) > 3):
-                left   = np.array(left_xy)[:, :2]
-                right  = np.array(right_xy)[:, :2]
-                if self._use_pso_optimizer:
-                    try:
-                        optimized = _pso_raceline(centerline, left, right, safety=0.7)
-                        self.get_logger().info(
-                            'PSO race line optimizer applied.',
-                            throttle_duration_sec=5.0)
-                    except Exception as opt_e:
-                        self.get_logger().warn(
-                            f'PSO optimizer failed: {opt_e} — falling back to curvature minimizer',
-                            throttle_duration_sec=5.0)
-                        try:
-                            optimized = _min_curvature_path(centerline, left, right, safety=0.7)
-                        except Exception:
-                            optimized = centerline
-                else:
-                    try:
-                        optimized = _min_curvature_path(centerline, left, right, safety=0.7)
-                        self.get_logger().info(
-                            'Racing line optimizer applied.',
-                            throttle_duration_sec=5.0)
-                    except Exception as opt_e:
-                        self.get_logger().warn(
-                            f'Racing line optimizer failed ({type(opt_e).__name__}): {opt_e} — '
-                            'falling back to raw centerline.',
-                            throttle_duration_sec=5.0)
-                        optimized = centerline
-            else:
-                optimized = centerline
+    # ------------------------------------------------------------------ colourless / AMZ
 
-            self._pub_centerline.publish(_path_from_xy(optimized, frame, stamp))
+    def _plan_colourless(self) -> None:
+        """No cone colours: boundary_tracer labels each wall from the driven trajectory and grows both walls
+        ahead together. The path ends where the paired walls end."""
+        xy = self._cone_xy()
+        if self._off_map(xy):
+            return
+        res = self._tracer.plan(xy, self._car_pos, self._car_dir)
+        if res is None:
+            self.get_logger().warn(f'boundary tracer: no path ({self._tracer.debug.get("reason")})',
+                                   throttle_duration_sec=2.0)
+            return
+        path, left, right = res.path, res.left, res.right
+        if self._unknown_mode == 'trace_backend':
+            path = self._backend_on_labels(xy, res)
+            if path is None:
+                return
+        optimized = path
+        if self._colourless_raceline and len(path) > 3 and len(left) > 3 and len(right) > 3:
+            # the optimiser sizes its corridor from the nearest wall cone, which past the traced walls is the wrong cone
+            optimized = clamp_to_corridor(self._racing_line(path, left, right), path, left, right)
+        horizon = float(np.sum(np.linalg.norm(np.diff(optimized, axis=0), axis=1))) if len(optimized) > 1 else 0.0
+        self.get_logger().info(
+            f'boundary tracer: left={len(left)} right={len(right)} gates={res.debug.get("n_gates")} '
+            f'labelled={res.debug.get("n_labelled")} horizon={horizon:.1f} m',
+            throttle_duration_sec=2.0)
+        self._publish_plan(optimized, left, right)
+        self._pub_horizon.publish(Float32(data=horizon))
 
-        if left_xy is not None and len(left_xy) > 0:
-            self._pub_left.publish(_path_from_xy(np.array(left_xy)[:, :2], frame, stamp))
-        if right_xy is not None and len(right_xy) > 0:
-            self._pub_right.publish(_path_from_xy(np.array(right_xy)[:, :2], frame, stamp))
+    def _backend_on_labels(self, xy, res):
+        """Run the configured backend on the tracer's left/right labels, then cut its path where the traced
+        walls end (backends extrapolate past the last cones)."""
+        rel = xy - self._car_pos
+        ahead = rel @ self._car_dir >= -3.0
+        Lm = ahead & (res.labels > 0)
+        Rm = ahead & (res.labels < 0)
+        cones = [np.zeros((0, 2)) for _ in range(len(ConeTypes))]
+        cones[ConeTypes.LEFT] = xy[Lm]
+        cones[ConeTypes.RIGHT] = xy[Rm]
+        try:
+            path = np.array(self._planner.calculate_path_in_global_frame(
+                cones, self._car_pos, self._car_dir))[:, 1:3]
+        except Exception as e:
+            self.get_logger().error(f'Path calculation failed: {type(e).__name__}: {e}',
+                                    throttle_duration_sec=2.0)
+            return None
+        if len(path) < 2:
+            return None
+        end = res.path[-1]
+        j = int(np.argmin(np.linalg.norm(path - end, axis=1)))
+        return path[:j + 1] if j >= 1 else None
 
 
 def main(args=None):

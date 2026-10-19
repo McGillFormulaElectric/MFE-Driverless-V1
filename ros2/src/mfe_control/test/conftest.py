@@ -51,7 +51,7 @@ def _install_ros_mocks():
                 'K_v': 0.5, 'ld_min': 0.5, 'ld_max': 15.0,
                 'lookahead_distance': 5.0, 'max_speed': 10.0,
                 'max_lateral_accel': 8.0, 'max_deceleration': 10.0,
-                'lookahead_waypoints': 40, 'speed_reduction_factor': 0.3,
+                'lookahead_waypoints': 40,
                 'car_half_length': 1.5, 'car_half_width': 0.8,
                 'cone_hit_radius_m': 0.5,
                 'lidar_timeout_ms': 200, 'gps_jump_threshold_m': 2.0,

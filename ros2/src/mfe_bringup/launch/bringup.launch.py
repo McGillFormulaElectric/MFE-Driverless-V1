@@ -37,7 +37,8 @@ _FINISH_X = {
     'autocross':    100.0,
     'trackdrive':   100.0,
     'acceleration':  78.0,  # orange finish gate at x=78 m on EUFS acceleration track
-    'skidpad':       37.0,  # end of exit corridor on EUFS skidpad track
+    'skidpad':       30.0,  # 15 m past the crossing: brakes inside the stop zone (orange cones 9-21 m past it);
+                            # 37 m braked at ~22 m and every run stopped past the last cones
     'peanut':       100.0,  # unused — peanut uses return-to-start lap counting
 }
 
@@ -81,6 +82,28 @@ def generate_launch_description():
         default_value='autocross',
         choices=['autocross', 'trackdrive', 'acceleration', 'skidpad', 'peanut'],
         description='FSAE mission type passed to path planner',
+    )
+
+    skidpad_mode_arg = DeclareLaunchArgument(
+        'skidpad_mode',
+        default_value='cone_based',
+        choices=['cone_based', 'hardcoded'],
+        description=(
+            'Skidpad path planning mode: cone_based (cone-detection-driven state machine) '
+            'or hardcoded (pre-computed template path). Has no effect on non-skidpad missions.'
+        ),
+    )
+
+    unknown_cone_mode_arg = DeclareLaunchArgument(
+        'unknown_cone_mode',
+        default_value='trace',
+        description='Planning without cone colours: trace (wall tracer path), trace_backend (tracer labels, '
+                    'backend plans), fasttube (ft-fsd sorts the uncoloured cones itself), heading (legacy).')
+    planner_backend_arg = DeclareLaunchArgument(
+        'planner_backend',
+        default_value='fasttube',
+        choices=['fasttube'],
+        description='Local path planner: fasttube (fsd_path_planning library).',
     )
 
     vision_model_arg = DeclareLaunchArgument(
@@ -197,7 +220,27 @@ def generate_launch_description():
         ),
     )
 
+    steer_pt2_tau_arg = DeclareLaunchArgument(
+        'steer_pt2_tau',
+        default_value='0.05',
+        description=(
+            'Pure pursuit PT2 steering anticipator time constant (s). The anticipator '
+            'pre-emphasises steering changes to cancel actuator lag; at the 20 Hz control '
+            'rate tau=0.05 multiplies each change in the steering request by 3.4x. '
+            'The EUFS sim steering has no such lag, so the sim scripts pass 0.0 (pass-through).'
+        ),
+    )
+
+    lookahead_arg = DeclareLaunchArgument(
+        'lookahead',
+        default_value='0.0',
+        description='Override pure pursuit lookahead_distance (m). 0 = use mission default.',
+    )
+
     mission = LaunchConfiguration('mission')
+    skidpad_mode = LaunchConfiguration('skidpad_mode')
+    planner_backend = LaunchConfiguration('planner_backend')
+    vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
     use_slam = LaunchConfiguration('use_slam')
@@ -333,6 +376,9 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'mission': mission,
+            'skidpad_mode': skidpad_mode,
+            'planner_backend': planner_backend,
+            'unknown_cone_mode': LaunchConfiguration('unknown_cone_mode'),
         }],
         remappings=[('/ekf/output', pose_topic)],
     )
@@ -349,22 +395,35 @@ def generate_launch_description():
         # uses a 'vehicle:' namespace, not a valid ROS2 params-file format)
         params = {
             'wheelbase': 1.56,
-            'max_steering_deg': 28.0,
+            # The pose (SLAM/EKF) is the CG, 0.69 m ahead of the rear axle (cg_x 0.44 x wheelbase 1.56), but tracking
+            # from the rear axle made sim laps ~20% slower with cone touches, so it is off by default
+            'rear_axle_offset': float(os.environ.get('REAR_AXLE_OFFSET', '0.0')),
+            'max_steering_deg': float(os.environ.get('MAX_STEER_DEG', '28.0')),
             'max_lateral_accel': 8.0,
             'max_deceleration': 10.0,
         }
         if mission_str == 'skidpad':
-            params.update({'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6})
+            params.update({'max_speed': 4.5, 'lookahead_distance': 3.0})
         elif mission_str == 'acceleration':
-            params.update({'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2})
+            params.update({'max_speed': 13.0, 'lookahead_distance': 8.0})
         elif mission_str == 'peanut':
             # Tighter lookahead + lower speed for the figure-8 crossing pinch
-            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5, 'speed_reduction_factor': 0.5})
+            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5})
         else:  # autocross / trackdrive
-            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3})
+            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0,
+                           'speed_smooth_window': int(os.environ.get('SPEED_SMOOTH', '5'))})
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:
             params['max_speed'] = max_speed_override
+        lookahead_override = float(context.launch_configurations.get('lookahead', '0.0'))
+        if lookahead_override > 0.0:
+            params['lookahead_distance'] = lookahead_override
+        params['steer_pt2_tau'] = float(context.launch_configurations.get('steer_pt2_tau', '0.05'))
+        # pure_pursuit_node now uses an adaptive look-ahead (ld = K_v*v*sqrt(1+k^2), clamped to
+        # [ld_min, ld_max]) and no longer reads lookahead_distance. Keep the per-mission value as
+        # the floor: with the node default ld_min=0.5 m the car steered full lock on a straight
+        # path at low speed (skidpad, merged PR branch) and wove off the track.
+        params['ld_min'] = params['lookahead_distance']
         return [Node(
             package='mfe_control',
             executable='pure_pursuit_node',
@@ -389,9 +448,18 @@ def generate_launch_description():
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
         # Closed-loop tracks use return-to-start lap counting.
-        # Linear tracks (acceleration, skidpad) keep x-position logic — num_laps ignored.
+        # Linear tracks keep x-position logic as a fallback only — num_laps ignored.
         if mission_str in ('autocross', 'trackdrive', 'peanut'):
             extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
+        elif mission_str == 'acceleration':
+            # Perception-based: one orange-gate pass finishes the run. finish_x stays
+            # wired above as the emergency fallback only (fires if the gate is never
+            # perceived) — gate_crossings=1 makes that the PRIMARY path, not x-position.
+            extra = {'gate_crossings': 1}
+        elif mission_str == 'skidpad':
+            # Perception-based orange-gate detection: 5 passes (entry + 4 laps of central gate)
+            # finish_x stays as emergency fallback only.
+            extra = {'gate_crossings': 5}
         else:
             extra = {}
         return [Node(
@@ -535,6 +603,9 @@ def generate_launch_description():
     return LaunchDescription([
         # args
         mission_arg,
+        skidpad_mode_arg,
+        planner_backend_arg,
+        unknown_cone_mode_arg,
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
@@ -547,6 +618,8 @@ def generate_launch_description():
         max_speed_arg,
         record_bag_arg,
         bag_output_dir_arg,
+        lookahead_arg,
+        steer_pt2_tau_arg,
 
         # node groups — each independently enable/disable-able
         perception_group,

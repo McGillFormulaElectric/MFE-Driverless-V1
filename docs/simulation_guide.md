@@ -106,7 +106,7 @@ If this is false, the car has no idea where it is in the map frame and drives in
 | `ros2/src/mfe_bringup/launch/bringup.launch.py` | The main launch file. Declares all args (`mission`, `pose_topic`, `use_perception`, `endless`, `vision_model_path`). Uses `OpaqueFunction` for mission-dependent node parameters. |
 | `ros2/src/mfe_path_planning/mfe_path_planning/path_planner_node.py` | Path planner wrapper. Filters cones to 20 m radius around car before feeding ft-fsd-path-planning. Maps orange cones to UNKNOWN (prevents library finish-line logic from corrupting path). |
 | `ros2/src/mfe_path_planning/mfe_path_planning/finish_detector_node.py` | Finish detector. Has two modes: x-position fallback (linear tracks) and return-to-start (closed-loop tracks). Guards figure-8 crossings with `max_dist_from_start >= 15 m` check. |
-| `ros2/src/mfe_control/mfe_control/pure_pursuit_node.py` | Pure pursuit. Speed profile uses `speed_reduction_factor` at high curvature. Mission-specific defaults set in bringup launch. |
+| `ros2/src/mfe_control/mfe_control/pure_pursuit_node.py` | Pure pursuit. Corner speed from path curvature (`max_lateral_accel`). Mission-specific defaults set in bringup launch. |
 | `training/yolo/train.py` | Sequential YOLO training: yolov8n → yolov8s → yolo11n → yolo11s on FSOCO dataset. Saves best weights to `~/mfe_models/yolo/cone_detector_best.pt` for ROS. |
 
 ### Docker images

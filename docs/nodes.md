@@ -189,15 +189,15 @@ Not launched when `use_perception:=false` (no_perception mode).
 | `max_lateral_accel` | `8.0` | Corner speed target: v = sqrt(a_lat × R) |
 | `max_deceleration` | `10.0` | Braking deceleration (m/s²) |
 | `lookahead_waypoints` | `40` | Waypoints ahead to scan for corners |
-| `speed_reduction_factor` | `0.3` | Steering-proportional fallback before first odometry |
 
 ### Mission-tuned defaults (set in bringup.launch.py)
 
-| Mission | max_speed | lookahead | speed_reduction_factor |
-|---------|-----------|-----------|----------------------|
-| autocross | 7.0 m/s | 3.5 m | 0.3 |
-| acceleration | 13.0 m/s | 8.0 m | 0.2 |
-| skidpad | 4.5 m/s | 3.0 m | 0.6 |
+| Mission | max_speed | lookahead |
+|---------|-----------|-----------|
+| autocross / trackdrive | 8.0 m/s | 5.0 m |
+| peanut | 6.0 m/s | 3.5 m |
+| acceleration | 13.0 m/s | 8.0 m |
+| skidpad | 4.5 m/s | 3.0 m |
 
 ### Subscriptions
 

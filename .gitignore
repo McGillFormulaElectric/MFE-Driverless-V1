@@ -29,5 +29,15 @@
 # folders
 /log
 /CMakeFiles
-**/resource
 # rosbags and database instances
+
+# Obsidian workspace state — churns on every open
+docs/.obsidian/
+
+# Local-only dev tooling: sim test harness, result viz, benchmarks, assistant files (not part of the stack)
+/.claude/
+/CLAUDE.md
+/docs/agent_knowledge_base.md
+/tools/validation/
+/tools/lidar_cone_detector/
+/ros2/src/mfe_perception/lidar_cone_detector/bench/

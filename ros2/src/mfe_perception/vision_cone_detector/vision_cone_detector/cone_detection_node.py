@@ -35,8 +35,15 @@ class ConeDetectionNode(Node):
 
         self.declare_parameter('depth_callback', False)
         self.declare_parameter('camera_frame', 'camera_base')
+        # Pinhole back-projection yields OPTICAL-convention coords (X right, Y down,
+        # Z forward). If camera_frame is a ROS body-convention frame (X forward,
+        # Y left, Z up) — e.g. the EUFS sim's zed_depth_camera_frame, whose
+        # "optical" TF joints are identity-rotated — set output_body_frame so the
+        # published cone locations match the frame they are stamped with.
+        self.declare_parameter('output_body_frame', False)
 
         self.camera_frame = self.get_parameter("camera_frame").value
+        self.output_body_frame = self.get_parameter("output_body_frame").value
 
         # Declare and get model path parameter
         self.declare_parameter("model_path", "yolo11n.pt")  # default to yolo11n.pt if none found
@@ -115,12 +122,25 @@ class ConeDetectionNode(Node):
         """
         frame = self._imgmsg_to_bgr(msg)
 
+        # Enqueue (frame, capture_stamp): the stamp travels with the frame so
+        # detections are published with the CAPTURE time, not the publish time —
+        # stamp-aware TF consumers then place cones where the car was when the
+        # image was taken, cancelling YOLO inference latency (100-300 ms on CPU
+        # ≈ 1-2 m of car motion at speed).
+        # Non-blocking enqueue: a ROS callback must never block the executor.
+        item = (frame, msg.header.stamp)
         try:
-            self.frame_queue.put(frame, timeout=3.0)
+            self.frame_queue.put_nowait(item)
             self.get_logger().debug(f"Enqueued frame, queue size={self.frame_queue.qsize()}")
         except queue.Full:
-            self.frame_queue.get_nowait()
-            self.frame_queue.put_nowait(frame)
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.frame_queue.put_nowait(item)
+            except queue.Full:
+                pass
             self.get_logger().debug("Frame queue full; dropped oldest frame and enqueued new one")
 
         return
@@ -134,19 +154,14 @@ class ConeDetectionNode(Node):
 
         try:
             data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
-            depth = data.view(np.float32).reshape(msg.height, msg.width) if msg.encoding == '32FC1' \
-                else data.view(np.uint16).reshape(msg.height, msg.width).astype(np.float32)
+            if msg.encoding == '32FC1':
+                depth = data.view(np.float32).reshape(msg.height, msg.width)
+            else:
+                # 16UC1 (e.g. D435i): integer millimeters -> meters
+                depth = data.view(np.uint16).reshape(msg.height, msg.width).astype(np.float32) / 1000.0
         except Exception:
             self.get_logger().error("Failed to convert depth image")
             return
-
-        # If depth is uint16 (common for depth sensors, e.g. D435i 16UC1), convert mm -> meters.
-        if depth.dtype == np.uint16:
-            depth = depth.astype(np.float32) / 1000.0  # mm -> meters
-        elif depth.dtype == np.float32:
-            depth = depth
-        else:
-            depth = depth.astype(np.float32)
 
         self.latest_depth = depth
         return
@@ -184,13 +199,13 @@ class ConeDetectionNode(Node):
         """
         while rclpy.ok():
             try:
-                frame = self.frame_queue.get()   # blocking get 
+                item = self.frame_queue.get()   # blocking get
             except queue.Empty:
                 continue
-            if frame is None:
+            if item is None:
                 break
 
-            yield frame
+            yield item   # (frame, capture_stamp)
 
     def object_predicting(self) -> None:
         """
@@ -200,22 +215,23 @@ class ConeDetectionNode(Node):
 
         self.get_logger().info("object_predicting thread started")
     
-        for frame in self.frame_generator():
+        for frame, capture_stamp in self.frame_generator():
             self.get_logger().debug("Pulled frame from generator")
 
-            # run object detection
-            detections = self.model(frame)
+            # run object detection using the configured confidence/IoU thresholds
+            detections = self.model(frame, conf=self.conf, iou=self.iou, verbose=False)
 
             annotated_frame = detections[0].plot()
 
-            # render bounding boxes
-            self.render_detection(frame, detections)
-
-            # process detections: compute centres, colours, point clouds, and publish
+            # process detections FIRST: mean-colour ROI sampling must read the clean
+            # frame, before render_detection draws green boxes into it
             try:
-                self.process_and_publish_detections(detections, frame, self.latest_depth)
+                self.process_and_publish_detections(detections, frame, self.latest_depth, capture_stamp)
             except Exception as e:
                 self.get_logger().error(f"Error processing detections: {e}")
+
+            # render bounding boxes (mutates frame — visualisation only)
+            self.render_detection(frame, detections)
 
             # publish annotated image
             image_msg = Image()
@@ -232,7 +248,8 @@ class ConeDetectionNode(Node):
         return
     
 
-    def process_and_publish_detections(self, detections, frame: np.ndarray, depth_frame: np.ndarray):
+    def process_and_publish_detections(self, detections, frame: np.ndarray, depth_frame: np.ndarray,
+                                       capture_stamp=None):
         """
         From detections produced by YOLO, compute per-object centre (x,y,z), average colour,
         object pixel clusters as point cloud (x,y,z in pixel coords + depth), and publish:
@@ -246,8 +263,21 @@ class ConeDetectionNode(Node):
         all_cluster_points = []
         all_cluster_colors = []
 
-        # YOLO class index → mfe_msgs/Cone color constant (matches FSOCO training labels)
-        _YOLO_CLS_TO_CONE = {0: Cone.BLUE, 1: Cone.YELLOW, 2: Cone.ORANGE_BIG, 3: Cone.ORANGE_SMALL}
+        # Depth may arrive at a different resolution than RGB (e.g. decimated depth
+        # stream). Scale RGB pixel coords into depth-image coords before indexing.
+        d_sy = d_sx = 1.0
+        dh = dw = 0
+        if depth_frame is not None:
+            dh, dw = depth_frame.shape[:2]
+            fh, fw = frame.shape[:2]
+            d_sy, d_sx = dh / fh, dw / fw
+
+        # YOLO class index → mfe_msgs/Cone color constant.
+        # Trained model classes (best.pt): 0=blue_cone, 1=yellow_cone,
+        # 2=orange_cone (SMALL), 3=large_orange_cone (BIG), 4=unknown_cone.
+        # (2/3 were swapped before — small oranges came out as ORANGE_BIG, which
+        # pollutes the finish detector's orange-gate clustering.)
+        _YOLO_CLS_TO_CONE = {0: Cone.BLUE, 1: Cone.YELLOW, 2: Cone.ORANGE_SMALL, 3: Cone.ORANGE_BIG}
 
         centres = []       # list of (x,y,z) — metric 3D or pixel sentinel
         centre_colors = [] # list of Cone color ints (from YOLO class) — for Track msg
@@ -291,13 +321,17 @@ class ConeDetectionNode(Node):
                 z = float('nan')
                 if depth_frame is not None:
                     try:
-                        # depth value at centre
-                        depth_val = float(depth_frame[cy, cx])
+                        # depth value at centre (scaled into depth-image coords)
+                        dcy = min(dh - 1, int(cy * d_sy))
+                        dcx = min(dw - 1, int(cx * d_sx))
+                        depth_val = float(depth_frame[dcy, dcx])
 
-                        # if depth is zero or nan, attempt average over ROI
-                        if depth_val == 0 or np.isnan(depth_val):
-                            valid = depth_frame[y1:y2, x1:x2]
-                            valid = valid[valid > 0]
+                        # if depth is zero, nan or inf (Gazebo publishes +inf for
+                        # no-return pixels), attempt average over ROI
+                        if depth_val == 0 or not math.isfinite(depth_val):
+                            valid = depth_frame[int(y1 * d_sy):max(int(y2 * d_sy), int(y1 * d_sy) + 1),
+                                                int(x1 * d_sx):max(int(x2 * d_sx), int(x1 * d_sx) + 1)]
+                            valid = valid[np.isfinite(valid) & (valid > 0)]
                             if valid.size > 0:
                                 depth_val = float(np.mean(valid))
                             else:
@@ -309,10 +343,15 @@ class ConeDetectionNode(Node):
                         z = float('nan')
 
                 # Pinhole back-projection: pixel (cx,cy) + depth z (meters) -> 3D camera frame (meters)
-                if self.camera_info_received and depth_frame is not None and not math.isnan(z) and z > 0.0:
+                # isfinite, not just !isnan: +inf depth (Gazebo no-return) back-projects
+                # to inf/NaN coordinates (0 * inf = NaN) that crash consumers downstream
+                if self.camera_info_received and depth_frame is not None and math.isfinite(z) and z > 0.0:
                     X = (cx - self.cx_c) * z / self.fx
                     Y = (cy - self.cy_c) * z / self.fy
                     Z = z
+                    if self.output_body_frame:
+                        # optical (X right, Y down, Z fwd) → ROS body (X fwd, Y left, Z up)
+                        X, Y, Z = Z, -X, -Y
                     frame_mode = self.camera_frame
                 else:
                     # No depth: encode pixel centre as (cx, cy) and use z=-1 sentinel.
@@ -340,9 +379,11 @@ class ConeDetectionNode(Node):
                 py = grid_y.ravel()
                 pz = np.zeros_like(px, dtype=np.float32)
 
-                # get depth per sampled pixel if available
+                # get depth per sampled pixel if available (scaled into depth coords)
                 if depth_frame is not None:
-                    depth_vals = depth_frame[py, px].astype(np.float32)
+                    dpy = np.minimum(dh - 1, (py * d_sy).astype(int))
+                    dpx = np.minimum(dw - 1, (px * d_sx).astype(int))
+                    depth_vals = depth_frame[dpy, dpx].astype(np.float32)
                     depth_vals[depth_vals == 0] = np.nan
                     pz = depth_vals
                 else:
@@ -381,7 +422,9 @@ class ConeDetectionNode(Node):
         try:
             track_msg = Track()
             cones_list = []
-            now = self.get_clock().now().to_msg()
+            # Cones are stamped with the image CAPTURE time so stamp-aware TF
+            # lookups place them where the car was when the camera saw them.
+            now = capture_stamp if capture_stamp is not None else self.get_clock().now().to_msg()
             for (cx_3d, cy_3d, cz_3d), cone_color, fid in zip(centres, centre_colors, centre_frames):
                 cmsg = Cone()
                 cmsg.header.stamp = now
