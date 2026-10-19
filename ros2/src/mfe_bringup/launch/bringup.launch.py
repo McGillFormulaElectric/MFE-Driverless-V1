@@ -403,14 +403,14 @@ def generate_launch_description():
             'max_deceleration': 10.0,
         }
         if mission_str == 'skidpad':
-            params.update({'max_speed': 4.5, 'lookahead_distance': 3.0, 'speed_reduction_factor': 0.6})
+            params.update({'max_speed': 4.5, 'lookahead_distance': 3.0})
         elif mission_str == 'acceleration':
-            params.update({'max_speed': 13.0, 'lookahead_distance': 8.0, 'speed_reduction_factor': 0.2})
+            params.update({'max_speed': 13.0, 'lookahead_distance': 8.0})
         elif mission_str == 'peanut':
             # Tighter lookahead + lower speed for the figure-8 crossing pinch
-            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5, 'speed_reduction_factor': 0.5})
+            params.update({'max_speed': 6.0, 'lookahead_distance': 3.5})
         else:  # autocross / trackdrive
-            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0, 'speed_reduction_factor': 0.3,
+            params.update({'max_speed': 8.0, 'lookahead_distance': 5.0,
                            'speed_smooth_window': int(os.environ.get('SPEED_SMOOTH', '5'))})
         max_speed_override = float(context.launch_configurations.get('max_speed', '0.0'))
         if max_speed_override > 0.0:

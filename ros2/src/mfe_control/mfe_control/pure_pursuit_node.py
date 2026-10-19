@@ -38,7 +38,6 @@ _PARAM_DEFAULTS = {
     'path_end_margin_m': 1.5,
     'lookahead_waypoints': 40,        # corner-speed scan length (points)
     'speed_smooth_window': 1,         # moving-average window for the speed scan only; 1 = off
-    'speed_reduction_factor': 0.3,    # speed fallback when odometry speed is unknown
     'control_rate_hz': 50.0,
     'steer_pt2_tau': 0.05,
     'steer_pt2_zeta': 0.7,
@@ -88,7 +87,6 @@ class PurePursuitNode(Node):
         self._path_end_margin = p['path_end_margin_m']
         self._lookahead_waypoints = p['lookahead_waypoints']
         self._speed_smooth_window = max(1, int(p['speed_smooth_window']))
-        self._speed_reduction_factor = p['speed_reduction_factor']
         self._speed_kp = p['speed_kp']
         self._speed_ki = p['speed_ki']
         self._speed_kb = p['speed_kb']
