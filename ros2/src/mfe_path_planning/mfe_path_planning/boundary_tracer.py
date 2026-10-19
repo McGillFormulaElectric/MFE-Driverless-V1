@@ -1,9 +1,7 @@
-"""Left/right boundary tracing for cones without colour (LiDAR-only). Pure numpy/scipy, no ROS.
+"""Left/right boundary tracing for uncoloured LiDAR cones. Pure numpy/scipy, no ROS.
 
-1. Passed cones are labelled by the side of the driven trajectory they lie on; votes persist (`_labels`).
-2. Ahead of the car both walls grow together from a start gate, zipper-style, with beam search over
-   plausible cone spacing, wall turning, track width, gate rotation, no wall crossing and persistent labels.
-3. The centreline is the sequence of gate midpoints. It ends at the last gate, so nothing is extrapolated.
+Cones are labelled by the side of the driven path they lie on. Both walls then grow from a start gate
+(beam search over spacing, turn, width, gate skew and no wall crossing). The centreline is the sequence of gate midpoints.
 """
 from __future__ import annotations
 
@@ -17,46 +15,43 @@ from scipy.spatial import cKDTree
 @dataclass
 class TracerParams:
     # Labelling passed cones from the driven trajectory
-    label_radius: float = 10.0     # only (re)label cones this close to the car
-    lat_max: float = 4.0           # max |offset| from the driven path: half the widest track (~5 m) + car off-centre
+    label_radius: float = 10.0
+    lat_max: float = 4.0           # half the widest track (~5 m) plus car off-centre
     lat_min: float = 0.3           # a cone on the driven line itself has no side
-    trail_window: float = 40.0     # metres of recent trajectory used for labelling
-    trail_step: float = 0.5        # breadcrumb spacing
-    assoc_radius: float = 0.7      # a cone within this of a labelled position is the same cone
+    trail_window: float = 40.0
+    trail_step: float = 0.5
+    assoc_radius: float = 0.7
     # Wall growth
-    start_back: float = 5.0        # start gate this far behind the car along the driven path
-    d_min: float = 0.5             # cone spacing along a wall: FS walls are 1-5 m, allow one missed cone
-    d_max: float = 8.0             # up to ~2 consecutive missed cones; larger steps pay the spacing cost
-    turn_max_deg: float = 110.0    # max wall heading change per cone: the inner wall of a square corner turns 90 deg
-    back_frac: float = 0.5         # a wall step may point back against the track direction up to this fraction of its
-                                   # length: the inner wall of a hairpin turns sideways/back past the apex
-    local_dir: bool = True         # track direction for the step checks also follows the walls' last steps
-    w_min: float = 2.4             # gate length bounds: FS minimum track width 3 m, minus map noise
+    start_back: float = 5.0
+    d_min: float = 0.5
+    d_max: float = 8.0             # up to ~2 consecutive missed cones on an FS wall
+    turn_max_deg: float = 110.0    # inner wall of a square corner turns 90 deg
+    back_frac: float = 0.5         # the inner wall of a hairpin can step sideways or back past the apex
+    local_dir: bool = True
+    w_min: float = 2.4             # FS minimum track width 3 m, minus map noise
     w_max: float = 7.0
-    w_rel_max: float = 1.7         # ... and at most this times the recent gate widths (a gate far wider than its
-                                   # predecessors reaches a cone of the next lane's wall, not this one's)
-    gate_skew_max_deg: float = 75.0  # max angle between a gate and the track normal; a wall that jumps to
-                                     # the other wall makes a gate along the track (~90 deg)
-    dir_span: float = 3.0          # track direction = centreline direction over the last this-many metres
-    infer_r: float = 3.5           # an unlabelled cone this close to a labelled one ...
-    infer_ratio: float = 1.6       # ... and this much closer than to any opposite-side labelled one takes its side
-    gate_clear: float = 0.6        # no cone within this of a gate's interior (cones are never mid-track)
-    across_max: float = 0.65        # max sideways step towards the other wall, in track widths
-    opp_clear: float = 2.0         # a new wall cone must keep this distance from every opposite-wall cone
-    max_length: float = 35.0       # stop growing once the corridor is this long (planning horizon)
+    w_rel_max: float = 1.7         # and at most this times the recent gate widths
+    gate_skew_max_deg: float = 75.0  # a wall that jumps to the other wall makes a gate along the track (~90 deg)
+    dir_span: float = 3.0
+    infer_r: float = 3.5
+    infer_ratio: float = 1.6
+    gate_clear: float = 0.6        # cones are never mid-track
+    across_max: float = 0.65       # max sideways step towards the other wall, in track widths
+    opp_clear: float = 2.0
+    max_length: float = 35.0       # planning horizon
     max_steps: int = 60
-    branch: int = 2                # beam search: candidates tried per step
+    branch: int = 2
     beam_width: int = 4
     branch_both: bool = True       # also branch on the other wall's best step (hairpin tips)
-    prune_margin: float = 1.5      # drop branches this much worse than the best one
-    branch_margin: float = 0.5     # ... and only on alternatives costing at most this much more than the best
-    progress_gain: float = 0.3     # beam ranking: cost - gain * corridor length
-    length_tol: float = 2.0        # final pick: lowest mean cost among corridors within this of the longest
-    # step cost weights (dimensionless terms, each ~1 at its limit)
+    prune_margin: float = 1.5
+    branch_margin: float = 0.5
+    progress_gain: float = 0.3
+    length_tol: float = 2.0
+    # Step cost weights (dimensionless, each ~1 at its limit)
     w_angle: float = 0.6
     w_spacing: float = 1.0
     w_width: float = 1.0
-    w_rot: float = 1.0             # gate skew against the track normal
+    w_rot: float = 1.0
     # output
     resample: float = 0.5
 
@@ -67,7 +62,7 @@ class TraceResult:
     left: np.ndarray               # Kx2 left wall (driving order)
     right: np.ndarray              # Kx2 right wall
     horizon: float                 # path length ahead of the car (m)
-    labels: np.ndarray             # per input cone: +1 left, -1 right, 0 unassigned (persistent + this cycle's walls)
+    labels: np.ndarray             # per input cone: +1 left, -1 right, 0 unassigned
     debug: dict = field(default_factory=dict)
 
 
@@ -94,12 +89,11 @@ def _angles(a, V) -> np.ndarray:
 class BoundaryTracer:
     def __init__(self, params: TracerParams | None = None):
         self.p = params or TracerParams()
-        self._trail: list = []             # driven positions, >= trail_step apart
-        self._trail_s: list = []           # cumulative distance at each breadcrumb
-        self._lab_xy = np.zeros((0, 2))    # positions of cones with side votes
-        self._lab_votes = np.zeros(0)      # sum of +1 (left) / -1 (right) votes
+        self._trail: list = []
+        self._trail_s: list = []
+        self._lab_xy = np.zeros((0, 2))
+        self._lab_votes = np.zeros(0)
 
-    # ------------------------------------------------------------------ trajectory
     def add_pose(self, pos) -> None:
         pos = np.asarray(pos, dtype=float)
         if not self._trail:
@@ -109,14 +103,13 @@ class BoundaryTracer:
         step = float(np.linalg.norm(pos - self._trail[-1]))
         if step >= self.p.trail_step:
             self._trail.append(pos.copy()); self._trail_s.append(self._trail_s[-1] + step)
-            # keep memory bounded: only the recent window is used
             if len(self._trail) > 4 * int(self.p.trail_window / self.p.trail_step) + 50:
                 k = len(self._trail) // 2
                 self._trail = self._trail[k:]
                 self._trail_s = self._trail_s[k:]
 
     def _recent_trail(self, car_pos):
-        """Recent driven polyline ending at the car (window of trail_window metres)."""
+        """Recent driven polyline ending at the car."""
         if not self._trail:
             return np.asarray(car_pos, float)[None]
         s = np.asarray(self._trail_s)
@@ -126,7 +119,6 @@ class BoundaryTracer:
             T = np.vstack([T, car_pos])
         return T
 
-    # ------------------------------------------------------------------ labels
     def _labels_for(self, xy: np.ndarray) -> np.ndarray:
         """Persistent side-vote sum for each cone in xy (0 if never labelled)."""
         out = np.zeros(len(xy))
@@ -148,7 +140,7 @@ class BoundaryTracer:
             j = np.zeros(len(xy), int)
         for k in np.flatnonzero(hit):
             self._lab_votes[j[k]] += side[k]
-            self._lab_xy[j[k]] = xy[k]           # follow the map's latest estimate
+            self._lab_xy[j[k]] = xy[k]
         new = ~hit
         if new.any():
             self._lab_xy = np.vstack([self._lab_xy, xy[new]])
@@ -173,7 +165,6 @@ class BoundaryTracer:
             A = T[:-1]; D = T[1:] - A
             L2 = np.einsum('ij,ij->i', D, D).clip(1e-9)
             C = xy[near]
-            # nearest point on each trail segment, per cone (cones x segments)
             W = C[:, None, :] - A[None, :, :]
             u = np.clip(np.einsum('kij,ij->ki', W, D) / L2[None, :], 0.0, 1.0)
             P = A[None, :, :] + u[..., None] * D[None, :, :]
@@ -192,7 +183,6 @@ class BoundaryTracer:
         m = sides != 0
         self._vote(xy[near[m]], sides[m])
 
-    # ------------------------------------------------------------------ planning
     def plan(self, xy: np.ndarray, car_pos, car_dir) -> TraceResult | None:
         p = self.p
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
@@ -212,7 +202,6 @@ class BoundaryTracer:
             self.debug["reason"] = "no start gate (need a cone on each side near the car)"
             return None
         iL, iR, tdir = start
-        # per-cycle precomputation: neighbours within wall spacing, distance to each labelled side
         tree = cKDTree(xy)
         self._nbrs = [np.asarray(n, dtype=int) for n in tree.query_ball_point(xy, p.d_max)]
         self._clear_lab = {}
@@ -234,8 +223,8 @@ class BoundaryTracer:
         return TraceResult(path=path, left=xy[L], right=xy[R], horizon=horizon, labels=labels, debug=self.debug)
 
     def _infer_labels(self, xy, lab):
-        """Unlabelled cones (e.g. cones beside the start line that were never mapped on the way out, first seen
-        when the lap closes) take the side of the clearly nearest labelled cone. One hop only, no chaining."""
+        """Give unlabelled cones (e.g. beside the start line, first seen when the lap closes) the side of
+        the clearly nearest labelled cone. One hop only."""
         p = self.p
         un = np.flatnonzero(lab == 0)
         Lp, Rp = xy[lab > 0], xy[lab < 0]
@@ -249,8 +238,7 @@ class BoundaryTracer:
         return out
 
     def _start_gate(self, xy, lab, car_pos, car_dir):
-        """Gate (left cone, right cone) a few metres behind the car on the driven path, from labelled cones;
-        before any cone is labelled, the nearest cone on each side of the car in its own frame."""
+        """(left, right) cone gate a few metres behind the car on the driven path."""
         p = self.p
         T = self._recent_trail(car_pos)
         if len(T) >= 3:
@@ -272,7 +260,7 @@ class BoundaryTracer:
         lat = rel[:, 0] * (-tdir[1]) + rel[:, 1] * tdir[0]
         out = []
         for side in (1, -1):
-            # labelled cones near the reference point; unlabelled cones only if none is labelled on that side
+            # labelled cones first; unlabelled ones only if no labelled cone is on that side
             cand = (lab == side) & (d <= p.lat_max + 1.0) & (fwd > -3.0) & (fwd < 4.0)
             if not cand.any():
                 cand = (lab == 0) & (np.sign(lat) == side) & (np.abs(lat) >= p.lat_min) & \
@@ -285,10 +273,9 @@ class BoundaryTracer:
         return iL, iR, tdir
 
     def _grow(self, xy, lab, iL, iR, tdir):
-        """Beam search over zipper growth: each state adds one cone to the wall whose best new gate is
-        shorter; branches over that wall's best few candidates. The longest consistent corridor wins
-        (lowest mean step cost among the near-longest), so a wrong branch that dead-ends (gates widen
-        past w_max, walls cross) loses to the branch that keeps forming valid gates."""
+        """Beam search over zipper growth. Each state adds one cone to the wall whose best new gate is
+        shorter. The longest consistent corridor wins, so branches that dead-end (widths past w_max,
+        crossing walls) lose."""
         p = self.p
         turn_max = math.radians(p.turn_max_deg)
         rot_max = math.radians(p.gate_skew_max_deg)
@@ -310,15 +297,13 @@ class BoundaryTracer:
                 if not avail or st["length"] >= p.max_length:
                     done.append(st)
                     continue
-                # zipper: advance the wall whose best new gate is shorter (keeps gates across the track)
                 side = min(avail, key=lambda sd: opts[sd][0][2])
                 c0 = opts[side][0][1]
                 for k, cost, gw in opts[side]:
-                    if cost > c0 + p.branch_margin:   # branch only where the choice is ambiguous
+                    if cost > c0 + p.branch_margin:
                         break
                     grown.append(self._extend(xy, st, side, k, cost, gw))
-                # also let the other wall move first: at a hairpin tip the shortest new gate can come from the
-                # inner wall stepping onto the outer wall's next cone, before the outer wall claims it
+                # the other wall may also move first (hairpin tips)
                 if p.branch_both and opts[-side]:
                     k, cost, gw = opts[-side][0]
                     grown.append(self._extend(xy, st, -side, k, cost, gw))
@@ -329,13 +314,14 @@ class BoundaryTracer:
             k0 = grown[0]["cost"] - p.progress_gain * grown[0]["length"]
             for st in grown:
                 if st["cost"] - p.progress_gain * st["length"] > k0 + p.prune_margin:
-                    break   # branches that reconverge on the same wall heads: keep the cheaper
+                    break
                 key = (tuple(st["walls"][1][-2:]), tuple(st["walls"][-1][-2:]))
                 if key not in seen:
                     seen.add(key)
                     beam.append(st)
                 if len(beam) >= p.beam_width:
                     break
+            # branches reconverging on the same wall heads are merged above, keeping the cheaper one
         done.extend(beam)
         Lmax = max(st["length"] for st in done)
         good = [st for st in done if st["length"] >= Lmax - p.length_tol]
@@ -354,8 +340,8 @@ class BoundaryTracer:
         m_new = (xy[hl] + xy[hr]) / 2
         mids = st["mids"] + [m_new]
         length = st["length"] + float(np.linalg.norm(m_new - m_old))
-        # track direction: centreline direction over the last dir_span metres (zipper gates are diagonal by
-        # design, so the gate normal is too noisy), blended with the start direction while the centreline is short
+        # Track direction: centreline over the last dir_span metres. The gate normal is too noisy,
+        # since zipper gates are diagonal. Blend with the start direction while the centreline is short.
         k = len(mids) - 1
         acc = 0.0
         while k > 0 and acc < st["span"]:
@@ -382,8 +368,7 @@ class BoundaryTracer:
             s_ref = 3.0
         wr = sorted(widths[-6:])
         w_ref = wr[len(wr) // 2]
-        # track direction at the heads: the centreline direction lags in a hairpin (the walls have already turned),
-        # so blend it with the directions of both walls' last steps
+        # Blend the centreline direction with both walls' last steps: the centreline lags in a hairpin.
         if p.local_dir:
             u = []
             for Wk in (walls[1], walls[-1]):
@@ -396,7 +381,7 @@ class BoundaryTracer:
                 nt = float(np.hypot(tl[0], tl[1]))
                 if nt > 0.3:
                     tdir = tl / nt
-        nrm = np.array([-tdir[1], tdir[0]])                  # track normal, pointing left
+        nrm = np.array([-tdir[1], tdir[0]])
         nb = self._nbrs[W[-1]]
         cand = nb[~used[nb] & (lab[nb] != -side)]
         if len(cand) == 0:
@@ -405,15 +390,15 @@ class BoundaryTracer:
         V = P - h
         dc = np.hypot(V[:, 0], V[:, 1])
         ang = _angles(wdir, V)
-        Gn = (P - ho) if side == 1 else (ho - P)              # new gate, left minus right
+        Gn = (P - ho) if side == 1 else (ho - P)
         gw = np.hypot(Gn[:, 0], Gn[:, 1])
         rot = _angles(nrm, Gn)
-        # cones known to be on the other wall: its recent traced cones and every cone labelled for that side
+        # Cones known to be on the other wall: its recent traced cones and every cone labelled for it.
         Oxy = xy[O[-8:]]
         clear = np.minimum(np.min(np.hypot(P[:, None, 0] - Oxy[None, :, 0], P[:, None, 1] - Oxy[None, :, 1]), axis=1),
                            self._clear_lab[-side][cand])
-        # a wall step does not cross the track: its sideways motion towards the other wall stays well
-        # below a track width (a step onto the other wall moves a full width across)
+        # A wall step must not cross the track: sideways motion towards the other wall stays
+        # well below a track width.
         across = -side * (V @ nrm)
         ok = ((dc >= p.d_min) & (ang <= turn_max) & (V @ tdir >= -p.back_frac * dc) & (gw >= p.w_min) & (gw <= p.w_max) & (gw <= p.w_rel_max * w_ref)
               & (rot <= rot_max) & (clear >= p.opp_clear) & (across <= p.across_max * w_ref))
@@ -426,16 +411,15 @@ class BoundaryTracer:
         out = []
         for i in np.flatnonzero(ok)[np.argsort(cost[ok])]:
             c = P[i]
-            # the new wall segment must not cross the other wall
             if any(_seg_intersect(h, c, xy[O[j]], xy[O[j + 1]]) for j in range(max(0, len(O) - 6), len(O) - 1)):
                 continue
-            # free track: the area the new step adds (triangle head, candidate, other head) holds no cone;
-            # otherwise the candidate is a cone behind the real wall (e.g. a neighbouring section's wall)
+            # Free track: the triangle the step adds holds no cone. Otherwise the candidate sits
+            # behind the real wall, e.g. a neighbouring section's wall.
             near = np.concatenate([nb, self._nbrs[O[-1]]])
             if self._cone_inside(xy, near, k_excl=cand[i], tri=(h, c, ho)):
                 continue
-            # ... and no cone sits on the new gate itself (a gate that grazes a cone crosses a wall)
-            # (the own wall's head is exempt: with the other wall lagging at a bend the gate passes through it)
+            # No cone on the new gate: it would graze a cone and cross a wall. The own wall's head is
+            # exempt, since at a bend the other wall lags and the gate passes through it.
             if self._cone_on_segment(xy, near[near != W[-1]], c, ho, p.gate_clear):
                 continue
             out.append((int(cand[i]), float(cost[i]), float(gw[i])))
@@ -456,7 +440,7 @@ class BoundaryTracer:
 
     @staticmethod
     def _cone_inside(xy, near, k_excl, tri, margin=0.3) -> bool:
-        """Any cone (searched among `near`, the head's neighbours) strictly inside triangle tri?"""
+        """Any cone (among `near`) strictly inside triangle tri?"""
         a, b, c = tri
         lo = np.minimum(np.minimum(a, b), c) - 0.1
         hi = np.maximum(np.maximum(a, b), c) + 0.1
@@ -480,7 +464,6 @@ class BoundaryTracer:
         p = self.p
         if len(mids) < 2:
             return None
-        # drop near-duplicate midpoints
         keep = [0]
         for i in range(1, len(mids)):
             if np.linalg.norm(mids[i] - mids[keep[-1]]) > 0.3:
@@ -488,12 +471,11 @@ class BoundaryTracer:
         M = mids[keep]
         if len(M) < 2:
             return None
-        # smooth interior points (zipper midpoints alternate slightly)
+        # Smooth interior points: zipper midpoints alternate slightly.
         if len(M) >= 3:
             S = M.copy()
             S[1:-1] = 0.25 * M[:-2] + 0.5 * M[1:-1] + 0.25 * M[2:]
             M = S
-        # project the car onto the midpoint polyline; keep what is ahead
         A = M[:-1]; D = M[1:] - A
         L2 = np.einsum('ij,ij->i', D, D).clip(1e-9)
         u = np.clip(((car_pos - A) * D).sum(1) / L2, 0, 1)

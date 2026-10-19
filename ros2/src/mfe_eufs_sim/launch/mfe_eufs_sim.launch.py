@@ -6,9 +6,6 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        # ---------------------------------------------------------------- #
-        #  Launch arguments                                                  #
-        # ---------------------------------------------------------------- #
         DeclareLaunchArgument(
             'use_sim_cones_directly',
             default_value='true',
@@ -28,10 +25,7 @@ def generate_launch_description():
             description='Maximum steering angle in degrees.'
         ),
 
-        # ---------------------------------------------------------------- #
-        #  Drivetrain (4x AMK DD5-14-10-POW in-hub) — see drivetrain_model.py
-        #  for which of these are real datasheet numbers vs. placeholders.
-        # ---------------------------------------------------------------- #
+        # Vehicle numbers are placeholders; see drivetrain_model.py.
         DeclareLaunchArgument('gear_ratio', default_value='14.0',
             description='Motor:wheel reduction ratio.'),
         DeclareLaunchArgument('wheel_radius_m', default_value='0.2525',
@@ -47,9 +41,6 @@ def generate_launch_description():
         DeclareLaunchArgument('regen_braking_enabled', default_value='true',
             description='Whether braking blends in-hub motor regen before friction braking.'),
 
-        # ---------------------------------------------------------------- #
-        #  Bridge node                                                       #
-        # ---------------------------------------------------------------- #
         Node(
             package='mfe_eufs_sim',
             executable='bridge_node',
@@ -71,15 +62,8 @@ def generate_launch_description():
             }],
         ),
 
-        # ---------------------------------------------------------------- #
-        #  Xsens MTi-670G noise injector                                      #
-        #                                                                    #
-        #  /ground_truth/state_odom (perfect) -> /sim/xsens/state_odom       #
-        #  (noise-corrupted, representative of the real MTi-670G). Point     #
-        #  pose_topic at the noisy topic instead of raw ground truth so sim  #
-        #  runs actually exercise the stack against sensor-realistic pose    #
-        #  estimates. See mfe_eufs_sim/xsens_noise_node.py for the model.    #
-        # ---------------------------------------------------------------- #
+        # Noise-injected pose (Xsens MTi-670G model) for sensor-realistic sim runs.
+        # See xsens_noise_node.py.
         Node(
             package='mfe_eufs_sim',
             executable='xsens_noise_node',
@@ -87,16 +71,8 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ---------------------------------------------------------------- #
-        #  Static TF publishers                                              #
-        #                                                                    #
-        #  These connect the EUFS sim TF frames to the frames the           #
-        #  driverless stack expects. Adjust translations/rotations to        #
-        #  match your physical sensor mounting positions.                    #
-        # ---------------------------------------------------------------- #
-
-        # velodyne frame → base_footprint (LiDAR mounted at car origin)
-        # Args: x y z qx qy qz qw parent child
+        # Static TFs from EUFS frames to the stack frames; adjust to sensor mounting.
+        # LiDAR at car origin, 0.3 m up.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -106,8 +82,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ZED camera frame → base_footprint
-        # D435i sits ~0.3 m ahead of the car centre, ~0.5 m high
+        # Camera: 0.3 m ahead of centre, 0.5 m high.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',

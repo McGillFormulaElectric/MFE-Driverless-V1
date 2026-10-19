@@ -1,34 +1,8 @@
 #!/usr/bin/env python3
 """
-EUFS Sim ↔ MFE Driverless Bridge Node
-
-Translates between EUFS simulator topics and the MFE driverless stack topics.
-
-EUFS Sim → Driverless Stack:
-  /velodyne_points              (PointCloud2)              → /lidar/points_raw
-  /zed/left/image_rect_color    (Image)                    → /camera/image_raw
-  /ground_truth/cones           (eufs_msgs/ConeArrayWithCovariance) → /ground_truth/cones_colored (mfe_msgs/Track)
-                                                                       (accuracy measurement only)
-  /ground_truth/state           (eufs_msgs/CarState)       → /ground_truth/state_odom (nav_msgs/Odometry)
-
-  When use_sim_cones_directly=True (GT bypass mode):
-  /ground_truth/track           (eufs_msgs/ConeArrayWithCovariance) → /planning/cones (mfe_msgs/Track)
-                                                                       BLUE+YELLOW only, world frame, no transform
-
-  When use_sim_cones_directly=False (perception mode):
-  /lidar/points_raw is consumed by lidar_perception_node → /perception/cones_uncolored
-  Bridge does NOT publish to /perception/cones_uncolored — LiDAR detector owns that topic.
-
-Driverless Stack → EUFS Sim:
-  /control/command              (fs_msgs/ControlCommand)   → /cmd (ackermann_msgs/AckermannDriveStamped)
-                                 throttle/brake run through a 4x AMK DD5-14-10-POW in-hub
-                                 drivetrain model (see drivetrain_model.py) to produce a real
-                                 acceleration command — EUFS must be launched with
-                                 commandMode:=acceleration (not velocity) for this to take effect.
-
-NOTE: The EKF node (mfe_state_estimation) publishes to /ekf/output from GPS+IMU data.
-      The bridge publishes ground truth as /ground_truth/state_odom for accuracy measurement only.
-      Do NOT publish to /ekf/output from the bridge — that topic belongs to the EKF node.
+EUFS sim <-> MFE driverless bridge: remaps sensor and ground-truth topics, and converts
+/control/command to /cmd via the drivetrain model (EUFS must run with commandMode:=acceleration).
+Never publishes /ekf/output, which belongs to the EKF node.
 """
 
 import math
@@ -62,7 +36,6 @@ _QOS_EUFS = QoSProfile(
     depth=10,
 )
 
-# MFE driverless stack uses RELIABLE
 _QOS_MFE = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
@@ -71,13 +44,7 @@ _QOS_MFE = QoSProfile(
 
 
 def _cone_array_to_track(msg: ConeArrayWithCovariance, frame_id: str) -> Track:
-    """
-    Convert eufs_msgs/ConeArrayWithCovariance → mfe_msgs/Track.
-
-    EUFS organises cones by color in separate arrays.
-    mfe_msgs/Cone uses a flat list with a uint8 color enum:
-        BLUE=0, YELLOW=1, ORANGE_BIG=2, ORANGE_SMALL=3, UNKNOWN=4
-    """
+    """Flatten the per-colour EUFS cone arrays into one mfe Track."""
     track = Track()
     stamp = msg.header.stamp
 
@@ -106,11 +73,7 @@ def _cone_array_to_track(msg: ConeArrayWithCovariance, frame_id: str) -> Track:
 
 
 def _cone_array_to_pointcloud2(msg: ConeArrayWithCovariance) -> PointCloud2:
-    """
-    Convert all cones in eufs_msgs/ConeArrayWithCovariance to a flat
-    sensor_msgs/PointCloud2 (x,y,z float32) for /perception/cones_uncolored.
-    Used to feed the boundary_extractor without bypassing the fusion step.
-    """
+    """Flatten all cones into an x, y, z float32 PointCloud2."""
     all_cones = (
         list(msg.blue_cones)
         + list(msg.yellow_cones)
@@ -143,12 +106,7 @@ def _cone_array_to_pointcloud2(msg: ConeArrayWithCovariance) -> PointCloud2:
 
 
 def _car_state_to_odometry(msg) -> Odometry:
-    """
-    Convert eufs_msgs/CarState → nav_msgs/Odometry.
-
-    CarState.pose  (PoseWithCovariance) → Odometry.pose
-    CarState.twist (TwistWithCovariance) → Odometry.twist
-    """
+    """Convert eufs CarState to nav_msgs/Odometry (pose and twist)."""
     odom = Odometry()
     odom.header = msg.header
     odom.child_frame_id = msg.child_frame_id
@@ -157,7 +115,7 @@ def _car_state_to_odometry(msg) -> Odometry:
     odom.pose.pose.position.y = msg.pose.pose.position.y
     odom.pose.pose.position.z = msg.pose.pose.position.z
     odom.pose.pose.orientation = msg.pose.pose.orientation
-    # CarState covariance is 6×6 row-major; Odometry.pose.covariance is also 36 floats
+    # Both covariances are 6x6 row-major.
     if len(msg.pose.covariance) == 36:
         odom.pose.covariance = list(msg.pose.covariance)
 
@@ -171,23 +129,19 @@ def _car_state_to_odometry(msg) -> Odometry:
 
 class EufsSimBridge(Node):
 
-    # Physical limits used for control command conversion
-    MAX_STEERING_ANGLE_RAD = math.radians(25.0)   # ±25° max steering
-    MAX_SPEED_MS = 10.0                            # m/s — hard top-speed safety cap
+    MAX_STEERING_ANGLE_RAD = math.radians(25.0)
+    MAX_SPEED_MS = 10.0   # m/s
 
     def __init__(self):
         super().__init__('mfe_eufs_sim_bridge')
 
-        # ---------- Parameters ----------
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('max_steering_deg', 25.0)
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
 
-        # ---------- Drivetrain parameters (4x AMK DD5-14-10-POW in-hub) ----------
-        # See mfe_eufs_sim/drivetrain_model.py docstring for what's a real datasheet
-        # number vs. a placeholder needing confirmation against the real vehicle.
+        # Vehicle numbers are placeholders; see drivetrain_model.py.
         self.declare_parameter('gear_ratio', 14.0)
         self.declare_parameter('wheel_radius_m', 0.2525)
         self.declare_parameter('vehicle_mass_kg', 225.0)
@@ -215,53 +169,41 @@ class EufsSimBridge(Node):
         self._current_speed_ms = 0.0
         self._last_control_time = None
 
-        # ---------- EUFS → MFE: Sensor streams ----------
-        # LiDAR: just a remap — same PointCloud2 type
         self.create_subscription(
             PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
         self._lidar_pub = self.create_publisher(
             PointCloud2, '/lidar/points_raw', _QOS_MFE)
 
-        # Camera: just a remap — same Image type
         self.create_subscription(
             Image, '/zed/left/image_rect_color', self._camera_cb, _QOS_EUFS)
         self._camera_pub = self.create_publisher(
             Image, '/camera/image_raw', _QOS_MFE)
 
-        # ---------- EUFS → MFE: Cones ----------
-        # Ground truth cones (proximity-limited) → /ground_truth/cones_colored
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/cones', self._gt_cones_cb, _QOS_EUFS)
         self._gt_colored_pub = self.create_publisher(
             Track, '/ground_truth/cones_colored', _QOS_MFE)
 
-        # Full track cones (ALL cones, map frame) → /ground_truth/track_colored
-        # Used by boundary_extractor as a color fallback when camera is not running.
+        # Colour fallback for boundary_extractor when the camera is not running.
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
         self._gt_track_colored_pub = self.create_publisher(
             Track, '/ground_truth/track_colored', _QOS_MFE)
 
-        # GT bypass mode: forward full track cones directly to /planning/cones so
-        # the path planner can run without the perception pipeline.
-        # /ground_truth/track gives ALL cones in Gazebo world frame (= TF map frame) —
-        # no coordinate transformation needed; positions are absolute and stable.
+        # GT bypass: forward all track cones to /planning/cones. World frame = TF map frame, no transform needed.
         if self._use_sim_cones_directly:
             self.create_subscription(
                 ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
                 Track, '/planning/cones', _QOS_MFE)
 
-        # ---------- EUFS → MFE: Vehicle state (ground truth for accuracy measurement) ----------
-        # Publishes to /ground_truth/state_odom — NOT to /ekf/output.
-        # The EKF node (mfe_state_estimation) is the sole publisher of /ekf/output.
+        # Not /ekf/output: the EKF node (mfe_state_estimation) owns that topic.
         from eufs_msgs.msg import CarState
         self.create_subscription(
             CarState, '/ground_truth/state', self._car_state_cb, _QOS_EUFS)
         self._odom_pub = self.create_publisher(
             Odometry, '/ground_truth/state_odom', _QOS_MFE)
 
-        # ---------- MFE → EUFS: Control commands ----------
         self.create_subscription(
             ControlCommand, '/control/command', self._control_cb, _QOS_MFE)
         if _ACKERMANN_AVAILABLE:
@@ -283,14 +225,9 @@ class EufsSimBridge(Node):
             f'mass={self._drivetrain.vehicle_mass_kg}kg tire_mu={self._drivetrain.tire_mu} | '
             f'Max steering: {math.degrees(self.MAX_STEERING_ANGLE_RAD):.1f}°')
 
-    # ------------------------------------------------------------------ #
-    #  EUFS → MFE callbacks                                               #
-    # ------------------------------------------------------------------ #
-
     def _lidar_cb(self, msg: PointCloud2) -> None:
         """Remap /velodyne_points → /lidar/points_raw."""
-        # Preserve original frame_id (velodyne) — the lidar_perception_node
-        # uses the frame_id from the message, not a parameter.
+        # Keep the velodyne frame_id: lidar_perception_node reads it from the message.
         self._lidar_pub.publish(msg)
 
     def _camera_cb(self, msg: Image) -> None:
@@ -298,17 +235,7 @@ class EufsSimBridge(Node):
         self._camera_pub.publish(msg)
 
     def _sim_cones_cb(self, msg: ConeArrayWithCovariance) -> None:
-        """
-        Full track cones (GT bypass) → /planning/cones.
-
-        /ground_truth/track gives ALL track cones in Gazebo world frame, which is
-        identical to the TF map frame in a fresh sim (publish_gt_tf:=true sets
-        map→odom→base_footprint from Gazebo). Positions are absolute and stable —
-        no coordinate transformation required.
-
-        Only BLUE and YELLOW boundary cones are forwarded. ORANGE_BIG are
-        start/finish pylons that sit off to the side and confuse the path planner.
-        """
+        """Forward BLUE and YELLOW track cones (world frame = TF map frame) to /planning/cones."""
         track = Track()
         stamp = msg.header.stamp
 
@@ -326,60 +253,42 @@ class EufsSimBridge(Node):
             track.track.append(make_cone(cw.point, Cone.BLUE))
         for cw in msg.yellow_cones:
             track.track.append(make_cone(cw.point, Cone.YELLOW))
-        # ORANGE_BIG omitted — start/finish pylons at off-track positions confuse the planner
+        # ORANGE_BIG (start/finish pylons, off track) confuse the planner.
 
         self._planning_cones_pub.publish(track)
 
     def _gt_cones_cb(self, msg: ConeArrayWithCovariance) -> None:
         """Proximity-limited GT cones → /ground_truth/cones_colored."""
-        # Use actual frame_id (base_footprint) so consumers can transform correctly.
+        # Keep the source frame_id (base_footprint) so consumers can transform.
         track = _cone_array_to_track(msg, msg.header.frame_id)
         self._gt_colored_pub.publish(track)
 
     def _gt_track_cb(self, msg: ConeArrayWithCovariance) -> None:
-        """Full track cones (all, not proximity-limited) → /ground_truth/track_colored.
-        Published in the EUFS track-local frame for debugging/visualisation in Foxglove.
-        NOTE: frame_id='map' here is the Gazebo track-local origin, NOT the TF map frame.
-        """
+        """All track cones → /ground_truth/track_colored. frame_id 'map' is the Gazebo track-local origin, not the TF map frame."""
         track = _cone_array_to_track(msg, msg.header.frame_id)
         self._gt_track_colored_pub.publish(track)
 
     def _car_state_cb(self, msg) -> None:
-        """Convert eufs_msgs/CarState → nav_msgs/Odometry → /ground_truth/state_odom."""
+        """Publish ground-truth odometry and cache speed for the drivetrain model."""
         odom = _car_state_to_odometry(msg)
         self._odom_pub.publish(odom)
-        # Cache current speed for the drivetrain model — ground truth, not the noisy
-        # /sim/xsens/state_odom, since this represents the real car's own wheel-speed
-        # sensing (encoders), not GNSS/INS.
+        # Ground-truth speed stands in for wheel-speed encoders, not the noisy Xsens odom.
         vx = msg.twist.twist.linear.x
         vy = msg.twist.twist.linear.y
         self._current_speed_ms = math.hypot(vx, vy)
-
-    # ------------------------------------------------------------------ #
-    #  MFE → EUFS callbacks                                               #
-    # ------------------------------------------------------------------ #
 
     def _control_cb(self, msg: ControlCommand) -> None:
         """
         Convert fs_msgs/ControlCommand → ackermann_msgs/AckermannDriveStamped.
 
-        EUFS sim must be launched with commandMode:=acceleration — AckermannDrive.acceleration
-        is read directly as the vehicle's longitudinal acceleration command (the plugin's own
-        velocity-tracking loop is bypassed entirely in this mode; see gazebo_ros_race_car_model.cpp,
-        `_des_input.acc = cmd->drive.acceleration`). The acceleration value itself comes from the
-        4x AMK DD5-14-10-POW drivetrain model (mfe_eufs_sim/drivetrain_model.py), not an arbitrary
-        speed target — see that module for the real motor numbers and the assumptions still
-        needing confirmation (gear ratio, vehicle mass, wheel radius, power cap, tire mu).
-
-        throttle ∈ [0,1] → positive acceleration from the motor torque-speed curve
-        brake    ∈ [0,1] → negative acceleration (regen + friction, traction-limited);
-                            overrides throttle when both are nonzero
-        steering ∈ [-1,+1] → steering_angle in radians
+        Requires commandMode:=acceleration: AckermannDrive.acceleration is applied directly, bypassing
+        the plugin's velocity loop (see gazebo_ros_race_car_model.cpp).
+        throttle in [0, 1] gives positive acceleration; brake in [0, 1] gives negative acceleration
+        and overrides throttle. steering in [-1, 1] maps to steering_angle in radians.
         """
         if not _ACKERMANN_AVAILABLE or self._cmd_pub is None:
             return
 
-        # Steering: normalised → radians
         steering_rad = float(msg.steering) * self.MAX_STEERING_ANGLE_RAD
 
         throttle = float(msg.throttle)
@@ -394,8 +303,7 @@ class EufsSimBridge(Node):
         if brake > 0.0:
             accel_ms2 = -self._drivetrain.compute_deceleration(brake, speed_ms)
         elif speed_ms >= self.MAX_SPEED_MS:
-            # Hard top-speed safety cap — independent of pure_pursuit's own mission-tuned
-            # max_speed (which governs throttle, not this bridge's physics output directly).
+            # Hard top-speed cap, independent of pure_pursuit's max_speed.
             accel_ms2 = 0.0
         else:
             accel_ms2 = self._drivetrain.compute_acceleration(throttle, speed_ms, dt)

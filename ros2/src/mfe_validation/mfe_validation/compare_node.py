@@ -1,7 +1,6 @@
-"""Compares the main planner's centerline (ground-truth cones, drives the car) with the validation planner's (LiDAR + SLAM).
+"""Compares the main planner centerline (ground-truth cones) with the validation planner centerline (LiDAR + SLAM).
 
-Both paths are expressed in their own car frame (main: ground-truth pose, validation: SLAM pose) and only points 0-15 m
-ahead are compared, so the metric is how wrong the path the car would see is, independent of the global frame offset.
+Both are expressed in their own car frame and only 0-15 m ahead is compared, so the error is independent of the global frame offset.
 """
 import csv, math, os, time
 import numpy as np

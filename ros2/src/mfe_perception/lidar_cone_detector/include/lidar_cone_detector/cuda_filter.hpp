@@ -1,11 +1,6 @@
-// CUDA point-cloud filters (PASSTHROUGH and VOXELGRID) for lidar_perception_node.
-//
-// Drop-in replacement for the subset of cuda-pcl's cudaFilter API that the node
-// uses. cuda-pcl only ships aarch64 (Jetson) binaries, so this implementation is
-// built from source by CMake for the local GPU (see CMakeLists.txt).
-//
-// Point layout: each point is 4 floats (x, y, z, pad), i.e. pcl::PointXYZ.
-// Device pointers may be plain device or managed memory.
+// CUDA PASSTHROUGH and VOXELGRID filters: drop-in for the cuda-pcl cudaFilter subset the node uses.
+// Built from source because cuda-pcl only ships aarch64 binaries.
+// Points are 4 floats (x, y, z, pad), i.e. pcl::PointXYZ. Device pointers may be device or managed memory.
 #pragma once
 
 #include <cstdio>
@@ -33,13 +28,12 @@ typedef enum {
 typedef struct {
   FilterType_t type;
   // 0=x, 1=y, 2=z
-  // type PASSTHROUGH: keep points with downFilterLimits <= v <= upFilterLimits
-  //                   (inverted when limitsNegative is true)
+  // PASSTHROUGH: keep downFilterLimits <= v <= upFilterLimits (inverted if limitsNegative)
   int dim;
   float upFilterLimits;
   float downFilterLimits;
   bool limitsNegative;
-  // type VOXELGRID: one output point per occupied voxel, located at the centroid
+  // VOXELGRID: one centroid per occupied voxel
   float voxelX;
   float voxelY;
   float voxelZ;
@@ -54,10 +48,8 @@ public:
 
   int set(FilterParam_t param);
 
-  // source: nCount points (4 floats each). output: room for nCount points.
-  // countLeft: host pointer, receives the number of points written to output.
-  // Output order is stable for PASSTHROUGH and voxel-index order for VOXELGRID.
-  // VOXELGRID expects finite input points (the caller strips NaNs).
+  // output needs room for nCount points; countLeft (host) gets the count written.
+  // PASSTHROUGH keeps input order; VOXELGRID outputs in voxel-index order and needs finite input.
   int filter(void *output, unsigned int *countLeft, void *source, unsigned int nCount);
 
 private:

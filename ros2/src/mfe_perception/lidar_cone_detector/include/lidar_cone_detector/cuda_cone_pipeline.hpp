@@ -1,25 +1,6 @@
-// Whole-frame GPU cone pipeline for lidar_perception_node:
-//   [raw PointCloud2 unpack -> drop non-finite -> motion-distortion correction] ->
-//   ROI passthrough -> voxel grid -> RANSAC ground plane -> cone-height band -> Euclidean clustering.
-//
-// runRaw() takes the message's byte buffer as-is, so the host does no conversion at all.
-// Motion correction matches perception::MotionDistortionCorrector: point i of the n finite
-// points (in message order) was captured at t = i/n * scan_duration, and is moved to the scan
-// end by rotating omega*dt about z and translating (vx, vy)*dt, dt = scan_duration - t.
-//
-// Everything up to the cluster labels stays on the GPU; the host gets back the cone-band
-// points and one cluster label per point, and does the per-cluster bounding-box checks
-// (a few dozen clusters, not worth a kernel). One instance owns its CUDA stream and
-// grow-only device buffers, so steady-state frames do no allocation.
-//
-// Ground fit matches the CPU path's pcl::SACSegmentation setup: RANSAC over planes whose
-// normal is within eps_angle of +z (SACMODEL_PERPENDICULAR_PLANE), best = most inliers
-// within ground_threshold, then a least-squares refit on those inliers (what
-// setOptimizeCoefficients(true) does). All hypotheses are scored in parallel.
-//
-// Clustering is connected components over "distance <= cluster_tolerance", the same
-// relation pcl::EuclideanClusterExtraction uses; clusters outside [min_size, max_size]
-// get label -1, as PCL drops them.
+// Whole-frame GPU cone pipeline for lidar_perception_node. See the .cu for stage details.
+// Ground fit mirrors pcl::SACSegmentation (perpendicular-plane RANSAC + refit); clustering
+// mirrors pcl::EuclideanClusterExtraction; clusters outside [min, max] get label -1.
 #pragma once
 
 #include <cstdint>
@@ -28,11 +9,11 @@
 #include "lidar_cone_detector/cuda_filter.hpp"
 
 struct GpuConeParams {
-  float roi_x_min = -1.0f, roi_x_max = 15.0f;   // passthrough on x (sensor frame)
+  float roi_x_min = -1.0f, roi_x_max = 15.0f;
   float leaf = 0.05f;                            // voxel size, m
   float ground_threshold = 0.1f;                 // RANSAC inlier distance, m
   float eps_angle_rad = 0.17453292f;             // max plane-normal tilt from +z (10 deg)
-  int ransac_hypotheses = 256;                   // all scored in parallel
+  int ransac_hypotheses = 256;
   uint32_t seed = 42;                            // fixed: same input -> same plane
   float band_min = 0.005f, band_max = 0.75f;     // height above plane kept as cone body, m
   float y_max = 6.0f;                            // |y| limit, m
@@ -40,13 +21,13 @@ struct GpuConeParams {
   int min_cluster_size = 3, max_cluster_size = 150;
 };
 
-struct GpuMotion {        // ego motion for distortion correction (runRaw only)
+struct GpuMotion {        // ego motion for distortion correction, runRaw only
   bool enable = false;
-  float vx = 0, vy = 0, omega = 0;   // m/s, m/s, rad/s in the sensor frame
+  float vx = 0, vy = 0, omega = 0;   // m/s, m/s, rad/s (sensor frame)
   float scan_duration = 0.1f;        // s
 };
 
-struct GpuConeTiming {  // milliseconds, measured with CUDA events on the pipeline stream
+struct GpuConeTiming {  // ms, CUDA event timings on the pipeline stream
   float h2d = 0, unpack = 0, roi = 0, voxel = 0, ransac = 0, band = 0, cluster = 0, d2h = 0;
 };
 
@@ -67,12 +48,11 @@ public:
   GpuConePipeline(const GpuConePipeline &) = delete;
   GpuConePipeline &operator=(const GpuConePipeline &) = delete;
 
-  // host_xyzp: n points, 4 floats each (pcl::PointXYZ layout), finite.
+  // n finite points, 4 floats each (pcl::PointXYZ layout).
   void run(const float *host_xyzp, unsigned n, const GpuConeParams &p, GpuConeResult &out);
 
-  // data: raw PointCloud2 bytes (little-endian), n points of point_step bytes; x/y/z are
-  // float32 at the given byte offsets (all multiples of 4). Non-finite points are dropped
-  // on the GPU (order kept), then motion correction, then the same stages as run().
+  // Raw PointCloud2 bytes; x/y/z are float32 at the given byte offsets. Drops non-finite
+  // points on the GPU (order kept), then motion-corrects, then runs the same stages as run().
   void runRaw(const uint8_t *data, unsigned n, unsigned point_step, unsigned off_x, unsigned off_y,
               unsigned off_z, const GpuMotion &motion, const GpuConeParams &p, GpuConeResult &out);
 

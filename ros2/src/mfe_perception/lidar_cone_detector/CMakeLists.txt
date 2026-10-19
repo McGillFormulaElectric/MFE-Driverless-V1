@@ -5,11 +5,10 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
-# eigen3 has dependencies that don't work with ament_cmake, use side package to import connection
+# eigen3_cmake_module: plain Eigen3 config does not work with ament_cmake.
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3)
 find_package(pointcloud_to_laserscan REQUIRED)
@@ -35,7 +34,6 @@ ament_auto_add_executable(detected_cones
 )
 target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
-# ---- lidar_perception_node (new unified perception pipeline) ----
 ament_auto_add_executable(lidar_perception_node
   src/lidar_perception_node.cpp
 )
@@ -48,9 +46,8 @@ target_link_libraries(lidar_perception_node
   Eigen3::Eigen
 )
 
-# GPU path: CUDA filters (src/gpu, PASSTHROUGH + VOXELGRID) built for the local GPU.
-# cuda-pcl is NOT used: its prebuilt libraries are aarch64 (Jetson) only.
-# If no CUDA compiler is found, lidar_perception_node is built CPU-only (PCL).
+# CUDA filters (src/gpu) are built for the local GPU. cuda-pcl is not used: its prebuilt libs are aarch64 only.
+# Without a CUDA compiler, lidar_perception_node is built CPU-only.
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
@@ -59,8 +56,8 @@ if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   find_package(CUDAToolkit REQUIRED)
 
-  # Target SM. Desktop default is 120 (RTX 50-series, Blackwell); needs CUDA >= 12.8.
-  # Jetson Orin Nano is SM 87. Override with -DLIDAR_CUDA_ARCH=<n>.
+  # Desktop default SM 120 (Blackwell, needs CUDA >= 12.8); Jetson Orin Nano is SM 87.
+  # Override with -DLIDAR_CUDA_ARCH=<n>.
   if(EXISTS "/etc/nv_tegra_release")
     set(LIDAR_CUDA_ARCH_DEFAULT 87)
   else()
@@ -95,12 +92,6 @@ endif()
 
 ament_python_install_package(${PROJECT_NAME})
 
-# install(PROGRAMS
-#   scripts/cone_detector_node.py
-#   DESTINATION lib/${PROJECT_NAME}
-#   RENAME cone_detector_node
-# )
-
 install(DIRECTORY
   launch
   dataset
@@ -118,12 +109,8 @@ install(TARGETS
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
+  # No license headers yet: skip copyright and cpplint checks.
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
@@ -133,7 +120,6 @@ ament_export_dependencies(Eigen3)
 
 ament_auto_package()
 
-# tests
 if(AMENT_ENABLE_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(foo_gtest test/my_test.cpp)

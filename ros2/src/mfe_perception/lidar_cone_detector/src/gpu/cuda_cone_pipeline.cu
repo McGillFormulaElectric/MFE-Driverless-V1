@@ -1,14 +1,5 @@
-// GPU cone pipeline (see cuda_cone_pipeline.hpp).
-//
-// Unpack:     rawFlags reads x/y/z from the PointCloud2 bytes and flags finite points ->
-//             exclusive scan -> rawScatter (order kept) -> motionCorrect (t = i/n * T).
-// RANSAC:     host draws K index triplets (fixed seed) -> planeHyp kernel builds one plane per
-//             triplet (rejects degenerate / too-tilted ones) -> countInliers scores all K planes
-//             against all points at once (grid.y = hypothesis) -> best on host -> refitSums
-//             accumulates centroid/covariance of its inliers -> 3x3 Jacobi eigen-solve on host.
-// Band:       flag kernel (not ground, height band, |y| limit) -> exclusive scan -> scatter.
-// Clustering: min-label propagation over the "distance <= tol" graph with pointer jumping,
-//             iterated until no label changes; component sizes / bbox checks on the host.
+// GPU cone pipeline: unpack -> ROI -> voxel -> RANSAC ground -> height band -> clustering.
+// RANSAC scores all hypotheses in parallel (grid.y = hypothesis).
 
 #include "lidar_cone_detector/cuda_cone_pipeline.hpp"
 
@@ -48,7 +39,7 @@ __global__ void rawScatter(const uint8_t *data, unsigned n, unsigned step, unsig
                              *reinterpret_cast<const float *>(pt + oz), 0.0f);
 }
 
-// Same model as perception::MotionDistortionCorrector (index-based capture time).
+// Matches perception::MotionDistortionCorrector; capture time is index-based.
 __global__ void motionCorrect(float4 *pts, unsigned n, float vx, float vy, float omega, float T) {
   const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
@@ -67,10 +58,10 @@ __global__ void planeHyp(const float4 *pts, const int3 *samples, int K, float co
   const float3 u = sub3(b, a), v = sub3(c, a);
   float3 n = make_float3(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x);
   const float len = sqrtf(n.x * n.x + n.y * n.y + n.z * n.z);
-  if (len < 1e-6f) { planes[k] = make_float4(0, 0, 0, 0); return; }   // collinear sample
+  if (len < 1e-6f) { planes[k] = make_float4(0, 0, 0, 0); return; }
   n.x /= len; n.y /= len; n.z /= len;
   if (n.z < 0) { n.x = -n.x; n.y = -n.y; n.z = -n.z; }
-  if (n.z < cos_eps) { planes[k] = make_float4(0, 0, 0, 0); return; } // tilted beyond eps_angle
+  if (n.z < cos_eps) { planes[k] = make_float4(0, 0, 0, 0); return; }
   planes[k] = make_float4(n.x, n.y, n.z, -(n.x * a.x + n.y * a.y + n.z * a.z));
 }
 
@@ -110,7 +101,7 @@ __global__ void bandFlags(const float4 *pts, unsigned n, float4 pl, bool plane_o
                           float bmin, float bmax, float ymax, unsigned *flags) {
   const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
-  if (!plane_ok) { flags[i] = 1; return; }        // no ground model: keep everything (as the CPU branch)
+  if (!plane_ok) { flags[i] = 1; return; }        // no ground model: keep all, as the CPU path does
   const float4 p = pts[i];
   const float h = fabsf(pl.x * p.x + pl.y * p.y + pl.z * p.z + pl.w);
   flags[i] = (h >= thr) && (h >= bmin) && (h <= bmax) && (fabsf(p.y) <= ymax);
@@ -126,8 +117,7 @@ __global__ void initLabels(int *labels, unsigned n) {
   if (i < n) labels[i] = static_cast<int>(i);
 }
 
-// One propagation sweep: each point takes the smallest label among its neighbours (itself included).
-// Tiles the neighbour scan through shared memory.
+// One sweep: min label over neighbours within tol (self included), tiled through shared memory.
 __global__ void propagate(const float4 *pts, unsigned n, float tol2, int *labels, int *changed) {
   __shared__ float4 tp[kBlock];
   __shared__ int tl[kBlock];
@@ -165,15 +155,15 @@ void smallestEigvec(double A[3][3], double out[3]) {
         if (std::fabs(A[p][q]) < 1e-300) continue;
         const double th = 0.5 * std::atan2(2 * A[p][q], A[q][q] - A[p][p]);
         const double c = std::cos(th), s = std::sin(th);
-        for (int k = 0; k < 3; k++) {        // A = A * J
+        for (int k = 0; k < 3; k++) {
           const double akp = A[k][p], akq = A[k][q];
           A[k][p] = c * akp - s * akq; A[k][q] = s * akp + c * akq;
         }
-        for (int k = 0; k < 3; k++) {        // A = J^T * A
+        for (int k = 0; k < 3; k++) {
           const double apk = A[p][k], aqk = A[q][k];
           A[p][k] = c * apk - s * aqk; A[q][k] = s * apk + c * aqk;
         }
-        for (int k = 0; k < 3; k++) {        // V = V * J
+        for (int k = 0; k < 3; k++) {
           const double vkp = V[k][p], vkq = V[k][q];
           V[k][p] = c * vkp - s * vkq; V[k][q] = s * vkp + c * vkq;
         }
@@ -191,7 +181,7 @@ struct GpuConePipeline::Impl {
   cudaEvent_t ev[9];
   cudaFilter *roi_f, *vox_f;
   thrust::device_vector<float4> raw, roi, vox, band;
-  thrust::device_vector<uint8_t> bytes;   // raw PointCloud2 buffer
+  thrust::device_vector<uint8_t> bytes;
   thrust::device_vector<int3> samples;
   thrust::device_vector<float4> planes;
   thrust::device_vector<unsigned> counts, flags, offs;
@@ -233,7 +223,7 @@ void GpuConePipeline::run(const float *host, unsigned n, const GpuConeParams &P,
   grow(s.raw, n);
   checkCudaErrors(cudaMemcpyAsync(raw_ptr(s.raw), host, n * sizeof(float4), cudaMemcpyHostToDevice, st));
   checkCudaErrors(cudaEventRecord(s.ev[1], st));
-  checkCudaErrors(cudaEventRecord(s.ev[2], st));   // no unpack stage
+  checkCudaErrors(cudaEventRecord(s.ev[2], st));
   process(n, P, out);
 }
 
@@ -269,7 +259,6 @@ void GpuConePipeline::runRaw(const uint8_t *data, unsigned n, unsigned step, uns
 void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult &out) {
   Impl &s = *impl_;
   cudaStream_t st = s.st;
-  // --- ROI + voxel ---
   grow(s.roi, n);
   FilterParam_t rp{}; rp.type = PASSTHROUGH; rp.dim = 0;
   rp.downFilterLimits = P.roi_x_min; rp.upFilterLimits = P.roi_x_max; rp.limitsNegative = false;
@@ -283,7 +272,6 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
   checkCudaErrors(cudaEventRecord(s.ev[4], st));
   const unsigned m = out.voxel;
 
-  // --- RANSAC ground plane ---
   float4 best_plane = make_float4(0, 0, 1, 0);
   if (m >= 3) {
     const int K = P.ransac_hypotheses;
@@ -310,9 +298,9 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
     int bk = -1; unsigned bc = 0;
     for (int k = 0; k < K; k++)
       if (s.h_planes[k].z != 0.0f && s.h_counts[k] > bc) { bc = s.h_counts[k]; bk = k; }
-    out.ground = bc;   // inliers of the winning hypothesis (before refit), for logs
+    out.ground = bc;   // pre-refit inlier count, for logs
     if (bk >= 0 && bc >= 3) {
-      // least-squares refit on the winner's inliers (setOptimizeCoefficients)
+      // least-squares refit on the winner's inliers (like setOptimizeCoefficients)
       checkCudaErrors(cudaMemsetAsync(raw_ptr(s.sums), 0, 10 * sizeof(double), st));
       refitSums<<<blocksFor(m), kBlock, 0, st>>>(raw_ptr(s.vox), m, s.h_planes[bk], P.ground_threshold, raw_ptr(s.sums));
       double h[10];
@@ -334,7 +322,6 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
   out.plane[0] = best_plane.x; out.plane[1] = best_plane.y; out.plane[2] = best_plane.z; out.plane[3] = best_plane.w;
   checkCudaErrors(cudaEventRecord(s.ev[5], st));
 
-  // --- cone-height band (compaction) ---
   unsigned nb = 0;
   if (m > 0) {
     grow(s.flags, m); grow(s.offs, m); grow(s.band, m);
@@ -350,7 +337,6 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
   }
   checkCudaErrors(cudaEventRecord(s.ev[6], st));
 
-  // --- Euclidean clustering: connected components over distance <= tol ---
   if (nb > 0) {
     grow(s.labels, nb);
     initLabels<<<blocksFor(nb), kBlock, 0, st>>>(raw_ptr(s.labels), nb);
@@ -367,7 +353,6 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
   }
   checkCudaErrors(cudaEventRecord(s.ev[7], st));
 
-  // --- download band points + labels ---
   out.points.resize(static_cast<size_t>(nb) * 4);
   out.labels.resize(nb);
   if (nb > 0) {
@@ -378,7 +363,7 @@ void GpuConePipeline::process(unsigned n, const GpuConeParams &P, GpuConeResult 
   checkCudaErrors(cudaStreamSynchronize(st));
   checkCudaErrors(cudaGetLastError());
 
-  // component sizes -> dense ids for clusters inside [min, max], -1 otherwise (PCL drops those)
+  // dense ids for clusters within [min, max]; others get -1 (PCL drops them)
   std::unordered_map<int, int> size, id;
   for (int l : out.labels) size[l]++;
   for (int &l : out.labels) {

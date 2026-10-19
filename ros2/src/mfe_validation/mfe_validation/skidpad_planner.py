@@ -1,14 +1,11 @@
 """Skidpad planner: 2 laps left, 2 laps right, exit.
 
-The skidpad layout is fixed by the rules. This registers that known layout onto the SLAM landmarks and drives the template
-path through the fit, so the path equals the stock one when SLAM and the start pose are right, and shifts onto the cones
-actually seen when they are not.
+Registers the known skidpad layout onto SLAM landmarks and drives the template path through the fit.
+Registration (param registration_mode):
+- 'library': fsd_path_planning SkidpadRelocalizer, latches the first plausible fit.
+- 'custom': SE2 Kabsch/ICP against eufs skidpad.csv, refitted on every cone message.
 
-Registration (ROS param `registration_mode`):
-- 'library' (default): fsd_path_planning SkidpadRelocalizer (circle fitting + DBSCAN). Latches the first plausible fit.
-- 'custom': SE2 Kabsch/ICP against the eufs skidpad.csv cone layout, re-fitted on every cone message.
-
-In : mfe_msgs/Track landmarks (start-relative frame) on /skidpad/cones, nav_msgs/Odometry on /slam/odom.
+In : mfe_msgs/Track landmarks (start-relative) on /skidpad/cones, nav_msgs/Odometry on /slam/odom.
 Out: /planning/centerline (nav_msgs/Path).
 """
 import math, os
@@ -22,7 +19,7 @@ from mfe_path_planning.path_planner_node import _make_skidpad_path
 from mfe_validation.common import QOS, car_start, read_track, yaw_of
 
 _EUFS_MASTER = os.environ.get('EUFS_MASTER', os.path.expanduser('~/Develop/MFE26-eufs-sim'))
-# MFE26-eufs-sim keeps the tracks at eufs_tracks/; the older upstream layout nests them under eufs_sim/.
+# Older upstream layout nests the tracks under eufs_sim/.
 CSV = next((c for c in (f'{_EUFS_MASTER}/eufs_tracks/csv/skidpad.csv', f'{_EUFS_MASTER}/eufs_sim/eufs_tracks/csv/skidpad.csv')
             if os.path.exists(c)), f'{_EUFS_MASTER}/eufs_tracks/csv/skidpad.csv')
 
@@ -43,8 +40,7 @@ def apply(T, p):
 
 
 def check_registration(transformer, lib_offset, origin, yaw0, max_err, max_yaw):
-    """A library fit is accepted if the template start (0,0) lands on the first SLAM position and the start->centre
-    direction matches the first heading. Returns (ok, err_m, yaw_err_deg)."""
+    """Accept a library fit if the template start lands on the first SLAM position with matching heading. Returns (ok, err_m, yaw_err_deg)."""
     st = transformer(np.array([0.0, 0.0]) + lib_offset, 0.0)[0]
     ce = transformer(np.array([14.4, 0.0]) + lib_offset, 0.0)[0]
     err = float(np.linalg.norm(st - origin))
@@ -56,13 +52,13 @@ class SkidpadPlanner(Node):
     def __init__(self):
         super().__init__('skidpad_planner')
         self.declare_parameter('registration_mode', 'library')
-        self.declare_parameter('gate', 1.5)              # custom: landmark <-> template cone match distance (m)
-        self.declare_parameter('min_match', 6)           # custom
-        self.declare_parameter('max_resid', 0.5)         # custom
-        self.declare_parameter('max_shift', 2.0)         # custom: reject fits moving the template more than this (m)
-        self.declare_parameter('max_start_err_m', 2.0)   # library: max distance of the mapped template start from the first SLAM position
-        self.declare_parameter('max_start_yaw_deg', 15.0)  # library: max heading error of the mapped start->centre vs the first SLAM yaw
-        self.declare_parameter('max_reloc_rejects', 200)   # library: give up after this many rejected fits (BS03 replay needed 40)
+        self.declare_parameter('gate', 1.5)              # custom: landmark-to-template match gate (m)
+        self.declare_parameter('min_match', 6)
+        self.declare_parameter('max_resid', 0.5)
+        self.declare_parameter('max_shift', 2.0)         # custom: max template shift (m)
+        self.declare_parameter('max_start_err_m', 2.0)   # library: max start error (m)
+        self.declare_parameter('max_start_yaw_deg', 15.0)  # library: max heading error (deg)
+        self.declare_parameter('max_reloc_rejects', 200)   # library: give up after this many rejected fits
         self.registration_mode = self.get_parameter('registration_mode').value
         if self.registration_mode not in ('library', 'custom'):
             raise ValueError(f"registration_mode must be 'library' or 'custom', got {self.registration_mode!r}")
@@ -73,7 +69,7 @@ class SkidpadPlanner(Node):
         self.max_rejects = g('max_reloc_rejects').value
         self.rejects = 0
         self.gave_up = False
-        self.start_pos = self.start_yaw = None          # first SLAM pose (the template start, facing template +x)
+        self.start_pos = self.start_yaw = None          # first SLAM pose: template start, facing +x
 
         rows = read_track(CSV)
         x0, y0, yaw = car_start(rows)
@@ -82,13 +78,12 @@ class SkidpadPlanner(Node):
         self.tpl_cones = np.c_[c * m[:, 0] - s * m[:, 1], s * m[:, 0] + c * m[:, 1]]   # start-relative, same as SLAM
         self.tpl_path = _make_skidpad_path()
 
-        # Library mode: the relocalizer's known frame comes from its own reference path. Bridge it to the template
-        # with a fixed translation that aligns the circle centres.
+        # Library: fixed translation aligning the circle centres of the two frames.
         self.relocalizer = None
-        self.lib_offset = np.zeros(2)       # template frame -> library known frame
-        self.transformer = None             # library: known frame -> car (SLAM) frame, callable (pos2d, yaw)
-        self.vehicle_position = None        # library: latest SLAM position (first value latched by the relocalizer)
-        self.vehicle_direction = None       # library: latest SLAM heading as a unit 2D vector
+        self.lib_offset = np.zeros(2)       # template -> library known frame
+        self.transformer = None             # library: known -> car frame
+        self.vehicle_position = None        # library: latest SLAM position
+        self.vehicle_direction = None       # library: latest SLAM heading (unit vector)
         if self.registration_mode == 'library':
             from fsd_path_planning.relocalization.skidpad.skidpad_relocalizer import (
                 SkidpadRelocalizer, calculate_reference_centers_for_skidpad_path)
@@ -100,11 +95,9 @@ class SkidpadPlanner(Node):
 
         self.T = (0.0, 0.0, 0.0)            # custom: (theta, tx, ty)
 
-        # Progress along the template is monotonic. pure_pursuit resets its path index on every new path and snaps to the
-        # nearest point anywhere on it, so a path revisiting the same circle (2 laps) would trap it on lap 1. Publishing only
-        # the window ahead of the car avoids that.
+        # Publish only a window ahead of the car: pure_pursuit snaps to the nearest point, and the 2 laps overlap.
         self.idx = 0
-        self.window = 25       # points published ahead (~24 m, under one 57 m lap)
+        self.window = 25       # ~24 m ahead, under one 57 m lap
         self.create_subscription(Odometry, '/slam/odom', self.on_pose, QOS)
         self.pub = self.create_publisher(Path, '/planning/centerline', QOS)
         self.create_subscription(Track, '/skidpad/cones', self.on_cones, QOS)
@@ -141,21 +134,21 @@ class SkidpadPlanner(Node):
                 self.start_pos, self.start_yaw = p, yaw
             self.vehicle_position = p
             self.vehicle_direction = np.array([math.cos(yaw), math.sin(yaw)])
-        q = self.template_to_car(self.tpl_path[self.idx:self.idx + 10])   # small window: can't jump to the overlapping next lap
+        q = self.template_to_car(self.tpl_path[self.idx:self.idx + 10])   # small window: cannot jump to the overlapping next lap
         self.idx += int(np.linalg.norm(q - p, axis=1).argmin())
 
     def on_cones(self, msg):
         lm = np.array([[c.location.x, c.location.y] for c in msg.track]).reshape(-1, 2)
 
         if self.registration_mode == 'library':
-            # The relocalizer needs the car pose (it latches the first one) and a few cones; it latches once it succeeds.
+            # Needs the car pose and a few cones; latches once it succeeds.
             if self.transformer is None and not self.gave_up and self.vehicle_position is not None and len(lm) >= 3:
                 try:
                     self.relocalizer.attempt_relocalization_calculation(list(lm), self.vehicle_position, self.vehicle_direction)
-                except Exception as e:  # the library raises on degenerate cone sets; keep trying on the next message
+                except Exception as e:  # library raises on degenerate cone sets; retry on the next message
                     self.get_logger().warn(f'library relocalizer error: {e}', throttle_duration_sec=5.0)
                 if self.relocalizer.is_relocalized:
-                    tr = self.relocalizer._known_map_to_original_transformer   # known -> car frame
+                    tr = self.relocalizer._known_map_to_original_transformer
                     ok, err, yaw_err = check_registration(tr, self.lib_offset, self.start_pos, self.start_yaw,
                                                           self.max_start_err, self.max_start_yaw)
                     if ok:
@@ -163,7 +156,7 @@ class SkidpadPlanner(Node):
                         c = self.template_to_car(np.array([[14.4, 0.0]]))[0]
                         self.get_logger().info(f'library relocalized with {len(lm)} landmarks; template centre (14.4,0) -> car frame ({c[0]:.2f},{c[1]:.2f}) m')
                     else:
-                        # Single-shot relocalizer: retry with a fresh instance on the next message.
+                        # Single-shot relocalizer: retry with a fresh instance.
                         self.rejects += 1
                         self.get_logger().warn(f'rejected library fit #{self.rejects}: start off by {err:.2f} m, heading off by {yaw_err:.1f} deg')
                         self.relocalizer = type(self.relocalizer)()

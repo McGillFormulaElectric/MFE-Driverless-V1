@@ -22,24 +22,20 @@ from mfe_msgs.msg import Cone, Track
 from std_msgs.msg import Header
 
 
-# ---------------------------------------------------------------------------
-# ConeTrack dataclass + Kalman model constants
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ConeTrack:
     id: int
-    color: int                          # mfe_msgs/Cone color enum
-    x: float                            # map-frame position (convenience copy of state[0])
-    y: float                            # map-frame position (convenience copy of state[1])
-    # 4-state Kalman: [x, y, vx, vy]
+    color: int
+    x: float
+    y: float
+    # state: [x, y, vx, vy]
     state: np.ndarray = field(default_factory=lambda: np.zeros(4))
     cov: np.ndarray   = field(default_factory=lambda: np.eye(4) * 1.0)
-    hits: int   = 0   # confirmed observations
-    misses: int = 0   # consecutive frames without a match
+    hits: int   = 0
+    misses: int = 0
 
 
-# Constant-velocity Kalman model at 10 Hz
+# Constant-velocity Kalman model, 10 Hz
 _DT = 0.1
 _F  = np.array([[1, 0, _DT, 0],
                 [0, 1, 0,  _DT],
@@ -47,20 +43,12 @@ _F  = np.array([[1, 0, _DT, 0],
                 [0, 0, 0,   1]], dtype=float)
 _H  = np.array([[1, 0, 0, 0],
                 [0, 1, 0, 0]], dtype=float)
-_Q  = np.diag([0.01, 0.01, 0.1, 0.1])   # process noise
-_R  = np.diag([0.04, 0.04])              # observation noise (2 cm std)
+_Q  = np.diag([0.01, 0.01, 0.1, 0.1])
+_R  = np.diag([0.04, 0.04])
 
-
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
 
 def pointcloud2_to_xyz(msg: PointCloud2) -> np.ndarray:
-    """
-    Extract XYZ points from a sensor_msgs/PointCloud2 message.
-    Assumes fields x, y, z as float32. Returns Nx3 numpy array.
-    Uses vectorized numpy strides — safe for VLP-16 ~30k point clouds.
-    """
+    """Finite XYZ points from a PointCloud2 as an Nx3 float32 array (x, y, z must be float32)."""
     field_map = {f.name: f for f in msg.fields}
     if not all(k in field_map for k in ('x', 'y', 'z')):
         return np.zeros((0, 3), dtype=np.float32)
@@ -73,7 +61,6 @@ def pointcloud2_to_xyz(msg: PointCloud2) -> np.ndarray:
     step = msg.point_step
 
     def extract_field(offset: int) -> np.ndarray:
-        # Build a strided view: take 4 bytes starting at `offset` in every `step`-byte block
         idx = np.arange(n) * step + offset
         col = np.stack([raw[idx], raw[idx+1], raw[idx+2], raw[idx+3]], axis=1)
         return col.view(np.float32).reshape(-1)
@@ -92,7 +79,6 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
     t = transform.transform
     tx, ty, tz = t.translation.x, t.translation.y, t.translation.z
     qx, qy, qz, qw = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
-    # Rotation matrix from quaternion
     R = np.array([
         [1 - 2*(qy*qy + qz*qz), 2*(qx*qy - qw*qz),   2*(qx*qz + qw*qy)],
         [2*(qx*qy + qw*qz),     1 - 2*(qx*qx + qz*qz), 2*(qy*qz - qw*qx)],
@@ -102,47 +88,37 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
     return (pts_xyz @ R.T) + t_vec
 
 
-# ---------------------------------------------------------------------------
-# BoundaryExtractor node
-# ---------------------------------------------------------------------------
-
 class BoundaryExtractor(Node):
 
-    MATCH_RADIUS    = 0.5   # m — max distance to associate LiDAR centroid with camera cone
-    GT_MATCH_RADIUS = 2.0   # m — looser match for GT color fallback
-    GRID_STEP       = 0.3   # m — spatial bin size for confidence tracking
-    MATCH_RADIUS = 0.5   # meters — max distance to associate LiDAR centroid with camera cone
-    GT_MATCH_RADIUS = 2.0  # meters — looser match for GT color fallback
-    CAM_DEDUP_RADIUS = 1.2  # meters — unmatched camera cone this close to a LiDAR centroid
-                            # is the same physical cone seen with camera position error,
-                            # not a new cone: appending it would create a phantom duplicate
-    CAM_ONLY_MAX_RANGE = 12.0  # meters — camera-only cones (no LiDAR confirmation) beyond
-                               # this range are dropped: depth error grows with distance and
-                               # the planner's global cone map keeps phantoms forever
+    GRID_STEP       = 0.3   # spatial bin size for confidence tracking
+    MATCH_RADIUS = 0.5   # max distance to associate a LiDAR centroid with a camera cone
+    GT_MATCH_RADIUS = 2.0  # looser match for GT color fallback
+    CAM_DEDUP_RADIUS = 1.2  # an unmatched camera cone this close to a LiDAR centroid is the same cone
+                            # with camera position error; appending it would make a phantom duplicate
+    CAM_ONLY_MAX_RANGE = 12.0  # camera-only cones beyond this are dropped: depth error grows with
+                               # range and the planner's global cone map keeps phantoms forever
 
     def __init__(self):
         super().__init__('boundary_extractor')
 
-        self.declare_parameter('min_observations', 3)   # frames a cone must appear before publishing
-        self.declare_parameter('confidence_decay', 1)   # how much to subtract each frame it's not seen
+        self.declare_parameter('min_observations', 3)
+        self.declare_parameter('confidence_decay', 1)
         self._min_obs     = int(self.get_parameter('min_observations').value)
         self._conf_decay  = int(self.get_parameter('confidence_decay').value)
 
-        # confidence_map: grid key -> [count, color, x, y, z]
+        # grid key -> [count, color, x, y, z]
         self._confidence_map: dict = {}
 
-        self._lidar_pts: np.ndarray = np.zeros((0, 3), dtype=np.float32)   # Nx3
-        self._camera_cones: list = []   # list of mfe_msgs/Cone
-        self._gt_cones: list = []       # fallback color source when camera unavailable
+        self._lidar_pts: np.ndarray = np.zeros((0, 3), dtype=np.float32)
+        self._camera_cones: list = []
+        self._gt_cones: list = []
 
         self._lidar_header: Header = Header()
         self._camera_header: Header = Header()
 
-        # TF2 buffer and listener for frame transformations
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
-        # Per-cone Kalman tracks
         self._tracks: list[ConeTrack] = []
         self._next_track_id: int = 0
 
@@ -165,11 +141,8 @@ class BoundaryExtractor(Node):
             self._camera_callback,
             10)
 
-        # GT color fallback when camera is not running.
-        # Use /ground_truth/track_colored (ALL track cones, map frame) — not proximity-limited.
-        # Matched against the already-transformed map-frame LiDAR centroids in _publish_fused.
-        # This is more robust than /ground_truth/cones_colored (proximity-limited, base_footprint)
-        # because the full track list is available from the first message, independent of car position.
+        # Sim-only GT color fallback, used when the camera is not running. The full track list
+        # (map frame) is independent of car position, unlike /ground_truth/cones_colored.
         self.sub_gt = self.create_subscription(
             Track,
             '/ground_truth/track_colored',
@@ -178,7 +151,6 @@ class BoundaryExtractor(Node):
 
         self.pub_track = self.create_publisher(Track, '/planning/cones', 10)
 
-        # Publish at 10 Hz regardless of sensor rate
         self.timer = self.create_timer(0.1, self._publish_fused)
 
         self.get_logger().info(
@@ -186,10 +158,6 @@ class BoundaryExtractor(Node):
             f'Fusing LiDAR + camera cones with Hungarian+Kalman tracking '
             f'(min_hits={self._min_hits}, max_misses={self._max_misses}, '
             f'match_radius={self._match_r} m).')
-
-    # ------------------------------------------------------------------
-    # Sensor callbacks
-    # ------------------------------------------------------------------
 
     def _lidar_callback(self, msg: PointCloud2) -> None:
         self._lidar_pts = pointcloud2_to_xyz(msg)
@@ -205,11 +173,8 @@ class BoundaryExtractor(Node):
 
     def _lookup_map_tf(self, src_frame: str, stamp_msg):
         """
-        Look up map <- src_frame, preferring the sensor-capture stamp so cones are
-        placed where the car WAS when the sensor saw them (latest-TF lookup smears
-        positions by however far the car moved since capture). Falls back to the
-        latest transform if the stamped lookup fails (buffer too short / stamp 0).
-        Returns a TransformStamped or None.
+        Look up map <- src_frame at the sensor capture stamp. The latest TF would smear positions
+        by the car's motion since capture. Falls back to the latest TF. Returns None on failure.
         """
         if stamp_msg is not None and (stamp_msg.sec or stamp_msg.nanosec):
             try:
@@ -226,10 +191,7 @@ class BoundaryExtractor(Node):
             return None
 
     def _transform_lidar_pts_to_map(self, pts: np.ndarray, src_frame: str) -> tuple:
-        """
-        Try to transform an Nx3 array from src_frame to 'map'.
-        Returns (transformed_pts, success). On failure returns (pts, False).
-        """
+        """Transform an Nx3 array to map. Returns (points, success); on failure, (input, False)."""
         if pts.shape[0] == 0 or not src_frame:
             return pts, True
 
@@ -239,11 +201,7 @@ class BoundaryExtractor(Node):
         return _apply_tf(pts, tf_stamped), True
 
     def _transform_camera_cones_to_map(self, cones: list, src_frame: str) -> tuple:
-        """
-        Try to transform camera cone positions from src_frame to 'map'.
-        Returns (Nx3 ndarray of transformed xyz, success).
-        On failure returns the raw positions, False.
-        """
+        """Transform camera cone positions to map. Returns (Nx3 array, success)."""
         cam_xyz = np.array([[c.location.x, c.location.y, c.location.z]
                             for c in cones], dtype=np.float32) if cones \
             else np.zeros((0, 3), dtype=np.float32)
@@ -255,31 +213,15 @@ class BoundaryExtractor(Node):
             return cam_xyz, False
         return _apply_tf(cam_xyz, tf_stamped), True
 
-    # ------------------------------------------------------------------
-    # Hungarian + Kalman track management
-    # ------------------------------------------------------------------
-
     def _update_tracks(self, fused_cones: list[Cone]) -> list[ConeTrack]:
-        """
-        Run one predict-update cycle of Hungarian data association + per-track
-        Kalman filter.
-
-        Args:
-            fused_cones: raw fused cone detections for this frame (map frame).
-
-        Returns:
-            List of confirmed tracks (hits >= min_hits) after update.
-        """
-        # --- Predict all existing tracks ---
+        """One predict-update cycle (Hungarian association, Kalman update). Returns confirmed tracks."""
         for t in self._tracks:
             t.state = _F @ t.state
             t.cov   = _F @ t.cov @ _F.T + _Q
-            # Sync convenience x/y with prediction
             t.x = float(t.state[0])
             t.y = float(t.state[1])
 
         if not fused_cones:
-            # No detections this frame — increment misses for all tracks
             for t in self._tracks:
                 t.misses += 1
             self._tracks = [t for t in self._tracks if t.misses <= self._max_misses]
@@ -293,8 +235,7 @@ class BoundaryExtractor(Node):
         if self._tracks:
             track_xy = np.array([[t.x, t.y] for t in self._tracks], dtype=float)
 
-            # Build N_tracks x N_detections cost matrix (Euclidean distance)
-            dx = track_xy[:, 0:1] - det_xy[:, 0]   # (N, M) broadcast
+            dx = track_xy[:, 0:1] - det_xy[:, 0]
             dy = track_xy[:, 1:2] - det_xy[:, 1]
             cost = np.sqrt(dx**2 + dy**2)
 
@@ -305,34 +246,28 @@ class BoundaryExtractor(Node):
                     track = self._tracks[r]
                     det   = fused_cones[c]
 
-                    # Kalman update
                     z = np.array([det.location.x, det.location.y], dtype=float)
                     S = _H @ track.cov @ _H.T + _R
                     K = track.cov @ _H.T @ np.linalg.inv(S)
                     track.state = track.state + K @ (z - _H @ track.state)
                     track.cov   = (np.eye(4) - K @ _H) @ track.cov
 
-                    # Sync convenience fields
                     track.x = float(track.state[0])
                     track.y = float(track.state[1])
 
-                    # Accumulate hits; reset misses
                     track.hits  += 1
                     track.misses = 0
 
-                    # Refine color if currently UNKNOWN and detection has a known color
                     if track.color == Cone.UNKNOWN and det.color != Cone.UNKNOWN:
                         track.color = det.color
 
                     matched_track_ids.add(id(track))
                     matched_det_indices.add(c)
 
-        # --- Unmatched tracks: increment misses ---
         for t in self._tracks:
             if id(t) not in matched_track_ids:
                 t.misses += 1
 
-        # --- Unmatched detections: spawn new tentative tracks ---
         for j, det in enumerate(fused_cones):
             if j not in matched_det_indices:
                 init_state = np.array(
@@ -350,42 +285,30 @@ class BoundaryExtractor(Node):
                 self._tracks.append(new_track)
                 self._next_track_id += 1
 
-        # --- Delete stale tracks ---
         self._tracks = [t for t in self._tracks if t.misses <= self._max_misses]
 
         return [t for t in self._tracks if t.hits >= self._min_hits]
-
-    # ------------------------------------------------------------------
-    # Main publish callback
-    # ------------------------------------------------------------------
 
     def _publish_fused(self) -> None:
         now = self.get_clock().now().to_msg()
         fused: list[Cone] = []
 
-        lidar_pts = self._lidar_pts          # Nx3
-        camera_cones = self._camera_cones    # list of Cone msgs
+        lidar_pts = self._lidar_pts
+        camera_cones = self._camera_cones
 
-        # --- Transform LiDAR points to map frame ---
         lidar_src_frame = self._lidar_header.frame_id
         lidar_pts_map, lidar_tf_ok = self._transform_lidar_pts_to_map(lidar_pts, lidar_src_frame)
         if not lidar_tf_ok:
-            # TF map<-velodyne failed: drop LiDAR cones this tick rather than publishing
-            # untransformed LiDAR-frame points mislabelled as map-frame cones.
+            # Drop LiDAR cones this tick: untransformed points would be mislabelled as map cones.
             lidar_pts_map = np.zeros((0, 3), dtype=np.float32)
 
-        # --- Transform camera cone positions to map frame ---
         cam_src_frame = ''
         if camera_cones:
             cam_src_frame = self._camera_header.frame_id
         cam_xyz_map, _cam_tf_ok = self._transform_camera_cones_to_map(camera_cones, cam_src_frame)
 
-        # Filter camera cones down to metric-only, map-frame points before any use.
-        # When the vision node has no depth (no depth topic / no camera_info), it publishes
-        # cones in PIXEL coordinates (x=col, y=row, z=-1.0 sentinel, frame_id='camera_pixel').
-        # Those are not metric map-frame positions: their TF lookup fails and the raw pixel
-        # values would otherwise be matched/appended as garbage cones (e.g. at (320, 240)).
-        # Exclude any pixel-sentinel cone, and drop all camera cones if the map<-camera TF failed.
+        # Pixel-coordinate cones (no depth: z == -1 sentinel, frame 'camera_pixel') are not metric
+        # map positions, so drop them. Drop all camera cones if map<-camera TF failed.
         if not _cam_tf_ok:
             camera_cones = []
             cam_xyz_map = np.zeros((0, 3), dtype=np.float32)
@@ -397,15 +320,11 @@ class BoundaryExtractor(Node):
             cam_xyz_map = (np.array([xyz for _, xyz in metric], dtype=np.float32)
                            if metric else np.zeros((0, 3), dtype=np.float32))
 
-        # Build camera lookup (x,y only, map frame)
         cam_xy = None
         if camera_cones and cam_xyz_map.shape[0] > 0:
             cam_xy = cam_xyz_map[:, :2]
 
-        # Build GT color lookup — fallback for LiDAR centroids the camera did not
-        # color (out of FOV / no metric depth / no match). Sim-only: the topic does
-        # not exist on hardware, so there gt_xy stays None and unmatched cones
-        # remain UNKNOWN. Camera color always wins when a match exists.
+        # GT colors fill in LiDAR centroids the camera did not color. Camera color wins on a match.
         gt_xy = None
         gt_colors = None
         if self._gt_cones:
@@ -415,7 +334,7 @@ class BoundaryExtractor(Node):
 
         matched_camera_indices = set()
 
-        # --- Step 1: For each LiDAR centroid (in map frame), find best color match ---
+        # Step 1: color each LiDAR centroid from the nearest camera cone, then the nearest GT cone.
         for i in range(len(lidar_pts_map)):
             lx = float(lidar_pts_map[i, 0])
             ly = float(lidar_pts_map[i, 1])
@@ -436,7 +355,6 @@ class BoundaryExtractor(Node):
                     cone.color = camera_cones[best_idx].color
                     matched_camera_indices.add(best_idx)
             if cone.color == Cone.UNKNOWN and gt_xy is not None and len(gt_xy) > 0:
-                # GT cones in map frame; match against map-frame LiDAR centroid (lx, ly)
                 dists = np.sqrt((gt_xy[:, 0] - lx)**2 + (gt_xy[:, 1] - ly)**2)
                 best_idx = int(np.argmin(dists))
                 if dists[best_idx] <= self.GT_MATCH_RADIUS:
@@ -444,10 +362,8 @@ class BoundaryExtractor(Node):
 
             fused.append(cone)
 
-        # --- Step 2: Add unmatched camera cones (beyond LiDAR range or lateral) ---
-        # Unconfirmed camera cones only within CAM_ONLY_MAX_RANGE of the car; needs
-        # the car pose — if map<-base_footprint is unavailable, append none (conservative:
-        # a phantom in the planner's persistent map is worse than a briefly missing cone).
+        # Step 2: add unmatched camera cones. Only within CAM_ONLY_MAX_RANGE of the car, and only if
+        # map<-base_footprint is available: a phantom in the persistent map is worse than a missing cone.
         car_xy = None
         if any(j not in matched_camera_indices for j in range(len(camera_cones))):
             try:
@@ -477,26 +393,21 @@ class BoundaryExtractor(Node):
                 cone.color = cam_cone.color
                 fused.append(cone)
 
-        # --- Step 3: Hungarian + Kalman tracking ---
+        # Step 3: Hungarian + Kalman tracking.
         confirmed = self._update_tracks(fused)
 
-        # Build cone list from confirmed (Kalman-smoothed) tracks. This feeds
-        # the temporal confidence filter below rather than the final publish
-        # list directly, so both persistency mechanisms genuinely combine:
-        # Hungarian+Kalman confirms track identity/position, and the grid
-        # confidence filter adds a second, coarser persistency gate on top.
+        # Confirmed tracks feed the grid confidence filter below, so both persistence gates apply.
         tracked_cones: list[Cone] = []
         for t in confirmed:
             c = Cone()
             c.header.stamp = now
             c.header.frame_id = 'map'
-            c.location.x = float(t.state[0])   # Kalman-filtered position
+            c.location.x = float(t.state[0])
             c.location.y = float(t.state[1])
             c.location.z = 0.0
             c.color = t.color
             tracked_cones.append(c)
 
-        # Diagnostics
         color_counts: dict = {}
         for c in tracked_cones:
             color_counts[c.color] = color_counts.get(c.color, 0) + 1
@@ -508,10 +419,7 @@ class BoundaryExtractor(Node):
             f'cam={len(camera_cones)} colors={color_counts}',
             throttle_duration_sec=2.0)
 
-        # ---- Temporal confidence filtering ----
-        # Accumulate confidence for each Kalman-confirmed cone seen this frame;
-        # decay unseen cones. Only publish cones that have been consistently
-        # observed (min_observations).
+        # Grid-binned confidence: +1 per frame seen, decays when unseen, publish at min_observations.
         step = self.GRID_STEP
         seen_keys: set = set()
         for cone in tracked_cones:
@@ -521,13 +429,12 @@ class BoundaryExtractor(Node):
             seen_keys.add(key)
             if key in self._confidence_map:
                 entry = self._confidence_map[key]
-                entry[0] = min(entry[0] + 1, 20)   # cap at 20
-                entry[1] = cone.color               # update color with latest
+                entry[0] = min(entry[0] + 1, 20)
+                entry[1] = cone.color
             else:
                 self._confidence_map[key] = [1, cone.color,
                                              cone.location.x, cone.location.y, cone.location.z]
 
-        # Decay unseen cones; remove if confidence drops to zero
         to_remove = []
         for key, entry in self._confidence_map.items():
             if key not in seen_keys:
@@ -537,7 +444,6 @@ class BoundaryExtractor(Node):
         for key in to_remove:
             del self._confidence_map[key]
 
-        # Publish only cones with sufficient confidence
         stable_cones: list[Cone] = []
         for key, (count, color, x, y, z) in self._confidence_map.items():
             if count >= self._min_obs:

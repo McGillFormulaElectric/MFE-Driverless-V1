@@ -1,6 +1,6 @@
-"""LiDAR-only chain that REPLACES perception for the car's own planner: LiDAR -> detector -> GTSAM SLAM -> /planning/cones + /slam/odom.
-Use with launch_sim_local.sh <track> lidar_only (bringup pose_topic=/slam/odom, no ground-truth cones, no boundary_extractor).
-Ground truth is only read by slam_node's logging (accuracy score), never fed back.
+"""LiDAR-only chain replacing perception: LiDAR -> detector -> GTSAM SLAM -> /planning/cones and /slam/odom.
+
+Use via launch_sim_local.sh <track> lidar_only (bringup pose_topic=/slam/odom). Ground truth is only used by slam_node logging.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -12,19 +12,16 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     return LaunchDescription([
-        # Cone-map look-ahead.  Offline replay of 15 peanut/its_a_mess bags + skidpad/accel (skidpad_compare/horizon_ext):
-        # 15 m/3 obs/2 Hz -> 20 m/2 obs/5 Hz moves the median first-mapped distance (car moving) 11 -> 16 m and the
-        # 10th-pct warning time 1.3-1.8 s -> 3.1-3.7 s, with no false cones before first cone contact and unchanged
-        # pose/map error.  25 m adds pose-error ghost cones when SLAM drifts (bag NPF04), so it is not the default.
-        DeclareLaunchArgument('min_obs', default_value='2'),           # keyframe sightings before a landmark is published
-        DeclareLaunchArgument('max_range', default_value='20.0'),      # LiDAR detections beyond this are ignored by SLAM
-        DeclareLaunchArgument('publish_hz', default_value='5.0'),      # cone-map publish rate (planner replans per message)
-        DeclareLaunchArgument('skidpad', default_value='false'),     # true: skidpad_planner fits the known layout to the landmarks (landmarks go to /skidpad/cones)
-        DeclareLaunchArgument('registration_mode', default_value='library'),   # skidpad only: library (ft-fsd SkidpadRelocalizer) | custom (Kabsch/ICP)
+        # Cone-map look-ahead: 25 m adds pose-error ghost cones when SLAM drifts, so 20 m is the default.
+        DeclareLaunchArgument('min_obs', default_value='2'),
+        DeclareLaunchArgument('max_range', default_value='20.0'),
+        DeclareLaunchArgument('publish_hz', default_value='5.0'),      # planner replans per message
+        DeclareLaunchArgument('skidpad', default_value='false'),     # true: skidpad_planner fits the known layout (landmarks on /skidpad/cones)
+        DeclareLaunchArgument('registration_mode', default_value='library'),   # skidpad only: library (SkidpadRelocalizer) | custom (Kabsch/ICP)
         DeclareLaunchArgument('cones_topic', default_value='/planning/cones'),
         DeclareLaunchArgument('freeze', default_value='true'),   # publish each landmark once, at a fixed position
         DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | unknown (no colour; planner infers sides)
-        DeclareLaunchArgument('use_gpu', default_value='true'),   # false: LiDAR cone pipeline on the CPU (PCL), for load comparisons
+        DeclareLaunchArgument('use_gpu', default_value='true'),   # false: CPU (PCL) pipeline, for load comparisons
         DeclareLaunchArgument('slam_lateral_vel', default_value='false'),   # true: SLAM odometry integrates INS lateral velocity (corner sideslip)
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='lidar_perception_node', output='log',
              parameters=[{'gpu_voxel': False, 'leaf_size': 0.05, 'ground_threshold': 0.04, 'cluster_tolerance': 0.3,

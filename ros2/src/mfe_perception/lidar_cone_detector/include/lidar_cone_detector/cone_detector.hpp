@@ -15,8 +15,7 @@ namespace lidar_cone_detector {
     private:
         void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
         
-        // Tunable parameters
-        double cluster_tolerance_; // Similar to epsilon in DBSCAN
+        double cluster_tolerance_;
         int min_cluster_size_;
         int max_cluster_size_;
 

@@ -12,9 +12,6 @@
 #include <Eigen/Dense>
 #include "lidar_cone_detector/motion_distortion.hpp"
 
-// =================================================================================
-// 1. CONDITIONAL HEADERS (The Switch)
-// =================================================================================
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/segmentation/sac_segmentation.h>
@@ -22,8 +19,7 @@
 #include <pcl/search/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
 
-// GPU filters (CUDA) are compiled only when a CUDA compiler was found at build time.
-// They are used at runtime only if a CUDA device is present and use_gpu is true.
+// CUDA filters: built only with a CUDA compiler, used only if a device is present.
 #if defined(PLATFORM_JETSON) || defined(PLATFORM_DESKTOP_GPU)
     #define USE_GPU_PIPELINE 1
     #include <cuda_runtime.h>
@@ -49,13 +45,11 @@ public:
         this->declare_parameter("motion_scan_duration_sec", 0.1);
         this->declare_parameter("high_intensity_threshold", 150.0);
         this->declare_parameter("low_intensity_threshold", 50.0);
-        // Cone-body height band in the sensor frame, applied after ground removal.
-        // Defaults match the EUFS sim VLP-16: sensor origin ~1.0 m above the track,
-        // FSAE cones are 0.325 m tall (see comment at the passthrough below).
-        // On hardware, set these from the real sensor mounting height.
+        // Cone-body z band (sensor frame, after ground removal). Defaults fit the EUFS sim
+        // VLP-16 (sensor ~1.0 m above track); set from the real mount height on hardware.
         this->declare_parameter("cone_z_min", -1.10f);
         this->declare_parameter("cone_z_max", -0.50f);
-        // Use the CUDA filters when a CUDA device is present (ignored if built without CUDA).
+        // Ignored when built without CUDA.
         this->declare_parameter("use_gpu", true);
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
@@ -84,7 +78,8 @@ public:
                 gpu_pipe_ = std::make_unique<GpuConePipeline>();
             } else {
                 RCLCPP_WARN(this->get_logger(), "use_gpu requested but no CUDA device found; using CPU PCL");
-                cudaGetLastError();  // clear the sticky error from the failed query
+                // Clear the sticky error from the failed query.
+                cudaGetLastError();
             }
         }
 #endif
@@ -97,15 +92,12 @@ public:
             "/ekf/output", rclcpp::SensorDataQoS(),
             std::bind(&LidarPerceptionNode::odom_callback, this, std::placeholders::_1));
 
-        // Output: List of 3D Cone Centroids (Uncolored) -> Goes to Fusion Node
         pub_centroids_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/perception/cones_uncolored", 10);
 
-        // Output: Bounding box markers for Foxglove visualisation
         pub_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/perception/cones_markers", 10);
 
-        // Debug: Visualizing what the GPU actually processed
         pub_debug_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/debug/gpu_objects", 10);
 
@@ -122,8 +114,8 @@ private:
     }
 
 #if USE_GPU_PIPELINE
-    // x/y/z byte offsets if the raw buffer can go straight to the GPU (float32, 4-byte aligned,
-    // little-endian); false means use the CPU conversion.
+    // x/y/z byte offsets for direct GPU upload (float32, aligned, little-endian).
+    // Returns false to fall back to the CPU conversion.
     static bool raw_xyz_offsets(const sensor_msgs::msg::PointCloud2& m, unsigned off[3]) {
         if (m.is_bigendian || m.point_step % 4) return false;
         const char* names[3] = {"x", "y", "z"};
@@ -139,9 +131,8 @@ private:
 #endif
 
     void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // GPU raw path: the message buffer is uploaded as-is; unpacking, NaN removal and
-        // motion-distortion correction happen on the GPU (cuda_cone_pipeline.cu runRaw).
-        // The intensity filter (min_intensity > 0, hardware only) still needs host clouds.
+        // GPU raw path: buffer uploaded as-is; unpack, NaN strip and motion correction run on GPU.
+        // The intensity filter (hardware only) still needs host clouds.
         bool gpu_raw = false;
         unsigned raw_off[3] = {0, 0, 0};
 #if USE_GPU_PIPELINE
@@ -149,7 +140,7 @@ private:
 #endif
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         if (!gpu_raw) {
-            // Convert Input to PCL and strip NaN (organized Velodyne clouds use NaN for invalid returns)
+            // Strip NaN returns (organized Velodyne clouds mark invalid points as NaN).
             pcl::fromROSMsg(*msg, *host_cloud);
             std::vector<int> nan_indices;
             pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
@@ -161,7 +152,7 @@ private:
             }
         }
 
-        // Load PointXYZI in parallel — used for intensity filtering after geometric pipeline
+        // Intensity cloud for the optional intensity filter.
         pcl::PointCloud<pcl::PointXYZI>::Ptr host_cloud_i(new pcl::PointCloud<pcl::PointXYZI>);
         if (min_intensity_ > 0.0) {
             pcl::fromROSMsg(*msg, *host_cloud_i);
@@ -174,7 +165,6 @@ private:
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr debug_object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         visualization_msgs::msg::MarkerArray marker_array;
-        // Clear previous markers
         visualization_msgs::msg::Marker delete_all;
         delete_all.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_array.markers.push_back(delete_all);
@@ -182,12 +172,8 @@ private:
 
         #if USE_GPU_PIPELINE
         if (use_gpu_) {
-            // =========================================================
-            // OPTION A: GPU PIPELINE — ROI, voxel grid, RANSAC ground plane, cone-height
-            // band and Euclidean clustering all run on the GPU (cuda_cone_pipeline.cu).
-            // The host gets back the band points + one cluster label each and only does
-            // the per-cluster bounding-box checks.
-            // =========================================================
+            // GPU pipeline: ROI, voxel, RANSAC ground, band and clustering run on GPU;
+            // the host only does the per-cluster box checks.
             GpuConeParams gp;
             gp.leaf = static_cast<float>(leaf_size_);
             gp.ground_threshold = static_cast<float>(ground_threshold_);
@@ -223,8 +209,7 @@ private:
 
             std::vector<pcl::PointIndices> cluster_indices;
             if (min_intensity_ > 0.0 && !host_cloud_i->empty()) {
-                // Intensity filter must run before clustering, so this (hardware-only)
-                // case clusters on the CPU; the sim has no meaningful intensity (0 = off).
+                // Intensity filter must run before clustering, so clustering moves to CPU (hardware only).
                 pcl::KdTreeFLANN<pcl::PointXYZI> kdtree_i;
                 kdtree_i.setInputCloud(host_cloud_i);
                 pcl::PointCloud<pcl::PointXYZ>::Ptr hi_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -253,10 +238,8 @@ private:
             }
 
             for (const auto& idxs : cluster_indices) {
-                // Bounding box check — FSAE Driverless 2026 DD.1.3.2:
-                //   Small cones (blue/yellow/orange): 228 × 228 × 325 mm
-                //   Large orange cones (finish gate): 285 × 285 × 505 mm
-                // Filter sized to accept the large cone envelope with margin.
+                // FSAE 2026 DD.1.3.2 cone envelopes: small 228x228x325 mm, large orange 285x285x505 mm.
+                // Limits below add margin around the large cone.
                 float mn_x = FLT_MAX, mx_x = -FLT_MAX;
                 float mn_y = FLT_MAX, mx_y = -FLT_MAX;
                 float mn_z = FLT_MAX, mx_z = -FLT_MAX;
@@ -266,7 +249,6 @@ private:
                     mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
                     mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                 }
-                // Reject clusters too large to be cones (walls, barriers, car body)
                 if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
                     continue;
 
@@ -295,18 +277,12 @@ private:
         } else
         #endif
         {
-            // =========================================================
-            // OPTION B: CPU PIPELINE (Standard PCL)
-            // =========================================================
-
-            // 1. Downsample
             pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled(new pcl::PointCloud<pcl::PointXYZ>);
             pcl::VoxelGrid<pcl::PointXYZ> vg;
             vg.setInputCloud(host_cloud);
             vg.setLeafSize(leaf_size_, leaf_size_, leaf_size_);
             vg.filter(*downsampled);
 
-            // 2. Ground Removal
             pcl::SACSegmentation<pcl::PointXYZ> seg;
             pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
             pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
@@ -319,7 +295,6 @@ private:
             seg.setInputCloud(downsampled);
             seg.segment(*inliers, *coefficients);
 
-            // 3. Extract Objects
             pcl::PointCloud<pcl::PointXYZ>::Ptr object_cloud(new pcl::PointCloud<pcl::PointXYZ>);
             pcl::ExtractIndices<pcl::PointXYZ> extract;
             extract.setInputCloud(downsampled);
@@ -327,15 +302,8 @@ private:
             extract.setNegative(true);
             extract.filter(*object_cloud);
 
-            // 3b. Z-passthrough: keep cone-body height range in the velodyne sensor frame.
-            //     In the EUFS sim the VLP-16 sensor origin is ~1.0 m above the track surface
-            //     (confirmed by probing /lidar/points_raw: ground returns at z ≈ -1.014 m median).
-            //     FSAE cones are 0.325 m tall, so cone bodies span z ∈ [-1.0, -0.675 m].
-            //     After RANSAC removes the ground plane (threshold 0.05 m around z≈-1.0 m),
-            //     cone-body returns survive at roughly z ∈ [-0.95, -0.60 m].
-            //     Lower limit -1.10 m: keeps returns just below the ground plane (RANSAC may
-            //     leave some near-ground cone-base points).  Upper limit -0.50 m: excludes
-            //     car-body / roll-bar returns that appear above the cone tops.
+            // Cone-body band in the sensor frame (limits: cone_z_min/max).
+            // Lower limit keeps base points RANSAC may leave; upper excludes car body above cones.
             {
                 pcl::PassThrough<pcl::PointXYZ> pt;
                 pt.setInputCloud(object_cloud);
@@ -346,9 +314,8 @@ private:
                 object_cloud = cone_body;
             }
 
-            *debug_object_cloud = *object_cloud; // For vis
+            *debug_object_cloud = *object_cloud;
 
-            // 4. Clustering
             if (!object_cloud->empty()) {
                 pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
                 tree->setInputCloud(object_cloud);
@@ -361,13 +328,7 @@ private:
                 ec.setInputCloud(object_cloud);
                 ec.extract(cluster_indices);
 
-                // 5. Bounding box check + centroids — FSAE Driverless 2026 DD.1.3.2:
-                //   Small cones (blue/yellow/orange): 228 x 228 x 325 mm
-                //   Large orange cones (finish gate): 285 x 285 x 505 mm
-                // Mirrors the GPU pipeline's cone-shape validation (see OPTION A above),
-                // which was never ported to this CPU fallback branch — without it, any
-                // cluster with 3-150 points in the z-band (curbs, walls, car parts) was
-                // accepted as a cone regardless of physical size.
+                // Same FSAE cone-size check as the GPU branch.
                 for (const auto& indices : cluster_indices) {
                     float mn_x = FLT_MAX, mx_x = -FLT_MAX;
                     float mn_y = FLT_MAX, mx_y = -FLT_MAX;
@@ -378,7 +339,6 @@ private:
                         mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
                         mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                     }
-                    // Reject clusters too large to be cones (walls, barriers, car body)
                     if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
                         continue;
 
@@ -389,7 +349,6 @@ private:
             }
         }
 
-        // Publish
         publish_cloud(pub_centroids_, centroids_cloud, msg->header);
         if(!debug_object_cloud->empty()) publish_cloud(pub_debug_, debug_object_cloud, msg->header);
         if (pub_markers_->get_subscription_count() > 0) pub_markers_->publish(marker_array);
@@ -414,7 +373,8 @@ private:
 
     bool use_gpu_ = false;
 #if USE_GPU_PIPELINE
-    std::unique_ptr<GpuConePipeline> gpu_pipe_;   // persistent stream + device buffers
+    // Persistent stream and device buffers.
+    std::unique_ptr<GpuConePipeline> gpu_pipe_;
 #endif
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
     double cone_z_min_, cone_z_max_;
@@ -423,7 +383,7 @@ private:
 
     bool enable_motion_distortion_;
     double motion_scan_duration_sec_;
-    double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;   // until the first odometry message
+    double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;
     std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
     std::shared_ptr<perception::IntensityClassifier> intensity_classifier_;
 };

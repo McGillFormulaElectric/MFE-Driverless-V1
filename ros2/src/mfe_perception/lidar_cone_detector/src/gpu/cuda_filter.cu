@@ -1,10 +1,7 @@
-// CUDA implementation of PASSTHROUGH and VOXELGRID filters (see cuda_filter.hpp).
-//
-// PASSTHROUGH: flag kernel -> exclusive scan -> scatter (stable stream compaction).
-// VOXELGRID:   key kernel (voxel index packed into uint64) -> sort_by_key with the
-//              (x, y, z, 1) values -> reduce_by_key -> centroid kernel.
-// Scratch buffers are grow-only per cudaFilter instance, so steady-state frames
-// do not call cudaMalloc.
+// CUDA PASSTHROUGH and VOXELGRID filters (see cuda_filter.hpp).
+// PASSTHROUGH: flags -> exclusive scan -> scatter (stable compaction).
+// VOXELGRID: voxel key -> sort_by_key -> reduce_by_key -> centroid.
+// Grow-only scratch buffers: no cudaMalloc per frame.
 
 #include "lidar_cone_detector/cuda_filter.hpp"
 
@@ -46,8 +43,7 @@ __global__ void voxelKeys(const float4 *in, unsigned n, float3 inv, uint64_t *ke
   unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
   const float4 p = in[i];
-  // Same arithmetic as pcl::VoxelGrid (floor(p * inverse_leaf)), partition is identical
-  // up to a constant integer shift per axis.
+  // floor(p * inv_leaf) as in pcl::VoxelGrid; same partition up to a per-axis integer shift.
   const int64_t ix = static_cast<int64_t>(floorf(p.x * inv.x)) + kVoxelBias;
   const int64_t iy = static_cast<int64_t>(floorf(p.y * inv.y)) + kVoxelBias;
   const int64_t iz = static_cast<int64_t>(floorf(p.z * inv.z)) + kVoxelBias;
@@ -77,7 +73,6 @@ struct AddDouble4 {
 struct cudaFilter::Impl {
   cudaStream_t stream;
   FilterParam_t param{};
-  // scratch (grow-only)
   thrust::device_vector<unsigned> flags;
   thrust::device_vector<unsigned> offsets;
   thrust::device_vector<uint64_t> keys;
@@ -125,7 +120,6 @@ int cudaFilter::filter(void *output, unsigned int *countLeft, void *source, unsi
     return 0;
   }
 
-  // VOXELGRID
   const float3 inv = make_float3(1.0f / s.param.voxelX, 1.0f / s.param.voxelY, 1.0f / s.param.voxelZ);
   s.keys.resize(nCount);
   s.vals.resize(nCount);

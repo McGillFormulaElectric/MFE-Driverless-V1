@@ -4,8 +4,7 @@ namespace lidar_cone_detector {
 
 ConeDetectorNode::ConeDetectorNode(const rclcpp::NodeOptions &options)
 : Node("cone_detector_node", options) {
-    // Parameters (Match your Python DBSCAN settings)
-    this->declare_parameter("cluster_tolerance", 0.5); // 0.5m distance between points
+    this->declare_parameter("cluster_tolerance", 0.5);
     this->declare_parameter("min_cluster_size", 3);
     this->declare_parameter("max_cluster_size", 70);
 
@@ -24,13 +23,11 @@ ConeDetectorNode::ConeDetectorNode(const rclcpp::NodeOptions &options)
 }
 
 void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-    // 1. Convert ROS msg to PCL PointCloud
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *cloud);
 
     if (cloud->empty()) return;
 
-    // 2. Set up Euclidean Cluster Extraction (The C++ equivalent to your DBSCAN)
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
     tree->setInputCloud(cloud);
 
@@ -43,7 +40,6 @@ void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::Share
     ec.setInputCloud(cloud);
     ec.extract(cluster_indices);
 
-    // 3. Process Clusters
     pcl::PointCloud<pcl::PointXYZ>::Ptr debug_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
     mfe_msgs::msg::Track track_msg;
@@ -51,20 +47,17 @@ void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::Share
     for (const auto& indices : cluster_indices) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr cluster(new pcl::PointCloud<pcl::PointXYZ>);
 
-        // Extract points for this specific cluster
         for (const auto& index : indices.indices) {
             cluster->points.push_back(cloud->points[index]);
-            debug_cloud->points.push_back(cloud->points[index]); // Combine for debug visualization
+            debug_cloud->points.push_back(cloud->points[index]);
         }
 
-        // Calculate Centroid (The "Cone Location")
         Eigen::Vector4f centroid;
         pcl::compute3DCentroid(*cluster, centroid);
 
-        // TODO: Add your filtering logic here (check width/height of 'cluster')
+        // TODO: filter by cluster width/height.
 
-        // Create Cone Message — LiDAR alone cannot classify color, so UNKNOWN;
-        // color is assigned downstream by camera/GT fusion.
+        // LiDAR cannot classify color; fusion assigns it later.
         mfe_msgs::msg::Cone cone;
         cone.header = msg->header;
         cone.location.x = centroid[0];
@@ -74,17 +67,15 @@ void ConeDetectorNode::cloud_callback(const sensor_msgs::msg::PointCloud2::Share
         track_msg.track.push_back(cone);
     }
 
-    // 4. Publish
     pub_track_->publish(track_msg);
 
-    // Publish visual debug cloud
     sensor_msgs::msg::PointCloud2 debug_msg;
     pcl::toROSMsg(*debug_cloud, debug_msg);
     debug_msg.header = msg->header;
     pub_debug_clusters_->publish(debug_msg);
 }
 
-} // namespace
+}
 
 int main(int argc, char * argv[]) {
     rclcpp::init(argc, argv);
