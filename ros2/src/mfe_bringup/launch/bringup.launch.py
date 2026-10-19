@@ -102,11 +102,8 @@ def generate_launch_description():
     planner_backend_arg = DeclareLaunchArgument(
         'planner_backend',
         default_value='fasttube',
-        choices=['fasttube', 'amz'],
-        description=(
-            'Local path planner: fasttube (fsd_path_planning library) or amz (Delaunay + beam '
-            'search after the AMZ Driverless paper). Global/trackdrive planning is unaffected.'
-        ),
+        choices=['fasttube'],
+        description='Local path planner: fasttube (fsd_path_planning library).',
     )
 
     vision_model_arg = DeclareLaunchArgument(

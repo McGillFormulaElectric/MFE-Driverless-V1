@@ -34,7 +34,6 @@ except ImportError:
     except ImportError:
         _LIB_AVAILABLE = False
 
-from mfe_path_planning.amz_planner import AmzPlanner
 from mfe_path_planning.boundary_tracer import BoundaryTracer
 from mfe_path_planning.planner_utils import (
     arc_length, clamp_to_corridor, clearance_guard, closed_resample, cone_arrays,
@@ -113,8 +112,8 @@ class PathPlannerNode(Node):
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
         self.declare_parameter('skidpad_mode', 'cone_based')  # cone_based | hardcoded
         self.declare_parameter('use_pso_optimizer', True)
-        # Local (non-global) backend: fasttube = fsd_path_planning, amz = Delaunay + beam search (amz_planner.py).
-        self.declare_parameter('planner_backend', 'fasttube')  # fasttube | amz
+        # Local (non-global) backend: fasttube = fsd_path_planning.
+        self.declare_parameter('planner_backend', 'fasttube')
         # Uncoloured cones (LiDAR-only), local missions:
         #   trace         — boundary_tracer labels the walls; its gate-midpoint centreline is used directly
         #   trace_backend — same wall labels fed to the backend as left/right
@@ -134,7 +133,6 @@ class PathPlannerNode(Node):
         self._mission = mission_str
         self._skidpad_mode = self.get_parameter('skidpad_mode').value
         self._backend = self.get_parameter('planner_backend').value
-        self._amz = AmzPlanner() if self._backend == 'amz' else None
         self._unknown_mode = self.get_parameter('unknown_cone_mode').value
         self._colourless_raceline = bool(self.get_parameter('colourless_raceline').value)
         self._tracer = BoundaryTracer()
@@ -287,10 +285,6 @@ class PathPlannerNode(Node):
         if (not use_full_map and n_left + n_right == 0 and n_unknown > 0
                 and self._unknown_mode in ('trace', 'trace_backend')):
             self._plan_colourless()
-            return
-
-        if self._amz is not None and not self._global_planning:
-            self._plan_amz()
             return
 
         self.get_logger().info(
@@ -700,50 +694,21 @@ class PathPlannerNode(Node):
         ahead = rel @ self._car_dir >= -3.0
         Lm = ahead & (res.labels > 0)
         Rm = ahead & (res.labels < 0)
-        if self._amz is not None:
-            col = np.where(res.labels > 0, 2, np.where(res.labels < 0, 1, 0))   # ConeTypes LEFT=2 RIGHT=1
-            out = self._amz.plan(xy, col, self._car_pos, self._car_dir)
-            if out is None:
-                return None
-            path = out[0]
-        else:
-            cones = [np.zeros((0, 2)) for _ in range(len(ConeTypes))]
-            cones[ConeTypes.LEFT] = xy[Lm]
-            cones[ConeTypes.RIGHT] = xy[Rm]
-            try:
-                path = np.array(self._planner.calculate_path_in_global_frame(
-                    cones, self._car_pos, self._car_dir))[:, 1:3]
-            except Exception as e:
-                self.get_logger().error(f'Path calculation failed: {type(e).__name__}: {e}',
-                                        throttle_duration_sec=2.0)
-                return None
+        cones = [np.zeros((0, 2)) for _ in range(len(ConeTypes))]
+        cones[ConeTypes.LEFT] = xy[Lm]
+        cones[ConeTypes.RIGHT] = xy[Rm]
+        try:
+            path = np.array(self._planner.calculate_path_in_global_frame(
+                cones, self._car_pos, self._car_dir))[:, 1:3]
+        except Exception as e:
+            self.get_logger().error(f'Path calculation failed: {type(e).__name__}: {e}',
+                                    throttle_duration_sec=2.0)
+            return None
         if len(path) < 2:
             return None
         end = res.path[-1]
         j = int(np.argmin(np.linalg.norm(path - end, axis=1)))
         return path[:j + 1] if j >= 1 else None
-
-    def _plan_amz(self) -> None:
-        """AMZ-style planner over the live cone map. Colour is kept (UNKNOWN in LiDAR-only mode)."""
-        xy = self._cone_xy()
-        col = np.array([int(t) for t in self._cone_map.values()])
-        if self._off_map(xy):
-            return
-        res = self._amz.plan(xy, col, self._car_pos, self._car_dir)
-        if res is None:
-            self.get_logger().warn(f'AMZ planner found no path: {self._amz.last_debug}',
-                                   throttle_duration_sec=2.0)
-            return
-        path, left, right = res
-        dbg = self._amz.last_debug
-        self.get_logger().info(
-            f'amz planner OK: {len(path)} pts, {dbg.get("length", 0):.1f} m over {dbg.get("n_nodes")} gates, '
-            f'{dbg.get("n_cones")} cones in range, cost {dbg.get("cost", 0):.2f}',
-            throttle_duration_sec=2.0)
-        optimized = path
-        if len(path) > 3 and len(left) > 3 and len(right) > 3:
-            optimized = self._racing_line(path, left, right)
-        self._publish_plan(optimized, left, right)
 
 
 def main(args=None):
