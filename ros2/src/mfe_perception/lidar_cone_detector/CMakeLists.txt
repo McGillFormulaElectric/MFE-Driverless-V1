@@ -56,19 +56,23 @@ if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   find_package(CUDAToolkit REQUIRED)
 
-  # Desktop default SM 120 (Blackwell, needs CUDA >= 12.8); Jetson Orin Nano is SM 87.
-  # Override with -DLIDAR_CUDA_ARCH=<n>.
+  # Desktop default: SM 75 (GTX 16 / RTX 20) and SM 120 (Blackwell, needs CUDA >= 12.8); Jetson Orin Nano is SM 87.
+  # Override with -DLIDAR_CUDA_ARCH="<n>;<n>".
   if(EXISTS "/etc/nv_tegra_release")
     set(LIDAR_CUDA_ARCH_DEFAULT 87)
   else()
-    set(LIDAR_CUDA_ARCH_DEFAULT 120)
+    set(LIDAR_CUDA_ARCH_DEFAULT "75;120")
   endif()
-  set(LIDAR_CUDA_ARCH ${LIDAR_CUDA_ARCH_DEFAULT} CACHE STRING "CUDA SM architecture for lidar_gpu_filter")
+  set(LIDAR_CUDA_ARCH ${LIDAR_CUDA_ARCH_DEFAULT} CACHE STRING "CUDA SM architectures for lidar_gpu_filter")
 
+  set(LIDAR_CUDA_ARCHS ${LIDAR_CUDA_ARCH})
+  if("120" IN_LIST LIDAR_CUDA_ARCHS AND CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 12.8)
+    message(WARNING "nvcc ${CMAKE_CUDA_COMPILER_VERSION} cannot target sm_120 (needs CUDA >= 12.8): dropping it")
+    list(REMOVE_ITEM LIDAR_CUDA_ARCHS 120)
+  endif()
   set(LIDAR_GPU_OK ON)
-  if(LIDAR_CUDA_ARCH GREATER_EQUAL 120 AND CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 12.8)
-    message(WARNING "nvcc ${CMAKE_CUDA_COMPILER_VERSION} cannot target sm_${LIDAR_CUDA_ARCH} (needs CUDA >= 12.8): "
-                    "building lidar_perception_node CPU-only")
+  if(NOT LIDAR_CUDA_ARCHS)
+    message(WARNING "no CUDA architecture left: building lidar_perception_node CPU-only")
     set(LIDAR_GPU_OK OFF)
   endif()
 endif()
@@ -79,13 +83,13 @@ if(CMAKE_CUDA_COMPILER AND LIDAR_GPU_OK)
   target_link_libraries(lidar_gpu_filter PUBLIC CUDA::cudart)
   target_compile_options(lidar_gpu_filter PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
   set_target_properties(lidar_gpu_filter PROPERTIES
-    CUDA_ARCHITECTURES ${LIDAR_CUDA_ARCH}
+    CUDA_ARCHITECTURES "${LIDAR_CUDA_ARCHS}"
     POSITION_INDEPENDENT_CODE ON)
 
   target_link_libraries(lidar_perception_node lidar_gpu_filter)
   target_compile_definitions(lidar_perception_node PRIVATE PLATFORM_DESKTOP_GPU)
 
-  message(STATUS "lidar_perception_node: GPU filters enabled (CUDA ${CMAKE_CUDA_COMPILER_VERSION}, sm_${LIDAR_CUDA_ARCH})")
+  message(STATUS "lidar_perception_node: GPU filters enabled (CUDA ${CMAKE_CUDA_COMPILER_VERSION}, sm ${LIDAR_CUDA_ARCHS})")
 elseif(NOT CMAKE_CUDA_COMPILER)
   message(STATUS "No CUDA compiler found: lidar_perception_node will use CPU PCL only")
 endif()
