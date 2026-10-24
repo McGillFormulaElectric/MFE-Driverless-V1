@@ -174,8 +174,10 @@ class EufsSimBridge(Node):
         self._lidar_pub = self.create_publisher(
             PointCloud2, '/lidar/points_raw', _QOS_MFE)
 
-        self.create_subscription(
-            Image, '/zed/left/image_rect_color', self._camera_cb, _QOS_EUFS)
+        # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
+        # (only one of the two ever publishes).
+        for _cam_topic in ('/d435i/color/image_raw', '/zed/left/image_rect_color'):
+            self.create_subscription(Image, _cam_topic, self._camera_cb, _QOS_EUFS)
         self._camera_pub = self.create_publisher(
             Image, '/camera/image_raw', _QOS_MFE)
 

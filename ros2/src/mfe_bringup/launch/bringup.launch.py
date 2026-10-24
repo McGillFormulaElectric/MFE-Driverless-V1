@@ -459,7 +459,9 @@ def generate_launch_description():
         elif mission_str == 'skidpad':
             # Perception-based orange-gate detection: 5 passes (entry + 4 laps of central gate)
             # finish_x stays as emergency fallback only.
-            extra = {'gate_crossings': 5}
+            # The 5th pass is the car returning to the gate after the 4th lap; it then exits through the gate and stops
+            # in the stop zone ~20 m past the pass point (finish_x=30 did this by position).
+            extra = {'gate_crossings': 5, 'stop_after_gate_m': 18.0}
         else:
             extra = {}
         return [Node(
