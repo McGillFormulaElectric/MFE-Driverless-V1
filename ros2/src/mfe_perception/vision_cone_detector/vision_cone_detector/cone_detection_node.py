@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
+import array
+import os
 import threading
+import time
 import cv2
 import torch
 import numpy as np
@@ -53,16 +56,25 @@ class ConeDetectionNode(Node):
 
         # Load YOLO model with custom weights
         self.device = "cuda" if torch.cuda.is_available() else "cpu"  
-        self.model = YOLO(self.model_path).to(self.device)  # load model onto the device
+        if str(self.model_path).endswith(".engine"):  # TensorRT engine: already bound to the GPU, Ultralytics rejects .to()
+            self.model = YOLO(self.model_path, task="detect")
+        else:
+            self.model = YOLO(self.model_path).to(self.device)  # load model onto the device
+
+        self._profile = bool(os.environ.get("VISION_PROFILE"))   # per-stage timing log (VISION_PROFILE=1)
+        self._prof = []
 
         # Obtain ROS parameters for YOLO mode
         self.declare_parameter("yolo_conf", value=0.5)
         self.declare_parameter("yolo_iou", value=0.3)
         self.conf = self.get_parameter("yolo_conf").value
+        # Debug overlay (boxes drawn on the image and published on image/cones_image). Off on the car: draw offline from the bag.
+        self.declare_parameter("publish_debug_image", False)
+        self.publish_debug_image = self.get_parameter("publish_debug_image").value
         self.iou = self.get_parameter("yolo_iou").value
 
         # Constructs queue for frame generation
-        self.frame_queue = queue.Queue(maxsize=10)
+        self.frame_queue = queue.Queue(maxsize=1)   # newest frame only: a backlog means detecting stale images
 
         # Camera intrinsics (populated from CameraInfo topic)
         self.fx = None
@@ -99,18 +111,20 @@ class ConeDetectionNode(Node):
 
     @staticmethod
     def _imgmsg_to_bgr(msg: Image) -> np.ndarray:
-        """Convert sensor_msgs/Image to a BGR numpy array without cv_bridge."""
-        data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+        """Convert sensor_msgs/Image to a contiguous BGR numpy array without cv_bridge."""
+        data = np.frombuffer(msg.data, dtype=np.uint8)
         enc = msg.encoding
-        if enc in ('rgb8', 'bgr8'):
-            frame = data.reshape(msg.height, msg.width, 3)
-            return frame[..., ::-1].copy() if enc == 'rgb8' else frame.copy()
-        if enc in ('rgba8', 'bgra8'):
-            frame = data.reshape(msg.height, msg.width, 4)[..., :3]
-            return frame[..., ::-1].copy() if enc == 'rgba8' else frame.copy()
+        if enc == 'bgr8':
+            return data.reshape(msg.height, msg.width, 3).copy()     # message buffer does not outlive the callback
+        if enc == 'rgb8':
+            return cv2.cvtColor(data.reshape(msg.height, msg.width, 3), cv2.COLOR_RGB2BGR)
+        if enc == 'bgra8':
+            return cv2.cvtColor(data.reshape(msg.height, msg.width, 4), cv2.COLOR_BGRA2BGR)
+        if enc == 'rgba8':
+            return cv2.cvtColor(data.reshape(msg.height, msg.width, 4), cv2.COLOR_RGBA2BGR)
         # fallback: treat as raw bytes, best-effort
         channels = max(1, len(data) // (msg.height * msg.width))
-        return data.reshape(msg.height, msg.width, channels)
+        return data.reshape(msg.height, msg.width, channels).copy()
 
     def callback(self, msg: Image) -> None:
         """
@@ -219,31 +233,51 @@ class ConeDetectionNode(Node):
             self.get_logger().debug("Pulled frame from generator")
 
             # run object detection using the configured confidence/IoU thresholds
+            t0 = time.perf_counter()
             detections = self.model(frame, conf=self.conf, iou=self.iou, verbose=False)
+            t1 = time.perf_counter()
 
-            annotated_frame = detections[0].plot()
+            # annotated image: debug only (publish_debug_image:=true and a listener); the stack itself publishes data, not pictures
+            want_image = self.publish_debug_image and self.cone_image_publisher.get_subscription_count() > 0
+            annotated_frame = detections[0].plot() if want_image else None
+            t2 = time.perf_counter()
 
-            # process detections FIRST: mean-colour ROI sampling must read the clean
-            # frame, before render_detection draws green boxes into it
+            # mean-colour ROI sampling reads the clean frame
             try:
                 self.process_and_publish_detections(detections, frame, self.latest_depth, capture_stamp)
             except Exception as e:
                 self.get_logger().error(f"Error processing detections: {e}")
 
-            # render bounding boxes (mutates frame — visualisation only)
-            self.render_detection(frame, detections)
+            t_a = t_b = time.perf_counter()
 
-            # publish annotated image
-            image_msg = Image()
-            image_msg.header.stamp = self.get_clock().now().to_msg()
-            image_msg.header.frame_id = self.camera_frame
-            image_msg.height = annotated_frame.shape[0]
-            image_msg.width = annotated_frame.shape[1]
-            image_msg.encoding = 'bgr8'
-            image_msg.is_bigendian = 0
-            image_msg.step = annotated_frame.shape[1] * 3
-            image_msg.data = annotated_frame.tobytes()
-            self.cone_image_publisher.publish(image_msg)
+            # publish annotated image (debug view): must never stop detection, so failures are only logged
+            t_c = t_b
+            if want_image:
+                try:
+                    image_msg = Image()
+                    image_msg.header.stamp = self.get_clock().now().to_msg()
+                    image_msg.header.frame_id = self.camera_frame
+                    image_msg.height = annotated_frame.shape[0]
+                    image_msg.width = annotated_frame.shape[1]
+                    image_msg.encoding = 'bgr8'
+                    image_msg.is_bigendian = 0
+                    image_msg.step = annotated_frame.shape[1] * 3
+                    # array.array('B') is copied in one go; assigning bytes is validated element by element (~160 ms at 640x480)
+                    buf = array.array('B')
+                    buf.frombytes(np.ascontiguousarray(annotated_frame).tobytes())
+                    image_msg.data = buf
+                    t_c = time.perf_counter()
+                    self.cone_image_publisher.publish(image_msg)
+                except Exception as e:
+                    self.get_logger().error(f"Failed to publish annotated image: {e}")
+
+            if self._profile:
+                t3 = time.perf_counter()
+                self._prof.append((t1 - t0, t2 - t1, t_a - t2, t_b - t_a, t_c - t_b, t3 - t_c))
+                if len(self._prof) >= 20:
+                    m = np.mean(self._prof, axis=0) * 1000.0
+                    self.get_logger().info(f"PROFILE ms/frame over 20: predict {m[0]:.1f} | plot {m[1]:.1f} | process_and_publish_detections {m[2]:.1f} | render {m[3]:.1f} | build image msg {m[4]:.1f} | publish image {m[5]:.1f} | queue {self.frame_queue.qsize()}")
+                    self._prof = []
 
         return
     
@@ -260,8 +294,6 @@ class ConeDetectionNode(Node):
           - Converting pixel (u,v,depth) to 3D in meters requires camera intrinsics; this code
             publishes points in image pixel coordinates with z=depth (meters if depth provided).
         """
-        all_cluster_points = []
-        all_cluster_colors = []
 
         # Depth may arrive at a different resolution than RGB (e.g. decimated depth
         # stream). Scale RGB pixel coords into depth-image coords before indexing.
@@ -365,36 +397,6 @@ class ConeDetectionNode(Node):
                 centre_frames.append(frame_mode)
                 area = float((x2 - x1) * (y2 - y1))
                 centre_areas.append(area)
-
-                # TODO: verify/fix this
-                # Build cluster points: we will sample pixels in the bbox to avoid huge clouds
-                # sample stride to limit points
-                stride = 4
-                ys = np.arange(y1, y2, stride)
-                xs = np.arange(x1, x2, stride)
-                if ys.size == 0 or xs.size == 0:
-                    continue
-                grid_x, grid_y = np.meshgrid(xs, ys)
-                px = grid_x.ravel()
-                py = grid_y.ravel()
-                pz = np.zeros_like(px, dtype=np.float32)
-
-                # get depth per sampled pixel if available (scaled into depth coords)
-                if depth_frame is not None:
-                    dpy = np.minimum(dh - 1, (py * d_sy).astype(int))
-                    dpx = np.minimum(dw - 1, (px * d_sx).astype(int))
-                    depth_vals = depth_frame[dpy, dpx].astype(np.float32)
-                    depth_vals[depth_vals == 0] = np.nan
-                    pz = depth_vals
-                else:
-                    pz[:] = np.nan
-
-                # pack colors per point
-                colors = np.tile(np.array(mean_rgb, dtype=np.uint8), (px.shape[0], 1))
-
-                pts = np.stack([px.astype(np.float32), py.astype(np.float32), pz.astype(np.float32)], axis=1)
-                all_cluster_points.append(pts)
-                all_cluster_colors.append(colors)
 
         # centres pointcloud
         if len(centres) > 0:
@@ -515,26 +517,6 @@ class ConeDetectionNode(Node):
 
         return cloud
         
-
-    def render_detection(self, frame, detections):
-        """
-        Renders bounding boxes around the objects detected on the frames for displaying purposes
-        Args:
-            frame (numpy.ndarray) : image in cv2-readable type from the camera
-            detections (pd.DataFrame) : dataframe of info of objects detected by model
-        """
-
-        for r in detections:
-            boxes = r.boxes
-            for box in boxes:
-                b = box.xyxy[0].to('cpu').detach().numpy().copy()  # get box coordinates in (top, left, bottom, right) format
-                c = box.cls
-
-                # render
-                cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (0, 255, 0), 2)
-                # cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        return
 
     def object_tracking(self) -> None:
         """
