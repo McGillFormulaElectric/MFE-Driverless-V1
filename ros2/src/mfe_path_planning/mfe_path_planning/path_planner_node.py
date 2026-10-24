@@ -12,6 +12,7 @@ Publishes:
 """
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -71,6 +72,7 @@ else:
     _MFE_TO_FSD = {}
 
 _GRID = 0.5                # cone map key resolution (m)
+_RECOLOUR = os.environ.get('MFE_PLANNER_RECOLOUR', '0') == '1'   # experiment: a later colour replaces the stored one
 _MAP_CAP = 1000            # cone map size cap (local planning / global missions)
 _SKIDPAD_MAP_CAP = 500
 _CONE_VIS_R = 50.0         # local planning visibility radius (m)
@@ -416,6 +418,8 @@ class PathPlannerNode(Node):
                 self._cone_map[key] = new_type
             elif self._cone_map[key] == ConeTypes.UNKNOWN and new_type != ConeTypes.UNKNOWN:
                 self._cone_map[key] = new_type
+            elif _RECOLOUR and new_type != ConeTypes.UNKNOWN and self._cone_map[key] != new_type:
+                self._cone_map[key] = new_type    # sources that refine colours over time (camera votes) overwrite earlier guesses
 
     def _evict_far_cones(self, cap: int) -> None:
         """Over the cap, drop the cones farthest from the car. (Evicting the oldest key instead churned the
