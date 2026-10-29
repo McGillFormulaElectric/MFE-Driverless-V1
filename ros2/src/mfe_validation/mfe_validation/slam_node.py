@@ -5,7 +5,10 @@ In : /sim/xsens/state_odom (yaw and forward/lateral speed are integrated; its ab
 Out: /slam/odom (start-relative frame), /validation/cones (mfe_msgs/Track of confirmed landmarks).
 Colours: color_mode='gt' comes from /ground_truth/track_colored (validation only; positions never use ground truth);
 'geometric' is left=blue/right=yellow; 'yolo' gives each LiDAR landmark the colour the camera's YOLO detections vote for
-(see cam_fusion.py), with the 'color_fallback' for landmarks the camera has not settled.
+(see cam_fusion.py), with the 'color_fallback' for landmarks the camera has not settled. 'orange_only': /planning/cones
+stays all UNKNOWN (colourless path), and only the landmarks the camera settles as ORANGE_BIG/ORANGE_SMALL are published
+on orange_cones_topic (no geometric fallback). 'yolo_lidar': camera colour or UNKNOWN on /planning/cones (no geometric
+guess), and orange landmarks also go on orange_cones_topic.
 Accuracy against /ground_truth/state_odom is logged for scoring only.
 """
 import math
@@ -20,14 +23,15 @@ from mfe_validation.cam_fusion import CamFusion, PoseHistory, decide
 from mfe_validation.common import QOS, car_start, read_track, wrap, yaw_of
 from mfe_validation.slam_backend import compose, make_backend, transform_from
 
-PARAMS = dict(track_csv='', keyframe_m=1.5, gate=1.0, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
+PARAMS = dict(track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
               min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
               cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
               use_lateral_vel=False, backend='gtsam',
               yolo_topic='/image/cones', cam_hfov_deg=87.0, cam_width=640, cam_height=480, cam_pitch_deg=-3.0,   # fitted: YOLO boxes sit within a few px of landmarks at -3 deg (URDF says +10.15 but the sim image is ~level)
-              
+
               cam_x=0.12, cam_y=0.0, cam_z=0.76, cone_z=0.16, pix_du=0.0, pix_dv=0.0, match_px=40.0,
-              color_min_range=2.0, color_max_range=18.0, min_color_votes=2, color_vote_share=0.6, color_fallback='geometric')
+              color_min_range=2.0, color_max_range=18.0, min_color_votes=2, color_vote_share=0.6, color_fallback='geometric',
+              orange_cones_topic='/planning/orange_cones')
 
 
 class SlamNode(Node):
@@ -73,10 +77,14 @@ class SlamNode(Node):
         self.create_subscription(PointCloud2, '/perception/cones_uncolored', self.on_cones, QOS)
         if self.color_mode == 'gt':
             self.create_subscription(Track, '/ground_truth/track_colored', self.on_gt_track, 1)
-        if self.color_mode == 'yolo':
+        if self.color_mode in ('yolo', 'orange_only', 'yolo_lidar'):
             self.create_subscription(Cone, p('yolo_topic'), self.on_yolo, QOS)
         self.pub_odom = self.create_publisher(Odometry, '/slam/odom', QOS)
         self.pub_cones = self.create_publisher(Track, p('cones_topic'), QOS)
+        self.pub_orange = (self.create_publisher(Track, p('orange_cones_topic'), QOS)
+                           if self.color_mode in ('orange_only', 'yolo_lidar') else None)
+        # DISPLAY ONLY (not read by the planner): every landmark with its camera colour vote (cam_fusion.decide)
+        self.pub_camcol = self.create_publisher(Track, '/planning/cones_camera_colours', QOS)
         self.create_timer(1.0 / max(0.1, float(p('publish_hz'))), self.publish_cones)
         self.create_timer(10.0, self.report)
         self.get_logger().info(f'slam_node up: velocity+yaw odometry, cone landmarks, colour mode={self.color_mode}, output {p("cones_topic")}')
@@ -114,6 +122,11 @@ class SlamNode(Node):
         if self.fallback == 'geometric':
             return Cone.BLUE if lm[1] > 0 else Cone.YELLOW
         return Cone.UNKNOWN
+
+    def orange_colour(self, j):
+        """orange_only: ORANGE_BIG or ORANGE_SMALL once the camera settles on orange, else None (no fallback)."""
+        c = decide(self.votes[j], self.min_votes, self.vote_share) if j in self.votes else None
+        return c if c in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL) else None
 
     def on_gt(self, m):
         self.gt_pose = (m.pose.pose.position.x, m.pose.pose.position.y)
@@ -209,7 +222,7 @@ class SlamNode(Node):
         if not self.n_keys:
             return
         cx, cy = self.kf_pose[0], self.kf_pose[1]
-        msg = Track(); now = self.get_clock().now().to_msg()
+        msg = Track(); orange = Track(); now = self.get_clock().now().to_msg()
         for j, lm in self.lms.items():
             if self.lm_obs[j] < self.min_obs or math.hypot(lm[0] - cx, lm[1] - cy) > self.pub_radius:
                 continue
@@ -227,12 +240,35 @@ class SlamNode(Node):
                 cone.color = Cone.BLUE if lm[1] > 0 else Cone.YELLOW
             elif self.color_mode == 'yolo':
                 cone.color = self.landmark_colour(j, lm)
+            elif self.color_mode == 'yolo_lidar':   # camera colour or UNKNOWN (no geometric guess); LiDAR planner picks the walls
+                c = decide(self.votes[j], self.min_votes, self.vote_share) if j in self.votes else None
+                cone.color = c if c is not None else Cone.UNKNOWN
+                if c in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL):
+                    oc_msg = Cone(); oc_msg.header = cone.header; oc_msg.color = c
+                    oc_msg.location = cone.location
+                    orange.track.append(oc_msg)
+            elif self.color_mode == 'orange_only':
+                oc = self.orange_colour(j)
+                if oc is not None:
+                    oc_msg = Cone(); oc_msg.header = cone.header; oc_msg.color = oc
+                    oc_msg.location = cone.location
+                    orange.track.append(oc_msg)
             elif self.gt_cones is not None and len(self.gt_cones):
                 d = np.hypot(*(self.gt_cones - lm).T); i = int(np.argmin(d))
                 if d[i] <= self.color_radius:
                     cone.color = self.gt_colors[i]
             msg.track.append(cone)
         self.pub_cones.publish(msg)
+        if self.pub_orange is not None:
+            self.pub_orange.publish(orange)
+        dbg = Track()   # mfe_msgs/Track has no header: stamp each Cone
+        for j, lm in self.lms.items():
+            c = decide(self.votes[j], self.min_votes, self.vote_share) if j in self.votes else None
+            dc = Cone(); dc.header.stamp = now; dc.header.frame_id = 'map'
+            dc.location.x, dc.location.y = float(lm[0]), float(lm[1])
+            dc.color = c if c is not None else Cone.UNKNOWN
+            dbg.track.append(dc)
+        self.pub_camcol.publish(dbg)
 
     def report(self):
         if not self.errs:
@@ -240,10 +276,19 @@ class SlamNode(Node):
         e, r = np.array(self.errs), np.array(self.errs_raw) if self.errs_raw else np.array([float('nan')])
         self.get_logger().info(f'SLAM pose err vs GT: mean {e.mean():.2f} m max {e.max():.2f} m | raw Xsens {np.nanmean(r):.2f}/{np.nanmax(r):.2f} m | '
                                f'{self.n_keys} keyframes, {len(self.lms)} landmarks ({sum(v >= self.min_obs for v in self.lm_obs.values())} published)')
+        if self.color_mode == 'yolo_lidar':   # unsettled = UNKNOWN (4), no geometric guess
+            cols = [decide(self.votes[j], self.min_votes, self.vote_share) if j in self.votes else None for j in self.lms]
+            cols = [Cone.UNKNOWN if c is None else c for c in cols]
+            self.get_logger().info(f'YOLO colours: {self.n_frames} camera frames, {self.n_votes} votes | landmarks '
+                                   f'blue {cols.count(0)} yellow {cols.count(1)} orange {cols.count(2) + cols.count(3)} none {cols.count(4)}')
         if self.color_mode == 'yolo':
             cols = [self.landmark_colour(j, lm) for j, lm in self.lms.items()]
             self.get_logger().info(f'YOLO colours: {self.n_frames} camera frames, {self.n_votes} votes | landmarks '
                                    f'blue {cols.count(0)} yellow {cols.count(1)} orange {cols.count(2) + cols.count(3)} none {cols.count(4)}')
+        if self.color_mode == 'orange_only':
+            n_or = sum(self.orange_colour(j) is not None for j in self.lms)
+            self.get_logger().info(f'orange_only: {n_or} orange landmarks of {len(self.lms)} '
+                                   f'({self.n_frames} camera frames, {self.n_votes} votes)')
         self.errs, self.errs_raw = [], []
 
 

@@ -20,7 +20,8 @@ def generate_launch_description():
         DeclareLaunchArgument('registration_mode', default_value='library'),   # skidpad only: library (SkidpadRelocalizer) | custom (Kabsch/ICP)
         DeclareLaunchArgument('cones_topic', default_value='/planning/cones'),
         DeclareLaunchArgument('freeze', default_value='true'),   # publish each landmark once, at a fixed position
-        DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | unknown (no colour; planner infers sides)
+        DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | yolo | orange_only (cones stay UNKNOWN; orange landmarks on orange_cones_topic) | yolo_lidar (camera colours or UNKNOWN; orange also on orange_cones_topic) | unknown (no colour; planner infers sides)
+        DeclareLaunchArgument('orange_cones_topic', default_value='/planning/orange_cones'),   # orange_only: finish detector timing-line input
         DeclareLaunchArgument('use_gpu', default_value='true'),   # false: CPU (PCL) pipeline, for load comparisons
         DeclareLaunchArgument('slam_lateral_vel', default_value='false'),   # true: SLAM odometry integrates INS lateral velocity (corner sideslip)
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='lidar_perception_node', output='log',
@@ -29,7 +30,7 @@ def generate_launch_description():
                           'height_min': 0.02, 'enable_motion_distortion': False,
                           'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
-             parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool), 'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
+             parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool), 'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'orange_cones_topic': LC('orange_cones_topic'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
                           'max_range': ParameterValue(LC('max_range'), value_type=float), 'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),
                           'freeze': ParameterValue(LC('freeze'), value_type=bool)}]),
         Node(package='mfe_validation', executable='skidpad_planner', name='skidpad_planner', output='screen', condition=IfCondition(LC('skidpad')),

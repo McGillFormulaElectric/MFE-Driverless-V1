@@ -99,6 +99,11 @@ def generate_launch_description():
         default_value='trace',
         description='Planning without cone colours: trace (wall tracer path), trace_backend (tracer labels, '
                     'backend plans), fasttube (ft-fsd sorts the uncoloured cones itself), heading (legacy).')
+    planner_params_arg = DeclareLaunchArgument(
+        'planner_params_file',
+        default_value='',
+        description='Optional ROS params YAML (absolute path) merged into path_planner_node, e.g. '
+                    'pipeline_hysteresis, jump_gate, colour_vote, cone_expiry, planner_profile.')
     planner_backend_arg = DeclareLaunchArgument(
         'planner_backend',
         default_value='fasttube',
@@ -167,12 +172,19 @@ def generate_launch_description():
 
     num_laps_arg = DeclareLaunchArgument(
         'num_laps',
-        default_value='1',
+        default_value='',
         description=(
-            'Number of laps before the orange-cone finish gate triggers a stop. '
-            'On closed-loop tracks (autocross/peanut) each return to the start position '
-            'counts as one lap. Ignored when endless:=true.'
+            'Number of laps before the orange-cone finish gate triggers a stop. Empty = mission default '
+            '(trackdrive 10, other missions 1). On closed-loop tracks (autocross/trackdrive/peanut) each '
+            'signed crossing of the orange timing line counts as one lap. Ignored when endless:=true.'
         ),
+    )
+
+    orange_topic_arg = DeclareLaunchArgument(
+        'orange_topic',
+        default_value='/planning/cones',
+        description='Cone topic the finish detector reads orange cones from for the closed-loop timing line. '
+                    'Use /planning/orange_cones with lidar_only color_mode:=orange_only.',
     )
 
     run_perception_arg = DeclareLaunchArgument(
@@ -369,19 +381,24 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     # Path planning — Path planner
     # --------------------------------------------------------------------------
-    path_planner_node = Node(
-        package='mfe_path_planning',
-        executable='path_planner_node',
-        name='path_planner_node',
-        output='screen',
-        parameters=[{
+    def _make_path_planner(context):
+        params = [{
             'mission': mission,
             'skidpad_mode': skidpad_mode,
             'planner_backend': planner_backend,
             'unknown_cone_mode': LaunchConfiguration('unknown_cone_mode'),
-        }],
-        remappings=[('/ekf/output', pose_topic)],
-    )
+        }]
+        extra = LaunchConfiguration('planner_params_file').perform(context)
+        if extra:
+            params.append(extra)   # YAML loaded after the dict, so it can override these
+        return [Node(
+            package='mfe_path_planning',
+            executable='path_planner_node',
+            name='path_planner_node',
+            output='screen',
+            parameters=params,
+            remappings=[('/ekf/output', pose_topic)],
+        )]
 
     # --------------------------------------------------------------------------
     # Control — Pure pursuit
@@ -443,25 +460,32 @@ def generate_launch_description():
         if context.launch_configurations.get('endless', 'false').lower() == 'true':
             return [LogInfo(msg='[bringup] finish_detector DISABLED — endless mode, car loops indefinitely')]
         mission_str = context.launch_configurations.get('mission', 'autocross')
-        num_laps = int(context.launch_configurations.get('num_laps', '1'))
+        num_laps_str = context.launch_configurations.get('num_laps', '')
+        num_laps = int(num_laps_str) if num_laps_str else (10 if mission_str == 'trackdrive' else 1)
         fx = _FINISH_X.get(mission_str, 100.0)
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
         # Closed-loop tracks use return-to-start lap counting.
         # Linear tracks keep x-position logic as a fallback only — num_laps ignored.
+        # Closed loops: laps are signed crossings of the orange timing line (virtual line 6.79 m past the start
+        # if no orange pair is known by min_travel_m). No LiDAR trigger and no x-position trigger on these tracks.
         if mission_str in ('autocross', 'trackdrive', 'peanut'):
-            extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps}
+            extra = {'min_travel_m': 60.0, 'return_to_start_r': 5.0, 'num_laps': num_laps,
+                     'line_crossing': True, 'orange_topic': LaunchConfiguration('orange_topic').perform(context),
+                     'stop_after_line_m': 5.0, 'lidar_enabled': False, 'position_fallback': False}
         elif mission_str == 'acceleration':
             # Perception-based: one orange-gate pass finishes the run. finish_x stays
             # wired above as the emergency fallback only (fires if the gate is never
             # perceived) — gate_crossings=1 makes that the PRIMARY path, not x-position.
-            extra = {'gate_crossings': 1}
+            extra = {'gate_crossings': 1,
+                     'orange_topic': LaunchConfiguration('orange_topic').perform(context)}
         elif mission_str == 'skidpad':
             # Perception-based orange-gate detection: 5 passes (entry + 4 laps of central gate)
             # finish_x stays as emergency fallback only.
             # The 5th pass is the car returning to the gate after the 4th lap; it then exits through the gate and stops
             # in the stop zone ~20 m past the pass point (finish_x=30 did this by position).
-            extra = {'gate_crossings': 5, 'stop_after_gate_m': 18.0}
+            extra = {'gate_crossings': 5, 'stop_after_gate_m': 18.0, 'position_fallback': False,
+                     'orange_topic': LaunchConfiguration('orange_topic').perform(context)}
         else:
             extra = {}
         return [Node(
@@ -595,7 +619,7 @@ def generate_launch_description():
     compute_group = GroupAction(
         condition=IfCondition(run_compute),
         actions=[
-            path_planner_node,
+            OpaqueFunction(function=_make_path_planner),
             pure_pursuit_node,
             finish_detector_node,
             lap_validator_node,
@@ -608,11 +632,13 @@ def generate_launch_description():
         skidpad_mode_arg,
         planner_backend_arg,
         unknown_cone_mode_arg,
+        planner_params_arg,
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
         endless_arg,
         num_laps_arg,
+        orange_topic_arg,
         use_slam_arg,
         use_ekf_arg,
         run_perception_arg,

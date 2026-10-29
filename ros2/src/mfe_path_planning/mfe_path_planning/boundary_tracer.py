@@ -30,8 +30,12 @@ class TracerParams:
     local_dir: bool = True
     w_min: float = 2.4             # FS minimum track width 3 m, minus map noise
     w_max: float = 7.0
-    w_rel_max: float = 1.7         # and at most this times the recent gate widths
+    w_rel_max: float = 2.0         # and at most this times the recent gate widths
+    w_ref_floor: float = 3.0       # the reference for w_rel_max is at least this (FS minimum track width)
     gate_skew_max_deg: float = 75.0  # a wall that jumps to the other wall makes a gate along the track (~90 deg)
+    stale_head_fix: bool = False    # a gate too wide to the other wall's head pairs with the nearest other-wall cone ahead of it
+    stale_window: float = 8.0      # that cone lies within this distance of the other wall's head
+    mid_jump_max: float = float('inf')  # max gate-midpoint sideways step, in track widths (off: it removed legitimate gates)
     dir_span: float = 3.0
     infer_r: float = 3.5
     infer_ratio: float = 1.6
@@ -299,14 +303,14 @@ class BoundaryTracer:
                     continue
                 side = min(avail, key=lambda sd: opts[sd][0][2])
                 c0 = opts[side][0][1]
-                for k, cost, gw in opts[side]:
+                for k, cost, gw, oq in opts[side]:
                     if cost > c0 + p.branch_margin:
                         break
-                    grown.append(self._extend(xy, st, side, k, cost, gw))
+                    grown.append(self._extend(xy, st, side, k, cost, gw, oq))
                 # the other wall may also move first (hairpin tips)
                 if p.branch_both and opts[-side]:
-                    k, cost, gw = opts[-side][0]
-                    grown.append(self._extend(xy, st, -side, k, cost, gw))
+                    k, cost, gw, oq = opts[-side][0]
+                    grown.append(self._extend(xy, st, -side, k, cost, gw, oq))
             if not grown:
                 break
             grown.sort(key=lambda st: st["cost"] - p.progress_gain * st["length"])
@@ -329,13 +333,17 @@ class BoundaryTracer:
         return best["walls"][1], best["walls"][-1], best["gates"]
 
     @staticmethod
-    def _extend(xy, st, side, k, cost, gw):
+    def _extend(xy, st, side, k, cost, gw, oq=-1):
         walls = {1: list(st["walls"][1]), -1: list(st["walls"][-1])}
         hl, hr = walls[1][-1], walls[-1][-1]
         m_old = (xy[hl] + xy[hr]) / 2
         walls[side].append(k)
         used = st["used"].copy()
         used[k] = True
+        if oq >= 0 and oq != walls[-side][-1]:
+            # stale other-wall head: advance it to the cone the new gate was measured against
+            walls[-side].append(oq)
+            used[oq] = True
         hl, hr = walls[1][-1], walls[-1][-1]
         m_new = (xy[hl] + xy[hr]) / 2
         mids = st["mids"] + [m_new]
@@ -356,7 +364,8 @@ class BoundaryTracer:
                     tdir=tdir, length=length, cost=st["cost"] + cost, mids=mids, tdir0=st["tdir0"], span=st["span"])
 
     def _candidates(self, xy, lab, used, walls, side, tdir, widths, turn_max, rot_max, n_best):
-        """Up to n_best feasible next cones for wall `side`, cheapest first: (index, step cost, new gate length)."""
+        """Up to n_best feasible next cones for wall `side`, cheapest first: (index, step cost, new gate length,
+        other-wall index to advance to, or -1 to keep the other head)."""
         p = self.p
         W = walls[side]; O = walls[-side]
         h = xy[W[-1]]; ho = xy[O[-1]]
@@ -393,6 +402,32 @@ class BoundaryTracer:
         Gn = (P - ho) if side == 1 else (ho - P)
         gw = np.hypot(Gn[:, 0], Gn[:, 1])
         rot = _angles(nrm, Gn)
+        # Stale other-wall head: when the gate to the head is too wide, measure against the nearest unused
+        # cone of the other wall ahead of its head (within stale_window), and advance the head to it.
+        qi = np.full(len(cand), -1)
+        if p.stale_head_fix:
+            pool = np.flatnonzero((lab == -side) & ~used)
+            pool = pool[(np.hypot(*(xy[pool] - ho).T) <= p.stale_window) & ((xy[pool] - ho) @ tdir >= 0.0)]
+            w_lim = min(p.w_max, p.w_rel_max * max(w_ref, p.w_ref_floor))
+            for i in np.flatnonzero(gw > w_lim):
+                if len(pool) == 0:
+                    break
+                dq = np.hypot(*(xy[pool] - P[i]).T)
+                for j in np.argsort(dq):
+                    q = int(pool[j]); g2 = float(dq[j])
+                    if g2 > w_lim:
+                        break
+                    if g2 < p.w_min:
+                        continue
+                    Gq = (P[i] - xy[q]) if side == 1 else (xy[q] - P[i])
+                    r2 = math.degrees(float(_angles(nrm, Gq[None])[0]))
+                    if r2 > math.degrees(rot_max):
+                        continue
+                    if self._cone_on_segment(xy, np.concatenate([nb, pool])[np.concatenate([nb, pool]) != q],
+                                             ho, xy[q], p.gate_clear):
+                        continue
+                    gw[i] = g2; rot[i] = math.radians(r2); qi[i] = q
+                    break
         # Cones known to be on the other wall: its recent traced cones and every cone labelled for it.
         Oxy = xy[O[-8:]]
         clear = np.minimum(np.min(np.hypot(P[:, None, 0] - Oxy[None, :, 0], P[:, None, 1] - Oxy[None, :, 1]), axis=1),
@@ -400,8 +435,12 @@ class BoundaryTracer:
         # A wall step must not cross the track: sideways motion towards the other wall stays
         # well below a track width.
         across = -side * (V @ nrm)
-        ok = ((dc >= p.d_min) & (ang <= turn_max) & (V @ tdir >= -p.back_frac * dc) & (gw >= p.w_min) & (gw <= p.w_max) & (gw <= p.w_rel_max * w_ref)
-              & (rot <= rot_max) & (clear >= p.opp_clear) & (across <= p.across_max * w_ref))
+        w_rel_ref = max(w_ref, p.w_ref_floor)   # a run of narrow gates must not make the next real gate look too wide
+        Qo = np.where(qi[:, None] >= 0, xy[np.maximum(qi, 0)], ho[None, :])
+        mid_jump = np.abs(((P + Qo) / 2 - (h + ho) / 2) @ nrm)
+        ok = ((dc >= p.d_min) & (ang <= turn_max) & (V @ tdir >= -p.back_frac * dc) & (gw >= p.w_min) & (gw <= p.w_max) & (gw <= p.w_rel_max * w_rel_ref)
+              & (rot <= rot_max) & (clear >= p.opp_clear) & (across <= p.across_max * w_ref)
+              & (mid_jump <= p.mid_jump_max * w_ref))
         if not ok.any():
             return []
         cost = (p.w_angle * (ang / turn_max) ** 2
@@ -411,18 +450,19 @@ class BoundaryTracer:
         out = []
         for i in np.flatnonzero(ok)[np.argsort(cost[ok])]:
             c = P[i]
+            hq = xy[qi[i]] if qi[i] >= 0 else ho      # the other-wall partner of this gate
             if any(_seg_intersect(h, c, xy[O[j]], xy[O[j + 1]]) for j in range(max(0, len(O) - 6), len(O) - 1)):
                 continue
             # Free track: the triangle the step adds holds no cone. Otherwise the candidate sits
             # behind the real wall, e.g. a neighbouring section's wall.
             near = np.concatenate([nb, self._nbrs[O[-1]]])
-            if self._cone_inside(xy, near, k_excl=cand[i], tri=(h, c, ho)):
+            if self._cone_inside(xy, near, k_excl=cand[i], tri=(h, c, hq)):
                 continue
             # No cone on the new gate: it would graze a cone and cross a wall. The own wall's head is
             # exempt, since at a bend the other wall lags and the gate passes through it.
-            if self._cone_on_segment(xy, near[near != W[-1]], c, ho, p.gate_clear):
+            if self._cone_on_segment(xy, near[near != W[-1]], c, hq, p.gate_clear):
                 continue
-            out.append((int(cand[i]), float(cost[i]), float(gw[i])))
+            out.append((int(cand[i]), float(cost[i]), float(gw[i]), int(qi[i])))
             if len(out) >= n_best:
                 break
         return out

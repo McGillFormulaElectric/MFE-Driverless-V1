@@ -46,7 +46,30 @@ _PARAM_DEFAULTS = {
     'speed_ki': 0.1,
     'speed_kb': 0.25,                 # brake per m/s of overspeed
     'brake_deadband_mps': 0.3,
+    'path_timeout_s': 0.5,            # no new path for this long: brake and hold (0 disables the failsafe)
+    'path_timeout_brake': 1.0,        # brake command while the path is stale (held until a fresh path arrives)
+    'path_stale_creep_mps': 2.0,      # stale path: creep along the LAST path (re-anchored to the car) at this speed
+    'path_stale_max_s': 3.0,          # ... for at most this long (or until the path end), then brake and hold
 }
+
+_STANDSTILL_HOLD_MPS = 0.3   # stale path below this speed: the car is held at standstill
+
+
+def path_is_stale(now_s, path_time_s, timeout_s) -> bool:
+    """True when the last path is older than timeout_s. Never before the first path; timeout_s <= 0 disables."""
+    return timeout_s > 0.0 and path_time_s is not None and now_s - path_time_s > timeout_s
+
+
+def stale_creep_active(stale_age_s, creep_max_s, path_at_end) -> bool:
+    """True while a stale path may still be followed at creep speed: within creep_max_s of the path going stale
+    and before the end of the last path. Past either, the caller brakes and holds."""
+    return (not path_at_end) and stale_age_s < creep_max_s
+
+
+def stale_path_command(car_speed, brake_level):
+    """(throttle, brake, holding) while no fresh path is present: no drive, full brake level. holding is True once
+    the car is below _STANDSTILL_HOLD_MPS, so the brake keeps it at standstill until a path arrives."""
+    return 0.0, float(brake_level), bool(car_speed < _STANDSTILL_HOLD_MPS)
 
 
 class PurePursuitNode(Node):
@@ -91,6 +114,12 @@ class PurePursuitNode(Node):
         self._speed_ki = p['speed_ki']
         self._speed_kb = p['speed_kb']
         self._brake_deadband = p['brake_deadband_mps']
+        self._path_timeout = float(p['path_timeout_s'])
+        self._path_timeout_brake = float(p['path_timeout_brake'])
+        self._path_stale = False
+        self._creep_mps = float(p['path_stale_creep_mps'])
+        self._creep_max_s = float(p['path_stale_max_s'])
+        self._stale_since = None   # node-clock time the current path went stale
 
         self._dt = 1.0 / float(p['control_rate_hz'])
         self._pt2 = Pt2Anticipator(p['steer_pt2_tau'], p['steer_pt2_zeta'], p['steer_pt2_filter_tau'], self._dt)
@@ -165,10 +194,46 @@ class PurePursuitNode(Node):
             return
 
         if self._path is None or self._car_x is None:
+            # No path has ever arrived: hard brake (not a coast), so the car cannot roll off before a plan exists.
             self.get_logger().warn('Waiting for path/odometry...', throttle_duration_sec=2.0)
             self._reset_controller_state()
-            self._publish_command(0.0, 0.0, 0.0)
+            self._publish_command(0.0, 0.0, self._path_timeout_brake)
             return
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if path_is_stale(now, self._path_time, self._path_timeout):
+            if self._stale_since is None:
+                self._stale_since = now
+            age = now - self._stale_since
+            if not self._path_stale:
+                self._path_stale = True
+                self.get_logger().warn(
+                    f'No path for more than {self._path_timeout} s — creeping {self._creep_mps} m/s on the last path '
+                    f'for up to {self._creep_max_s} s (v={self._car_speed:.2f} m/s)')
+            # Re-anchor the last path to the car, then steer on it; the speed target is the creep speed.
+            target, self._path_idx = find_lookahead(
+                self._path, self._path_idx, self._car_x, self._car_y,
+                max(self._ld_min, min(self._ld_max, self._K_v * max(self._car_speed, 0.0))))
+            at_end = self._path_idx >= len(self._path) - 2
+            if stale_creep_active(age, self._creep_max_s, at_end):
+                steering_norm = pure_pursuit_steering(
+                    self._car_x, self._car_y, self._car_yaw, target, self._wheelbase, self._max_steering_rad)
+                throttle, brake, self._speed_integral = pi_throttle_brake(
+                    self._creep_mps, self._car_speed, self._speed_integral,
+                    self._speed_kp, self._speed_ki, self._speed_kb, self._brake_deadband, self._dt)
+                self._publish_command(self._pt2(steering_norm), throttle, brake)
+                return
+            # Creep over (time or path end): brake and hold until a fresh path arrives.
+            throttle, brake, holding = stale_path_command(self._car_speed, self._path_timeout_brake)
+            if holding:
+                self.get_logger().info('Holding at standstill until a fresh path arrives', throttle_duration_sec=2.0)
+            self._reset_controller_state()
+            self._publish_command(0.0, throttle, brake)
+            return
+        self._stale_since = None
+        if self._path_stale:
+            self.get_logger().info('Fresh path received — resuming')
+            self._path_stale = False
 
         # Look-ahead distance from the local curvature, sampled before the look-ahead search.
         kappa = local_curvature(self._path, self._path_idx)
