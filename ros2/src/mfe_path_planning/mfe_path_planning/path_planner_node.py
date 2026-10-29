@@ -26,7 +26,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from nav_msgs.msg import Path, Odometry
-from std_msgs.msg import Float32, Int32
+from std_msgs.msg import Float32, Float64MultiArray, Int32
 from mfe_msgs.msg import Cone, Track
 from sensor_msgs.msg import PointCloud2
 
@@ -40,6 +40,7 @@ except ImportError:
     except ImportError:
         _LIB_AVAILABLE = False
 
+from mfe_path_planning import raceline as _raceline
 from mfe_path_planning.boundary_tracer import BoundaryTracer
 from mfe_path_planning.planner_utils import (
     arc_length, clamp_to_corridor, clearance_guard, closed_resample, cone_arrays,
@@ -88,6 +89,8 @@ def _debug_flip_u(seed, key) -> float:
 _RECOLOUR = os.environ.get('MFE_PLANNER_RECOLOUR', '0') == '1'   # experiment: a later colour replaces the stored one
 _MAP_CAP = 1000            # cone map size cap (local planning / global missions)
 _SKIDPAD_MAP_CAP = 500
+_RL_MAX_OFF_M = 2.0        # race line: car further than this from the line -> tracer path for that cycle
+_RL_MOVE_M = 0.5           # race line: the lap-1 trail starts once the car is this far from its first pose
 _CONE_VIS_R = 50.0         # local planning visibility radius (m)
 _CONE_BEHIND_M = 3.0       # tolerance behind the car for the visibility filter
 _OFF_MAP_M = 20.0          # car this far from every mapped cone: off track, publish nothing
@@ -241,7 +244,7 @@ def lap_reobserved(banned, det_xy, tol_m=LAP_REOBS_TOL_M) -> set:
 
 
 # A banned cell more than this far behind the car (along its heading) counts as passed. The LiDAR reports only points
-# ahead of the car (x >= ~1.6 m in every scan), so a cell behind it can never be re-seen, and the tracer's
+# ahead of the car (x >= ~1.6 m in every rgen7_a scan), so a cell behind it can never be re-seen, and the tracer's
 # start gate sits behind the car on the driven path: passing a cell is the only later evidence for it.
 LAP_PASSED_M = 1.0
 
@@ -429,6 +432,15 @@ class PathPlannerNode(Node):
         # planning. The next 40 points from the nearest point (searched near the last index) go through _publish_plan.
         # Jump gate is disabled in this mode. '' = off (normal behaviour).
         self.declare_parameter('debug_fixed_path_csv', '')
+        # Offline race line for laps >= raceline_after_lap (raceline.py). Built once from the lap-1 cone union and
+        # trail, then frozen: each cycle publishes raceline_window_m of it from the car's projection, with target
+        # speeds on /planning/target_speeds. False = behaviour unchanged.
+        self.declare_parameter('raceline_enable', False)
+        self.declare_parameter('raceline_after_lap', 1)
+        self.declare_parameter('raceline_extra_margin_m', 0.25)
+        self.declare_parameter('raceline_a_lat', 6.0)
+        self.declare_parameter('raceline_v_max', 8.0)
+        self.declare_parameter('raceline_window_m', 35.0)
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
@@ -589,6 +601,23 @@ class PathPlannerNode(Node):
             self.get_logger().info(
                 f'PathPlannerNode started. Mission: {mission_str} | local planner: {self._backend}')
 
+        # Offline race line state (see _rl_* methods): 'off' -> 'collect' -> 'built', or 'failed' (tracer for good).
+        self._rl_on = bool(self.get_parameter('raceline_enable').value)
+        self._rl_after = int(self.get_parameter('raceline_after_lap').value)
+        self._rl_margin = float(self.get_parameter('raceline_extra_margin_m').value)
+        self._rl_a_lat = float(self.get_parameter('raceline_a_lat').value)
+        self._rl_v_max = float(self.get_parameter('raceline_v_max').value)
+        self._rl_window_m = float(self.get_parameter('raceline_window_m').value)
+        self._rl_state = 'collect' if self._rl_on else 'off'
+        self._rl_p0 = None                       # first odometry position (movement is measured from it)
+        self._rl_trail: list = []                # car trail from first movement, until the build
+        self._rl_union = _raceline.ConeUnion() if self._rl_on else None
+        self._rl = None                          # the built race line
+        self._rl_idx: Optional[int] = None       # race-line index of the last published window
+        self._rl_cycles = 0
+        self._rl_fallbacks = 0
+        self._rl_build_s: Optional[float] = None
+
         # ---------- Subscribers / publishers ----------
         self.create_subscription(Track, '/planning/cones', self._cones_cb, _QOS_LATEST)
         # finish_detector publishes laps on a RELIABLE, KEEP_LAST depth-10 QoS (same as _QOS).
@@ -598,6 +627,8 @@ class PathPlannerNode(Node):
         self._pub_left = self.create_publisher(Path, '/planning/track_left', _QOS)
         self._pub_right = self.create_publisher(Path, '/planning/track_right', _QOS)
         self._pub_horizon = self.create_publisher(Float32, '/planning/path_horizon', _QOS)
+        if self._rl_on:
+            self._pub_speeds = self.create_publisher(Float64MultiArray, '/planning/target_speeds', _QOS)
 
     def _accel_midline_path(self, centerline: np.ndarray) -> np.ndarray:
         """Acceleration: the straight follows the midline of the mapped cone pairs ahead of the car. ft-fsd's
@@ -656,6 +687,8 @@ class PathPlannerNode(Node):
         self._car_yaw_rate = float(msg.twist.twist.angular.z)
         self._odom_received = True
         self._tracer.add_pose(self._car_pos)
+        if self._rl_state == 'collect' and self._laps_done < self._rl_after:
+            self._rl_collect_odom()
         if self._lap_reset is not None and self._lap_reset.update(self._car_pos):
             self._lap_return_fire()
         if self._lap_banned:
@@ -754,6 +787,10 @@ class PathPlannerNode(Node):
                     f'Re-planning stopped.')
                 self._publish_centerline(locked)
                 return
+
+        # Offline race line (raceline_enable): collects the lap-1 union, builds once, then follows the line.
+        if self._rl_state != 'off' and self._rl_cycle(msg):
+            return
 
         # Acceleration also gets the full map: ft-fsd's AccelerationRelocalizer needs >= 4 cones on the
         # car's left, and the visibility-filtered set never held more than 3 (replayed bags: 0.3-1.4 m off).
@@ -1418,6 +1455,83 @@ class PathPlannerNode(Node):
             self._pub_left.publish(path_from_xy(np.array(left)[:, :2], self._map_frame, stamp))
         if right is not None and len(right) > 0:
             self._pub_right.publish(path_from_xy(np.array(right)[:, :2], self._map_frame, stamp))
+
+    # ------------------------------------------------------------------ offline race line (raceline_enable)
+
+    def _rl_collect_odom(self) -> None:
+        """Lap-1 trail: from the first odometry point more than _RL_MOVE_M from the first pose, until the build."""
+        pos = self._car_pos
+        if self._rl_p0 is None:
+            self._rl_p0 = pos.copy()
+        if self._rl_trail or float(np.hypot(*(pos - self._rl_p0))) > _RL_MOVE_M:
+            self._rl_trail.append((float(pos[0]), float(pos[1])))
+
+    def _rl_cycle(self, msg: Track) -> bool:
+        """Race-line cycle. True when the race-line window was published, so the tracer is skipped this cycle."""
+        if self._rl_state == 'collect':
+            if self._laps_done < self._rl_after:
+                if self._rl_trail:   # union of the cones seen since first movement (lap 1)
+                    xy = np.array([(c.location.x, c.location.y) for c in msg.track], float).reshape(-1, 2)
+                    col = np.array([c.color for c in msg.track], int)
+                    ok = np.isfinite(xy).all(axis=1)
+                    self._rl_union.add(xy[ok], col[ok])
+                return False
+            self._rl_build()
+        if self._rl_state != 'built':
+            return False
+        return self._rl_follow()
+
+    def _rl_build(self) -> None:
+        """Build the race line once, from the union and trail frozen at laps_completed = raceline_after_lap."""
+        n_cones, n_trail = self._rl_union.n, len(self._rl_trail)
+        params = _raceline.RaceLineParams(extra_margin_m=self._rl_margin, a_lat=self._rl_a_lat, v_max=self._rl_v_max)
+        t0 = time.perf_counter()
+        rl, err = None, None
+        try:
+            rl = _raceline.build(self._rl_union.xy, np.array(self._rl_trail, float), params,
+                                 colours=self._rl_union.colours)
+        except Exception as e:  # noqa: BLE001 - a failed build must not stop the tracer
+            err = f'{type(e).__name__}: {e}'
+        self._rl_build_s = time.perf_counter() - t0
+        self._rl_union = None
+        self._rl_trail = []
+        if rl is None:
+            self._rl_state = 'failed'
+            self.get_logger().warn(
+                f'race line: build failed ({err or "degenerate input"}) after {self._rl_build_s:.2f} s; '
+                f'{n_cones} union cones, {n_trail} trail points. Tracer path for the rest of the run.')
+            return
+        self._rl = rl
+        self._rl_state = 'built'
+        self.get_logger().info(
+            f'RACE LINE built at laps_completed={self._laps_done}: length {rl.length_m:.1f} m, '
+            f'predicted lap {rl.lap_s:.2f} s, min side width {rl.min_side_width_m:.2f} m, '
+            f'build {self._rl_build_s:.2f} s ({n_cones} union cones, {n_trail} trail points, '
+            f'a_lat {self._rl_a_lat:g}, margin +{self._rl_margin:g} m)')
+
+    def _rl_follow(self) -> bool:
+        """Publish the race-line window of raceline_window_m from the car's projection, with target speeds.
+        False (tracer this cycle, logged) when the car is more than _RL_MAX_OFF_M from the line."""
+        rl = self._rl
+        idx, dist = _raceline.project(rl, self._car_pos, self._rl_idx)
+        if dist > _RL_MAX_OFF_M:
+            self._rl_fallbacks += 1
+            self.get_logger().warn(
+                f'race line: car {dist:.2f} m from the line, tracer path this cycle (fallbacks={self._rl_fallbacks})',
+                throttle_duration_sec=2.0)
+            return False
+        self._rl_idx = idx
+        ii = _raceline.segment_indices(rl, idx, self._rl_window_m)
+        stamp = self.get_clock().now().to_msg()
+        self._pub_centerline.publish(path_from_xy(rl.xy[ii], self._map_frame, stamp))
+        speeds = Float64MultiArray()
+        speeds.data = [float(v) for v in rl.v[ii]]
+        self._pub_speeds.publish(speeds)
+        self._rl_cycles += 1
+        if self._rl_cycles % 100 == 0:
+            self.get_logger().info(
+                f'race line: {self._rl_cycles} windows published, {self._rl_fallbacks} tracer fallbacks')
+        return True
 
     # ------------------------------------------------------------------ colourless / AMZ
 
