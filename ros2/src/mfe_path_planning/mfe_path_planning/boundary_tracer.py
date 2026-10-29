@@ -41,6 +41,19 @@ class TracerParams:
     infer_ratio: float = 1.6
     gate_clear: float = 0.6        # cones are never mid-track
     across_max: float = 0.65       # max sideways step towards the other wall, in track widths
+    # Same-side check: a new cone must be nearer its own wall's head than the other wall's head (+ margin).
+    # Stops a wall jumping across the track to the other wall's next cone at a corner (fixes the corner cut).
+    same_side: bool = True
+    same_side_margin: float = 0.0  # m
+    # Same-side check only after the car has driven this far (odometer, never reset). Parked at the start, with
+    # few cones and no trail votes, the check sent garden_light's first path across the blue wall.
+    # A vote-count gate fixed that but broke its_a_mess from lap 2 on (no LiDAR-only run finished).
+    same_side_after_m: float = 15.0
+    # A cone whose side was only inferred (not voted by the driven trail) may still join either wall;
+    # the gate geometry decides. Off: inferred sides exclude a cone from the other wall, as before.
+    infer_soft: bool = True
+    # The grown corridor's last gates sit at the map frontier (or a stale head): drop this many before the path.
+    tail_drop: int = 1
     opp_clear: float = 2.0
     max_length: float = 35.0       # planning horizon
     max_steps: int = 60
@@ -56,6 +69,15 @@ class TracerParams:
     w_spacing: float = 1.0
     w_width: float = 1.0
     w_rot: float = 1.0
+    # Free-track test (always on): no mapped cone may lie inside a candidate's triangle (head, candidate, other head).
+    # A mid-track phantom cell 1-2 m off the track blocked both walls at its_a_mess's bottom-left corner
+    # (its_a_mess: corridor gates short, path 0.6 m, silent stall). When the path is short or None, the
+    # corridor is re-grown with unlabelled cells excluded from this test, and the longer path is kept if it
+    # reaches fallback_m. (Dropping the test entirely cut rectangle's corners: 15% of poses within 0.5 m of a cone.)
+    fallback_m: float = 8.0        # re-grow when the path is shorter than this (or None); 0 = off
+    fallback_clear_m: float = 0.5  # a re-grown path is kept only if no point comes this close to a voted (labelled) cone
+    # A published path shorter than this is None (planner no-path handling), not a stub 0.5-3 m long.
+    min_path_m: float = 3.0
     # output
     resample: float = 0.5
 
@@ -90,6 +112,10 @@ def _angles(a, V) -> np.ndarray:
     return np.arccos(np.clip(c, -1.0, 1.0))
 
 
+def _horizon(path) -> float:
+    return float(np.sum(np.linalg.norm(np.diff(path, axis=0), axis=1))) if len(path) > 1 else 0.0
+
+
 class BoundaryTracer:
     def __init__(self, params: TracerParams | None = None):
         self.p = params or TracerParams()
@@ -97,6 +123,7 @@ class BoundaryTracer:
         self._trail_s: list = []
         self._lab_xy = np.zeros((0, 2))
         self._lab_votes = np.zeros(0)
+        self._relax = False            # set while re-growing without the free-track test
 
     def add_pose(self, pos) -> None:
         pos = np.asarray(pos, dtype=float)
@@ -199,6 +226,11 @@ class BoundaryTracer:
         self._label_passed(xy, car_pos, car_dir)
         votes = self._labels_for(xy)
         lab = np.sign(votes)
+        self._lab_hard = lab.copy()     # votes only: an inferred side (below) must not bar a cone from a wall
+        last = getattr(self, "_odo_last", None)
+        self._odo = getattr(self, "_odo", 0.0) + (0.0 if last is None else float(np.linalg.norm(car_pos - last)))
+        self._odo_last = car_pos.copy()
+        self._ss_ok = self._odo >= p.same_side_after_m
         lab = self._infer_labels(xy, lab)
 
         start = self._start_gate(xy, lab, car_pos, car_dir)
@@ -212,19 +244,48 @@ class BoundaryTracer:
         for sd in (1, -1):
             pts = xy[lab == sd]
             self._clear_lab[sd] = (cKDTree(pts).query(xy)[0] if len(pts) else np.full(len(xy), np.inf))
-        L, R, gates = self._grow(xy, lab, iL, iR, tdir)
-
-        mids = np.array([(xy[a] + xy[b]) / 2.0 for a, b in gates])
-        path = self._path_from(mids, car_pos, car_dir)
+        self._relax = False
+        path, L, R, gates, reason = self._trace(xy, lab, iL, iR, tdir, car_pos, car_dir)
+        if p.fallback_m > 0 and (path is None or _horizon(path) < p.fallback_m):
+            # fallback: a phantom cell inside a gate triangle can stop both walls; keep the longer corridor
+            self._relax = True
+            path2, L2, R2, gates2, reason2 = self._trace(xy, lab, iL, iR, tdir, car_pos, car_dir)
+            self._relax = False
+            # clearance from the voted (labelled) cones only: the phantom cells the fallback is for are unlabelled
+            vot = xy[self._lab_hard != 0]
+            clear2 = float(cKDTree(vot).query(path2)[0].min()) if (path2 is not None and len(vot)) else np.inf
+            if path2 is not None and _horizon(path2) >= p.fallback_m and clear2 >= p.fallback_clear_m \
+                    and (path is None or _horizon(path2) > _horizon(path)):
+                path, L, R, gates, reason = path2, L2, R2, gates2, reason2
+                self.debug["fallback"] = "labelled_only"
         labels = lab.copy()
         labels[L] = 1; labels[R] = -1
         self.debug.update(n_gates=len(gates), n_left=len(L), n_right=len(R), n_labelled=int(np.count_nonzero(lab)))
         self.debug["walls"] = (xy[L], xy[R])
+        if path is not None and _horizon(path) < p.min_path_m:
+            reason = f"path {_horizon(path):.2f} m < {p.min_path_m:.1f} m (short corridor)"
+            path = None
         if path is None:
-            self.debug["reason"] = "walls end behind the car"
+            self.debug["reason"] = reason or "no path"
             return None
-        horizon = float(np.sum(np.linalg.norm(np.diff(path, axis=0), axis=1)))
+        self.debug.pop("reason", None)
+        horizon = _horizon(path)
         return TraceResult(path=path, left=xy[L], right=xy[R], horizon=horizon, labels=labels, debug=self.debug)
+
+    def _trace(self, xy, lab, iL, iR, tdir, car_pos, car_dir):
+        """Grow both walls from the start gate and turn the gates into a path. Returns (path, L, R, gates, reason)."""
+        p = self.p
+        self.debug.pop("path_reason", None)
+        L, R, gates = self._grow(xy, lab, iL, iR, tdir)
+        mids = np.array([(xy[a] + xy[b]) / 2.0 for a, b in gates])
+        path = None
+        if p.tail_drop and len(gates) > 2 + p.tail_drop:
+            path = self._path_from(mids[:-p.tail_drop], car_pos, car_dir)
+        if path is None:
+            # no trim (or the trimmed corridor ends behind the car): use the full corridor
+            path = self._path_from(mids, car_pos, car_dir)
+        reason = None if path is not None else self.debug.get("path_reason", "no path")
+        return path, L, R, gates, reason
 
     def _infer_labels(self, xy, lab):
         """Give unlabelled cones (e.g. beside the start line, first seen when the lap closes) the side of
@@ -392,7 +453,7 @@ class BoundaryTracer:
                     tdir = tl / nt
         nrm = np.array([-tdir[1], tdir[0]])
         nb = self._nbrs[W[-1]]
-        cand = nb[~used[nb] & (lab[nb] != -side)]
+        cand = nb[~used[nb] & (self._lab_hard[nb] != -side)] if p.infer_soft else nb[~used[nb] & (lab[nb] != -side)]
         if len(cand) == 0:
             return []
         P = xy[cand]
@@ -441,6 +502,12 @@ class BoundaryTracer:
         ok = ((dc >= p.d_min) & (ang <= turn_max) & (V @ tdir >= -p.back_frac * dc) & (gw >= p.w_min) & (gw <= p.w_max) & (gw <= p.w_rel_max * w_rel_ref)
               & (rot <= rot_max) & (clear >= p.opp_clear) & (across <= p.across_max * w_ref)
               & (mid_jump <= p.mid_jump_max * w_ref))
+        # Heads about a track width apart ACROSS the track (lateral gap, not gate widths) means a straight with
+        # staggered heads: the bisector test would reject the abreast candidate (e.g. garden_light's start).
+        _across = p.w_min <= abs(float((h - ho) @ nrm)) <= 1.25 * p.w_ref_floor
+        if p.same_side and getattr(self, "_ss_ok", True) and not _across:
+            # the candidate must lie on this wall's side of the bisector between the two heads
+            ok &= np.hypot(*(P - h).T) <= np.hypot(*(P - ho).T) + p.same_side_margin
         if not ok.any():
             return []
         cost = (p.w_angle * (ang / turn_max) ** 2
@@ -456,7 +523,9 @@ class BoundaryTracer:
             # Free track: the triangle the step adds holds no cone. Otherwise the candidate sits
             # behind the real wall, e.g. a neighbouring section's wall.
             near = np.concatenate([nb, self._nbrs[O[-1]]])
-            if self._cone_inside(xy, near, k_excl=cand[i], tri=(h, c, hq)):
+            # fallback re-grow: unlabelled (never voted) cells are not walls and do not block a gate
+            tri_near = near[self._lab_hard[near] != 0] if self._relax else near
+            if self._cone_inside(xy, tri_near, k_excl=cand[i], tri=(h, c, hq)):
                 continue
             # No cone on the new gate: it would graze a cone and cross a wall. The own wall's head is
             # exempt, since at a bend the other wall lags and the gate passes through it.
@@ -503,6 +572,7 @@ class BoundaryTracer:
         """Gate midpoints -> smoothed path from the car to the last gate, resampled."""
         p = self.p
         if len(mids) < 2:
+            self.debug["path_reason"] = f"fewer than 2 gates ({len(mids)})"
             return None
         keep = [0]
         for i in range(1, len(mids)):
@@ -510,6 +580,7 @@ class BoundaryTracer:
                 keep.append(i)
         M = mids[keep]
         if len(M) < 2:
+            self.debug["path_reason"] = "fewer than 2 distinct gate midpoints"
             return None
         # Smooth interior points: zipper midpoints alternate slightly.
         if len(M) >= 3:
@@ -523,11 +594,14 @@ class BoundaryTracer:
         dist = np.linalg.norm(P - car_pos, axis=1)
         i = int(np.argmin(dist))
         if i == len(A) - 1 and u[i] >= 1.0 - 1e-6:
+            self.debug["path_reason"] = (f"car {float(np.linalg.norm(car_pos - M[-1])):.1f} m past the last gate "
+                                         "(gates end behind the car)")
             return None
         Q = np.vstack([car_pos, M[i + 1:]]) if dist[i] > 0.05 else np.vstack([P[i], M[i + 1:]])
         seg = np.linalg.norm(np.diff(Q, axis=0), axis=1)
         s = np.concatenate([[0.0], np.cumsum(seg)])
         if s[-1] < 0.5:
+            self.debug["path_reason"] = f"path {float(s[-1]):.2f} m < 0.5 m"
             return None
         ss = np.arange(0.0, s[-1], p.resample)
         ss = np.append(ss, s[-1]) if s[-1] - ss[-1] > 1e-3 else ss
