@@ -252,7 +252,6 @@ def generate_launch_description():
     mission = LaunchConfiguration('mission')
     skidpad_mode = LaunchConfiguration('skidpad_mode')
     planner_backend = LaunchConfiguration('planner_backend')
-    vision_model_path = LaunchConfiguration('vision_model_path')
     pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
     use_slam = LaunchConfiguration('use_slam')

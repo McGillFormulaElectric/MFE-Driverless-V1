@@ -11,8 +11,6 @@ Publishes:
     /planning/path_horizon (std_msgs/Float32)     colourless local planning: path length ahead (m)
 """
 
-import csv
-import hashlib
 import json
 import math
 import os
@@ -78,12 +76,6 @@ else:
 _GRID = 0.5                # cone map key resolution (m)
 
 
-def _debug_flip_u(seed, key) -> float:
-    """DEBUG colour-flip draw in [0, 1): deterministic per 0.5 m map cell, so one physical cone is always flipped or never."""
-    ix = round(key[0] / _GRID)
-    iy = round(key[1] / _GRID)
-    digest = hashlib.blake2b(f'{seed}:{ix}:{iy}'.encode(), digest_size=8).digest()
-    return int.from_bytes(digest, 'big') / 2.0 ** 64
 _RECOLOUR = os.environ.get('MFE_PLANNER_RECOLOUR', '0') == '1'   # experiment: a later colour replaces the stored one
 _MAP_CAP = 1000            # cone map size cap (local planning / global missions)
 _SKIDPAD_MAP_CAP = 500
@@ -417,18 +409,6 @@ class PathPlannerNode(Node):
         self.declare_parameter('lap_return_len_frac', 0.6)
         # Planner-cycle timing: logs mean/p95/max of whole _cones_cb every 50 cycles. Off by default.
         self.declare_parameter('planner_profile', False)
-        # DEBUG ablation only: swap BLUE<->YELLOW for a fixed fraction of cone cells (orange never flipped). 0.0 = off.
-        self.declare_parameter('debug_flip_prob', 0.0)
-        self.declare_parameter('debug_flip_seed', 1)
-        # DEBUG ablation only: publish the unoptimised library/midpoint path (min-curvature bypassed). False = normal.
-        self.declare_parameter('debug_disable_raceline', False)
-        # DEBUG: append one JSON line per planning cycle (library inputs + intermediate sorting/matching/path). Off = no-op.
-        self.declare_parameter('debug_dump_intermediate', False)
-        self.declare_parameter('debug_dump_path', '/tmp/fsd_intermediate.jsonl')
-        # DEBUG: follow a fixed precomputed closed path (x,y CSV, header row, 0.5 m spacing, planner frame) instead of
-        # planning. The next 40 points from the nearest point (searched near the last index) go through _publish_plan.
-        # Jump gate is disabled in this mode. '' = off (normal behaviour).
-        self.declare_parameter('debug_fixed_path_csv', '')
         # Offline race line for laps >= raceline_after_lap (raceline.py). Built once from the lap-1 cone union and
         # trail, then frozen: each cycle publishes raceline_window_m of it from the car's projection, with target
         # speeds on /planning/target_speeds. False = behaviour unchanged.
@@ -470,15 +450,6 @@ class PathPlannerNode(Node):
         self._jump_hold_max = int(self.get_parameter('jump_hold_max').value)
         self._jump_min_path_m = float(self.get_parameter('jump_min_path_m').value)
         self._jump_remaining_guard = bool(self.get_parameter('jump_remaining_guard').value)
-        self._fixed_xy: Optional[np.ndarray] = None   # debug_fixed_path_csv: fixed closed path, or None (off)
-        self._fixed_idx: Optional[int] = None
-        _fixed_csv = str(self.get_parameter('debug_fixed_path_csv').value)
-        if _fixed_csv:
-            self._fixed_xy = self._load_fixed_path(_fixed_csv)
-            self._jump_gate_on = False   # the fixed path has no jumps to gate; the gate would only add rejections
-            self.get_logger().info(
-                f'debug_fixed_path_csv={_fixed_csv}: fixed path mode ({len(self._fixed_xy)} pts, '
-                f'jump gate disabled in this mode)')
         # Cone-map hygiene (both off by default). colour_vote: per-cell colour votes instead of latching the first
         # colour. cone_expiry: drop sparsely-observed cells that have stopped being seen inside the sensing range.
         self._colour_vote = bool(self.get_parameter('colour_vote').value)
@@ -488,14 +459,6 @@ class PathPlannerNode(Node):
         self._expiry_min_obs = int(self.get_parameter('expiry_min_obs').value)
         self._expiry_cycles = int(self.get_parameter('expiry_cycles').value)
         self._planner_profile = bool(self.get_parameter('planner_profile').value)
-        self._debug_disable_raceline = bool(self.get_parameter('debug_disable_raceline').value)
-        self._dump_on = bool(self.get_parameter('debug_dump_intermediate').value)
-        self._dump_fh = None
-        if self._dump_on:
-            self._dump_fh = open(str(self.get_parameter('debug_dump_path').value), 'w', buffering=1)
-            self.get_logger().warn(f'debug_dump_intermediate ON: writing {self._dump_fh.name}')
-        if self._debug_disable_raceline:
-            self.get_logger().info('debug_disable_raceline=True: optimisers bypassed')
         self._tracer = BoundaryTracer()
         # Per-cycle planner debug log (JSON lines, one per colourless planning cycle). '' = off.
         self.declare_parameter('planner_debug_log', '')
@@ -553,12 +516,6 @@ class PathPlannerNode(Node):
         self._merge_cycle = 0
         self._colour_flips = 0                 # cells whose decided colour reversed (BLUE <-> YELLOW)
         self._cones_expired = 0
-        self._flip_prob = float(self.get_parameter('debug_flip_prob').value)
-        self._flip_seed = int(self.get_parameter('debug_flip_seed').value)
-        self._flip_seen: set = set()           # DEBUG: distinct 0.5 m cells observed with a BLUE/YELLOW colour
-        self._flip_set: set = set()            # DEBUG: those cells whose colour is flipped
-        if self._flip_prob > 0.0:
-            self.get_logger().warn(f'DEBUG colour flip ON: prob={self._flip_prob} seed={self._flip_seed}')
         self._prof_ms: list = []               # planner_profile: _cones_cb durations since the last report
         self._skidpad_path_published = False
         self._skidpad_path = None
@@ -705,42 +662,10 @@ class PathPlannerNode(Node):
             ms = np.array(self._prof_ms)
             self.get_logger().info(
                 f'planner_cycle_ms mean={ms.mean():.2f} p95={np.percentile(ms, 95):.2f} '
-                f'max={ms.max():.2f} n={len(ms)} debug_disable_raceline={self._debug_disable_raceline}')
+                f'max={ms.max():.2f} n={len(ms)}')
             self._prof_ms = []
 
-    @staticmethod
-    def _load_fixed_path(path: str) -> np.ndarray:
-        """Read x,y rows from a CSV (header row skipped); returns (N,2) float array."""
-        rows = []
-        with open(path, newline='') as f:
-            for r in csv.reader(f):
-                try:
-                    rows.append((float(r[0]), float(r[1])))
-                except (ValueError, IndexError):
-                    continue
-        xy = np.array(rows, dtype=float).reshape(-1, 2)
-        if len(xy) < 2:
-            raise RuntimeError(f'debug_fixed_path_csv {path}: need at least 2 x,y rows, got {len(xy)}')
-        return xy
-
-    def _publish_fixed_path(self) -> None:
-        """Fixed path mode: publish the next 40 points (20 m) from the nearest path point, wrapping the loop."""
-        xy = self._fixed_xy
-        n = len(xy)
-        d_all = np.hypot(xy[:, 0] - self._car_pos[0], xy[:, 1] - self._car_pos[1])
-        if self._fixed_idx is None:
-            idx = int(np.argmin(d_all))
-        else:  # search only near the last index so the loop passing close to itself cannot pull the index across
-            cand = (self._fixed_idx + np.arange(-30, 31)) % n
-            idx = int(cand[int(np.argmin(d_all[cand]))])
-        self._fixed_idx = idx
-        self._publish_plan(xy[(idx + np.arange(40)) % n], None, None)
-
     def _cones_cb_body(self, msg: Track) -> None:
-        if self._fixed_xy is not None:
-            if self._odom_received:
-                self._publish_fixed_path()
-            return
         if self._locked_path is not None:
             self._publish_centerline(self._locked_path)
             return
@@ -861,7 +786,6 @@ class PathPlannerNode(Node):
             # lap-1 lock-in optimises once) and a per-cycle optimiser pushes the replan period past pure
             # pursuit's stale threshold.
             if (not self._global_planning
-                    and not self._debug_disable_raceline
                     and (self._colourless_raceline or not colourless_native)
                     and len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
@@ -922,7 +846,7 @@ class PathPlannerNode(Node):
         centerline = None
         if path_xy is not None and len(path_xy) > 0:
             centerline = np.array(path_xy)[:, 1:3]
-            if (len(path_xy) > 3 and not self._debug_disable_raceline
+            if (len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
                     and right_xy is not None and len(right_xy) > 3):
                 try:
@@ -951,11 +875,6 @@ class PathPlannerNode(Node):
             ry = round(cone.location.y / _GRID) * _GRID
             key = (rx, ry)
             color = cone.color
-            if self._flip_prob > 0.0 and color in (Cone.BLUE, Cone.YELLOW):
-                self._flip_seen.add(key)
-                if _debug_flip_u(self._flip_seed, key) < self._flip_prob:
-                    self._flip_set.add(key)
-                    color = Cone.YELLOW if color == Cone.BLUE else Cone.BLUE
             new_type = _MFE_TO_FSD.get(color, ConeTypes.UNKNOWN)
             if self._colour_vote:
                 if key not in self._cone_map:
@@ -976,8 +895,6 @@ class PathPlannerNode(Node):
                 self._note_obs(key)
         if self._cone_expiry:
             self._expire_cells()
-        if self._flip_prob > 0.0 and self._merge_cycle % 50 == 0:
-            self.get_logger().info(f'flip_stats: flipped={len(self._flip_set)} distinct={len(self._flip_seen)}')
         if (self._colour_vote or self._cone_expiry) and self._merge_cycle % 50 == 0:
             self.get_logger().info(
                 f'colour_flips={self._colour_flips} cones_expired={self._cones_expired} '
@@ -1301,50 +1218,7 @@ class PathPlannerNode(Node):
                 throttle_duration_sec=2.0)
             return None
         path_xy, left_xy, right_xy = out[0], out[1], out[2]
-        if self._dump_on:
-            try:
-                self._dump_intermediate(cones_by_type, self._car_pos.copy(), self._car_dir.copy(), out)
-            except Exception as de:  # the dump must never change planner behaviour
-                self.get_logger().warn(f'debug dump failed: {de}', throttle_duration_sec=5.0)
         return path_xy, left_xy, right_xy
-
-    def _dump_intermediate(self, cones_by_type, car_pos, car_dir, out) -> None:
-        """debug_dump_intermediate: one JSON line per planning cycle. out = library return tuple:
-        (final_path Nx4, sorted_left, sorted_right, left_with_virtual, right_with_virtual, l2r_idx, r2l_idx)."""
-        def xy(a):
-            a = np.asarray(a, dtype=float).reshape(-1, 2)
-            return [[round(float(x), 2), round(float(y), 2)] for x, y in a]
-        inputs, parts = {}, []
-        for i, a in enumerate(cones_by_type):
-            a = np.asarray(a, dtype=float).reshape(-1, 2)
-            inputs[ConeTypes(i).name] = {'n': len(a), 'xy': xy(a)}
-            parts.append(a)
-        all_in = np.vstack(parts) if parts else np.zeros((0, 2))
-
-        def virtual(arr):  # matched cones that are not within 0.3 m of any input cone
-            arr = np.asarray(arr, dtype=float).reshape(-1, 2)
-            if len(arr) == 0 or len(all_in) == 0:
-                return arr
-            d = np.hypot(arr[:, None, 0] - all_in[None, :, 0], arr[:, None, 1] - all_in[None, :, 1]).min(axis=1)
-            return arr[d > 0.3]
-
-        path = np.asarray(out[0], dtype=float)
-        rec = {
-            't_ros': round(self.get_clock().now().nanoseconds * 1e-9, 3),
-            't_wall': round(time.time(), 3),
-            'car': xy([car_pos])[0],
-            'car_dir': [round(float(car_dir[0]), 3), round(float(car_dir[1]), 3)],
-            'inputs': inputs,
-            'sorted_left': xy(out[1]),
-            'sorted_right': xy(out[2]),
-            'matched_left_n': int(len(out[3])),
-            'matched_right_n': int(len(out[4])),
-            'virtual_left': xy(virtual(out[3])),
-            'virtual_right': xy(virtual(out[4])),
-            'path_n': int(len(path)),
-            'path_xy': xy(path[:40, 1:3]) if path.ndim == 2 and len(path) else [],
-        }
-        self._dump_fh.write(json.dumps(rec, separators=(',', ':')) + '\n')
 
     def _racing_line(self, centerline, left, right):
         """Race line through the corridor: the minimum-curvature path; the raw centerline if it fails.
@@ -1543,7 +1417,7 @@ class PathPlannerNode(Node):
             if path is None:
                 return
         optimized = path
-        if (self._colourless_raceline and not self._debug_disable_raceline
+        if (self._colourless_raceline
                 and len(path) > 3 and len(left) > 3 and len(right) > 3):
             # the optimiser sizes its corridor from the nearest wall cone, which past the traced walls is the wrong cone
             optimized = clamp_to_corridor(self._racing_line(path, left, right), path, left, right)
@@ -1619,7 +1493,7 @@ class PathPlannerNode(Node):
             return
         path_xy, left_xy, right_xy = result
         centerline = np.array(path_xy)[:, 1:3]
-        if (self._colour_lap_raceline and not self._global_planning and not self._debug_disable_raceline
+        if (self._colour_lap_raceline and not self._global_planning
                 and len(path_xy) > 3 and left_xy is not None and len(left_xy) > 3
                 and right_xy is not None and len(right_xy) > 3):
             centerline = self._racing_line(centerline, np.array(left_xy)[:, :2], np.array(right_xy)[:, :2])
