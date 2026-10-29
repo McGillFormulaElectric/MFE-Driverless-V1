@@ -47,9 +47,7 @@ from mfe_path_planning.planner_utils import (
     extend_trail, make_skidpad_path as _make_skidpad_path, midpoint_walk, path_from_xy,
     smooth_cyclic, yaw_from_quaternion,
 )
-from mfe_path_planning.racing_line import (
-    _backward_pass, _forward_pass, _menger_kappa, _min_curvature_path, _pso_raceline,
-)
+from mfe_path_planning.racing_line import _min_curvature_path
 
 
 _QOS = QoSProfile(
@@ -244,7 +242,7 @@ def lap_reobserved(banned, det_xy, tol_m=LAP_REOBS_TOL_M) -> set:
 
 
 # A banned cell more than this far behind the car (along its heading) counts as passed. The LiDAR reports only points
-# ahead of the car (x >= ~1.6 m in every rgen7_a scan), so a cell behind it can never be re-seen, and the tracer's
+# ahead of the car (x >= ~1.6 m in every scan), so a cell behind it can never be re-seen, and the tracer's
 # start gate sits behind the car on the driven path: passing a cell is the only later evidence for it.
 LAP_PASSED_M = 1.0
 
@@ -349,7 +347,6 @@ class PathPlannerNode(Node):
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('mission', 'autocross')  # autocross | trackdrive | acceleration | skidpad | peanut
         self.declare_parameter('skidpad_mode', 'cone_based')  # cone_based | hardcoded
-        self.declare_parameter('use_pso_optimizer', True)
         # Local (non-global) backend: fasttube = fsd_path_planning.
         self.declare_parameter('planner_backend', 'fasttube')
         # Uncoloured cones (LiDAR-only), local missions:
@@ -423,7 +420,7 @@ class PathPlannerNode(Node):
         # DEBUG ablation only: swap BLUE<->YELLOW for a fixed fraction of cone cells (orange never flipped). 0.0 = off.
         self.declare_parameter('debug_flip_prob', 0.0)
         self.declare_parameter('debug_flip_seed', 1)
-        # DEBUG ablation only: publish the unoptimised library/midpoint path (PSO / min-curvature bypassed). False = normal.
+        # DEBUG ablation only: publish the unoptimised library/midpoint path (min-curvature bypassed). False = normal.
         self.declare_parameter('debug_disable_raceline', False)
         # DEBUG: append one JSON line per planning cycle (library inputs + intermediate sorting/matching/path). Off = no-op.
         self.declare_parameter('debug_dump_intermediate', False)
@@ -444,10 +441,6 @@ class PathPlannerNode(Node):
 
         self._map_frame = self.get_parameter('map_frame').value
         mission_str = self.get_parameter('mission').value
-        self._use_pso_optimizer = self.get_parameter('use_pso_optimizer').value
-        if self._use_pso_optimizer:  # compile the PSO hot loops now, not on the first planning cycle
-            _w = np.c_[np.linspace(0.0, 3.0, 4), np.zeros(4)]
-            _backward_pass(_forward_pass(_menger_kappa(_w), np.ones(3)), np.ones(3))
         self._mission = mission_str
         self._skidpad_mode = self.get_parameter('skidpad_mode').value
         self._backend = self.get_parameter('planner_backend').value
@@ -1354,17 +1347,8 @@ class PathPlannerNode(Node):
         self._dump_fh.write(json.dumps(rec, separators=(',', ':')) + '\n')
 
     def _racing_line(self, centerline, left, right):
-        """Race line through the corridor: PSO (if enabled) with the curvature minimiser as fallback,
-        else the curvature minimiser alone; the raw centerline if both fail. Shared by all backends."""
-        if self._use_pso_optimizer:
-            try:
-                out = _pso_raceline(centerline, left, right, safety=0.7)
-                self.get_logger().info('PSO race line optimizer applied.', throttle_duration_sec=5.0)
-                return out
-            except Exception as opt_e:
-                self.get_logger().warn(
-                    f'PSO optimizer failed: {opt_e} — falling back to curvature minimizer',
-                    throttle_duration_sec=5.0)
+        """Race line through the corridor: the minimum-curvature path; the raw centerline if it fails.
+        Shared by all backends."""
         try:
             out = _min_curvature_path(centerline, left, right, safety=0.7)
             self.get_logger().info('Racing line optimizer applied.', throttle_duration_sec=5.0)
