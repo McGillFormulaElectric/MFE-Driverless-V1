@@ -30,9 +30,10 @@ def _install_ros_mocks():
             sys.modules[mod] = types.ModuleType(mod)
 
     class _QoS:
-        RELIABLE = BEST_EFFORT = KEEP_LAST = 1
+        RELIABLE = BEST_EFFORT = KEEP_LAST = TRANSIENT_LOCAL = 1
         def __init__(self, **kw): pass
-    for attr in ['QoSProfile', 'ReliabilityPolicy', 'HistoryPolicy']:
+    # DurabilityPolicy is needed by mfe_common.qos (imported by the nodes under test)
+    for attr in ['QoSProfile', 'ReliabilityPolicy', 'HistoryPolicy', 'DurabilityPolicy']:
         setattr(sys.modules['rclpy.qos'], attr, _QoS)
 
     class _Node:

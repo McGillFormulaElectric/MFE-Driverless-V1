@@ -17,21 +17,33 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
-from sensor_msgs_py import point_cloud2 as pc2
 from mfe_msgs.msg import Track, Cone
 from mfe_validation.cam_fusion import CamFusion, PoseHistory, decide
-from mfe_validation.common import QOS, car_start, read_track, wrap, yaw_of
+from mfe_common.geometry import pointcloud2_to_xy_array, wrap_angle, yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS
+from mfe_validation.common import car_start, read_track
 from mfe_validation.slam_backend import compose, make_backend, transform_from
+from mfe_common.topics import (
+    GROUND_TRUTH_STATE_ODOM,
+    GROUND_TRUTH_TRACK_COLORED,
+    IMAGE_CONES,
+    PERCEPTION_CONES_UNCOLORED,
+    PLANNING_CONES_CAMERA_COLOURS,
+    PLANNING_ORANGE_CONES,
+    SIM_XSENS_STATE_ODOM,
+    SLAM_ODOM,
+    VALIDATION_CONES,
+)
 
 PARAMS = dict(track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
               min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
-              cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
+              cones_topic=VALIDATION_CONES, color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
               use_lateral_vel=False, backend='gtsam',
-              yolo_topic='/image/cones', cam_hfov_deg=87.0, cam_width=640, cam_height=480, cam_pitch_deg=-3.0,   # fitted: YOLO boxes sit within a few px of landmarks at -3 deg (URDF says +10.15 but the sim image is ~level)
+              yolo_topic=IMAGE_CONES, cam_hfov_deg=87.0, cam_width=640, cam_height=480, cam_pitch_deg=-3.0,   # fitted: YOLO boxes sit within a few px of landmarks at -3 deg (URDF says +10.15 but the sim image is ~level)
 
               cam_x=0.12, cam_y=0.0, cam_z=0.76, cone_z=0.16, pix_du=0.0, pix_dv=0.0, match_px=40.0,
               color_min_range=2.0, color_max_range=18.0, min_color_votes=2, color_vote_share=0.6, color_fallback='geometric',
-              orange_cones_topic='/planning/orange_cones')
+              orange_cones_topic=PLANNING_ORANGE_CONES)
 
 
 class SlamNode(Node):
@@ -72,19 +84,19 @@ class SlamNode(Node):
         self.fusion = CamFusion(p('cam_hfov_deg'), p('cam_width'), p('cam_height'), (p('cam_x'), p('cam_y'), p('cam_z')),
                                 p('cam_pitch_deg'), p('cone_z'), p('pix_du'), p('pix_dv'), p('match_px'),
                                 p('color_min_range'), p('color_max_range'))
-        self.create_subscription(Odometry, '/sim/xsens/state_odom', self.on_odom, QOS)
-        self.create_subscription(Odometry, '/ground_truth/state_odom', self.on_gt, QOS)
-        self.create_subscription(PointCloud2, '/perception/cones_uncolored', self.on_cones, QOS)
+        self.create_subscription(Odometry, SIM_XSENS_STATE_ODOM, self.on_odom, RELIABLE_QOS)
+        self.create_subscription(Odometry, GROUND_TRUTH_STATE_ODOM, self.on_gt, RELIABLE_QOS)
+        self.create_subscription(PointCloud2, PERCEPTION_CONES_UNCOLORED, self.on_cones, RELIABLE_QOS)
         if self.color_mode == 'gt':
-            self.create_subscription(Track, '/ground_truth/track_colored', self.on_gt_track, 1)
+            self.create_subscription(Track, GROUND_TRUTH_TRACK_COLORED, self.on_gt_track, 1)
         if self.color_mode in ('yolo', 'orange_only', 'yolo_lidar'):
-            self.create_subscription(Cone, p('yolo_topic'), self.on_yolo, QOS)
-        self.pub_odom = self.create_publisher(Odometry, '/slam/odom', QOS)
-        self.pub_cones = self.create_publisher(Track, p('cones_topic'), QOS)
-        self.pub_orange = (self.create_publisher(Track, p('orange_cones_topic'), QOS)
+            self.create_subscription(Cone, p('yolo_topic'), self.on_yolo, RELIABLE_QOS)
+        self.pub_odom = self.create_publisher(Odometry, SLAM_ODOM, RELIABLE_QOS)
+        self.pub_cones = self.create_publisher(Track, p('cones_topic'), RELIABLE_QOS)
+        self.pub_orange = (self.create_publisher(Track, p('orange_cones_topic'), RELIABLE_QOS)
                            if self.color_mode in ('orange_only', 'yolo_lidar') else None)
         # DISPLAY ONLY (not read by the planner): every landmark with its camera colour vote (cam_fusion.decide)
-        self.pub_camcol = self.create_publisher(Track, '/planning/cones_camera_colours', QOS)
+        self.pub_camcol = self.create_publisher(Track, PLANNING_CONES_CAMERA_COLOURS, RELIABLE_QOS)
         self.create_timer(1.0 / max(0.1, float(p('publish_hz'))), self.publish_cones)
         self.create_timer(10.0, self.report)
         self.get_logger().info(f'slam_node up: velocity+yaw odometry, cone landmarks, colour mode={self.color_mode}, output {p("cones_topic")}')
@@ -134,7 +146,7 @@ class SlamNode(Node):
     def on_odom(self, m):
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
         self.xs_pose = (m.pose.pose.position.x, m.pose.pose.position.y)
-        self.samples.append((t, yaw_of(m.pose.pose.orientation), m.twist.twist.linear.x, m.twist.twist.linear.y))
+        self.samples.append((t, yaw_from_quaternion(m.pose.pose.orientation), m.twist.twist.linear.x, m.twist.twist.linear.y))
         if len(self.samples) % 5 == 0 and self.kf_t is not None:
             self.publish_pose(m.header.stamp)
 
@@ -143,7 +155,7 @@ class SlamNode(Node):
         s = self.samples
         if len(s) < 2:
             return (0.0, 0.0, 0.0)
-        a = np.array(s); dt = np.diff(a[:, 0]); th = np.array([wrap(y - a[0, 1]) for y in a[:, 1]])
+        a = np.array(s); dt = np.diff(a[:, 0]); th = np.array([wrap_angle(y - a[0, 1]) for y in a[:, 1]])
         mid = 0.5 * (th[1:] + th[:-1])
         vx = a[1:, 2]; vy = a[1:, 3] if self.use_vy else 0.0 * vx
         return (float(((vx * np.cos(mid) - vy * np.sin(mid)) * dt).sum()),
@@ -167,7 +179,7 @@ class SlamNode(Node):
         if not self.samples:
             return
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
-        pts = np.array([[a[0], a[1]] for a in pc2.read_points(m, field_names=('x', 'y', 'z'), skip_nans=True)]).reshape(-1, 2)
+        pts = pointcloud2_to_xy_array(m)
         first = self.kf_t is None
         if first:
             est = (0.0, 0.0, 0.0)           # SLAM frame origin = start pose (known at the line)

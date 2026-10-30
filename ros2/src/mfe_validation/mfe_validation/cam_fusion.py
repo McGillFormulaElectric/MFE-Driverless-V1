@@ -8,6 +8,8 @@ import bisect
 import math
 import numpy as np
 
+from mfe_common.geometry import wrap_angle
+
 BLUE, YELLOW, ORANGE_BIG, ORANGE_SMALL, UNKNOWN = 0, 1, 2, 3, 4
 
 
@@ -38,7 +40,7 @@ class PoseHistory:
         if t1 - t0 > max_gap:
             return None
         a = (t - t0) / (t1 - t0); p0, p1 = self.p[i - 1], self.p[i]
-        dyaw = (p1[2] - p0[2] + math.pi) % (2 * math.pi) - math.pi
+        dyaw = wrap_angle(p1[2] - p0[2])
         return (p0[0] + a * (p1[0] - p0[0]), p0[1] + a * (p1[1] - p0[1]), p0[2] + a * dyaw)
 
 

@@ -4,7 +4,6 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
 from fs_msgs.msg import ControlCommand
@@ -20,7 +19,16 @@ from mfe_control.pursuit_math import (
     pure_pursuit_steering,
     remaining_length,
     smooth_path,
-    yaw_from_quaternion,
+)
+from mfe_common.geometry import yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS, SENSOR_QOS
+from mfe_common.topics import (
+    CONTROL_COMMAND,
+    EKF_OUTPUT,
+    PLANNING_CENTERLINE,
+    PLANNING_MISSION_FINISHED,
+    PLANNING_PATH_HORIZON,
+    PLANNING_TARGET_SPEEDS,
 )
 
 _PARAM_DEFAULTS = {
@@ -30,7 +38,7 @@ _PARAM_DEFAULTS = {
     'max_speed': 10.0,
     'wheelbase': 1.56,
     'rear_axle_offset': 0.0,          # pose origin to rear axle (m); pure pursuit geometry is about the rear axle
-    'max_steering_deg': 25.0,
+    'max_steering_deg': 28.0,
     'map_frame': 'map',
     'max_lateral_accel': 8.0,
     'max_deceleration': 10.0,
@@ -137,17 +145,17 @@ class PurePursuitNode(Node):
         self._path_time = None     # ... and of the last path
         self._speed_integral = 0.0
 
-        reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        best_effort_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        reliable_qos = RELIABLE_QOS
+        best_effort_qos = SENSOR_QOS
 
-        self.create_subscription(Path, '/planning/centerline', self._path_callback, reliable_qos)
-        self.create_subscription(Odometry, '/ekf/output', self._odom_callback, reliable_qos)
-        self.create_subscription(Bool, '/planning/mission_finished', self._finished_callback, reliable_qos)
-        self.create_subscription(Float32, '/planning/path_horizon', self._horizon_callback, reliable_qos)
+        self.create_subscription(Path, PLANNING_CENTERLINE, self._path_callback, reliable_qos)
+        self.create_subscription(Odometry, EKF_OUTPUT, self._odom_callback, reliable_qos)
+        self.create_subscription(Bool, PLANNING_MISSION_FINISHED, self._finished_callback, reliable_qos)
+        self.create_subscription(Float32, PLANNING_PATH_HORIZON, self._horizon_callback, reliable_qos)
         self.create_subscription(
-            Float64MultiArray, '/planning/target_speeds', self._target_speeds_callback, best_effort_qos)
+            Float64MultiArray, PLANNING_TARGET_SPEEDS, self._target_speeds_callback, best_effort_qos)
 
-        self._cmd_pub = self.create_publisher(ControlCommand, '/control/command', reliable_qos)
+        self._cmd_pub = self.create_publisher(ControlCommand, CONTROL_COMMAND, reliable_qos)
         self.create_timer(self._dt, self._control_loop)
 
         self.get_logger().info(

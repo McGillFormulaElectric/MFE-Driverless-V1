@@ -7,11 +7,6 @@ from scipy.optimize import linear_sum_assignment
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-
-
-def SensorDataQoS():
-    return QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
 
 import tf2_ros
@@ -20,6 +15,8 @@ from tf2_ros import TransformException
 from sensor_msgs.msg import PointCloud2
 from mfe_msgs.msg import Cone, Track
 from std_msgs.msg import Header
+from mfe_common.qos import SENSOR_QOS
+from mfe_common.topics import GROUND_TRUTH_TRACK_COLORED, PERCEPTION_CONES_UNCOLORED, PLANNING_CONES
 
 
 @dataclass
@@ -30,21 +27,21 @@ class ConeTrack:
     y: float
     # state: [x, y, vx, vy]
     state: np.ndarray = field(default_factory=lambda: np.zeros(4))
-    cov: np.ndarray   = field(default_factory=lambda: np.eye(4) * 1.0)
-    hits: int   = 0
+    cov: np.ndarray = field(default_factory=lambda: np.eye(4) * 1.0)
+    hits: int = 0
     misses: int = 0
 
 
 # Constant-velocity Kalman model, 10 Hz
 _DT = 0.1
-_F  = np.array([[1, 0, _DT, 0],
-                [0, 1, 0,  _DT],
-                [0, 0, 1,   0],
-                [0, 0, 0,   1]], dtype=float)
-_H  = np.array([[1, 0, 0, 0],
-                [0, 1, 0, 0]], dtype=float)
-_Q  = np.diag([0.01, 0.01, 0.1, 0.1])
-_R  = np.diag([0.04, 0.04])
+_F = np.array([[1, 0, _DT, 0],
+               [0, 1, 0, _DT],
+               [0, 0, 1, 0],
+               [0, 0, 0, 1]], dtype=float)
+_H = np.array([[1, 0, 0, 0],
+               [0, 1, 0, 0]], dtype=float)
+_Q = np.diag([0.01, 0.01, 0.1, 0.1])
+_R = np.diag([0.04, 0.04])
 
 
 def pointcloud2_to_xyz(msg: PointCloud2) -> np.ndarray:
@@ -90,21 +87,23 @@ def _apply_tf(pts_xyz: np.ndarray, transform) -> np.ndarray:
 
 class BoundaryExtractor(Node):
 
-    GRID_STEP       = 0.3   # spatial bin size for confidence tracking
+    GRID_STEP = 0.3   # spatial bin size for confidence tracking
     MATCH_RADIUS = 0.5   # max distance to associate a LiDAR centroid with a camera cone
     GT_MATCH_RADIUS = 2.0  # looser match for GT color fallback
-    CAM_DEDUP_RADIUS = 1.2  # an unmatched camera cone this close to a LiDAR centroid is the same cone
-                            # with camera position error; appending it would make a phantom duplicate
-    CAM_ONLY_MAX_RANGE = 12.0  # camera-only cones beyond this are dropped: depth error grows with
-                               # range and the planner's global cone map keeps phantoms forever
+    # an unmatched camera cone this close to a LiDAR centroid is the same cone with camera position error;
+    # appending it would make a phantom duplicate
+    CAM_DEDUP_RADIUS = 1.2
+    # camera-only cones beyond this are dropped: depth error grows with range and the planner's global cone map
+    # keeps phantoms forever
+    CAM_ONLY_MAX_RANGE = 12.0
 
     def __init__(self):
         super().__init__('boundary_extractor')
 
         self.declare_parameter('min_observations', 3)
         self.declare_parameter('confidence_decay', 1)
-        self._min_obs     = int(self.get_parameter('min_observations').value)
-        self._conf_decay  = int(self.get_parameter('confidence_decay').value)
+        self._min_obs = int(self.get_parameter('min_observations').value)
+        self._conf_decay = int(self.get_parameter('confidence_decay').value)
 
         # grid key -> [count, color, x, y, z]
         self._confidence_map: dict = {}
@@ -125,15 +124,15 @@ class BoundaryExtractor(Node):
         self.declare_parameter('min_hits', 3)
         self.declare_parameter('max_misses', 5)
         self.declare_parameter('match_radius', 1.0)
-        self._min_hits   = int(self.get_parameter('min_hits').value)
+        self._min_hits = int(self.get_parameter('min_hits').value)
         self._max_misses = int(self.get_parameter('max_misses').value)
-        self._match_r    = float(self.get_parameter('match_radius').value)
+        self._match_r = float(self.get_parameter('match_radius').value)
 
         self.sub_lidar = self.create_subscription(
             PointCloud2,
-            '/perception/cones_uncolored',
+            PERCEPTION_CONES_UNCOLORED,
             self._lidar_callback,
-            SensorDataQoS())
+            SENSOR_QOS)
 
         self.sub_camera = self.create_subscription(
             Track,
@@ -145,11 +144,11 @@ class BoundaryExtractor(Node):
         # (map frame) is independent of car position, unlike /ground_truth/cones_colored.
         self.sub_gt = self.create_subscription(
             Track,
-            '/ground_truth/track_colored',
+            GROUND_TRUTH_TRACK_COLORED,
             self._gt_callback,
             10)
 
-        self.pub_track = self.create_publisher(Track, '/planning/cones', 10)
+        self.pub_track = self.create_publisher(Track, PLANNING_CONES, 10)
 
         self.timer = self.create_timer(0.1, self._publish_fused)
 
@@ -173,8 +172,10 @@ class BoundaryExtractor(Node):
 
     def _lookup_map_tf(self, src_frame: str, stamp_msg):
         """
-        Look up map <- src_frame at the sensor capture stamp. The latest TF would smear positions
-        by the car's motion since capture. Falls back to the latest TF. Returns None on failure.
+        Look up map <- src_frame at the sensor capture stamp.
+
+        The latest TF would smear positions by the car's motion since capture. Falls back to the latest TF. Returns
+        None on failure.
         """
         if stamp_msg is not None and (stamp_msg.sec or stamp_msg.nanosec):
             try:
@@ -191,7 +192,11 @@ class BoundaryExtractor(Node):
             return None
 
     def _transform_lidar_pts_to_map(self, pts: np.ndarray, src_frame: str) -> tuple:
-        """Transform an Nx3 array to map. Returns (points, success); on failure, (input, False)."""
+        """
+        Transform an Nx3 array to map.
+
+        Returns (points, success); on failure, (input, False).
+        """
         if pts.shape[0] == 0 or not src_frame:
             return pts, True
 
@@ -201,7 +206,11 @@ class BoundaryExtractor(Node):
         return _apply_tf(pts, tf_stamped), True
 
     def _transform_camera_cones_to_map(self, cones: list, src_frame: str) -> tuple:
-        """Transform camera cone positions to map. Returns (Nx3 array, success)."""
+        """
+        Transform camera cone positions to map.
+
+        Returns (Nx3 array, success).
+        """
         cam_xyz = np.array([[c.location.x, c.location.y, c.location.z]
                             for c in cones], dtype=np.float32) if cones \
             else np.zeros((0, 3), dtype=np.float32)
@@ -214,10 +223,14 @@ class BoundaryExtractor(Node):
         return _apply_tf(cam_xyz, tf_stamped), True
 
     def _update_tracks(self, fused_cones: list[Cone]) -> list[ConeTrack]:
-        """One predict-update cycle (Hungarian association, Kalman update). Returns confirmed tracks."""
+        """
+        One predict-update cycle (Hungarian association, Kalman update).
+
+        Returns confirmed tracks.
+        """
         for t in self._tracks:
             t.state = _F @ t.state
-            t.cov   = _F @ t.cov @ _F.T + _Q
+            t.cov = _F @ t.cov @ _F.T + _Q
             t.x = float(t.state[0])
             t.y = float(t.state[1])
 
@@ -244,18 +257,18 @@ class BoundaryExtractor(Node):
             for r, c in zip(row_ind, col_ind):
                 if cost[r, c] <= self._match_r:
                     track = self._tracks[r]
-                    det   = fused_cones[c]
+                    det = fused_cones[c]
 
                     z = np.array([det.location.x, det.location.y], dtype=float)
                     S = _H @ track.cov @ _H.T + _R
                     K = track.cov @ _H.T @ np.linalg.inv(S)
                     track.state = track.state + K @ (z - _H @ track.state)
-                    track.cov   = (np.eye(4) - K @ _H) @ track.cov
+                    track.cov = (np.eye(4) - K @ _H) @ track.cov
 
                     track.x = float(track.state[0])
                     track.y = float(track.state[1])
 
-                    track.hits  += 1
+                    track.hits += 1
                     track.misses = 0
 
                     if track.color == Cone.UNKNOWN and det.color != Cone.UNKNOWN:
@@ -448,12 +461,12 @@ class BoundaryExtractor(Node):
         for key, (count, color, x, y, z) in self._confidence_map.items():
             if count >= self._min_obs:
                 c = Cone()
-                c.header.stamp    = now
+                c.header.stamp = now
                 c.header.frame_id = 'map'
                 c.location.x = x
                 c.location.y = y
                 c.location.z = z
-                c.color      = color
+                c.color = color
                 stable_cones.append(c)
 
         self.get_logger().info(

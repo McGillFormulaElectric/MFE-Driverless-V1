@@ -129,7 +129,7 @@ def _car_state_to_odometry(msg) -> Odometry:
 
 class EufsSimBridge(Node):
 
-    MAX_STEERING_ANGLE_RAD = math.radians(25.0)
+    MAX_STEERING_ANGLE_RAD = math.radians(28.0)
     MAX_SPEED_MS = 10.0   # m/s
 
     def __init__(self):
@@ -137,7 +137,7 @@ class EufsSimBridge(Node):
 
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
-        self.declare_parameter('max_steering_deg', 25.0)
+        self.declare_parameter('max_steering_deg', 28.0)
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
 

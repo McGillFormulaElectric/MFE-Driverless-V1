@@ -2,9 +2,7 @@
 
 import math
 
-
-def yaw_from_quaternion(q):
-    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+from mfe_common.geometry import wrap_angle_atan2
 
 
 def smooth_path(path, w):
@@ -125,7 +123,7 @@ def pure_pursuit_steering(car_x, car_y, yaw, target, wheelbase, max_steer_rad):
     dx = target[0] - car_x
     dy = target[1] - car_y
     alpha = math.atan2(dy, dx) - yaw
-    alpha = math.atan2(math.sin(alpha), math.cos(alpha))
+    alpha = wrap_angle_atan2(alpha)
     # Actual distance to the target, floored: dividing by ld over-steered on sparse paths.
     d_la = max(math.hypot(dx, dy), 0.5)
     steering_rad = math.atan2(2.0 * wheelbase * math.sin(alpha), d_la)

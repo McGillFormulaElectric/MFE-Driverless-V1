@@ -7,7 +7,14 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
-from mfe_validation.common import QOS, yaw_of
+from mfe_common.geometry import yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS
+from mfe_common.topics import (
+    GROUND_TRUTH_STATE_ODOM,
+    PLANNING_CENTERLINE,
+    SLAM_ODOM,
+    VALIDATION_CENTERLINE,
+)
 
 
 def to_car(path_xy, pose):
@@ -33,16 +40,16 @@ class Compare(Node):
         self.h = self.get_parameter('horizon').value
         self.csv = self.get_parameter('log_csv').value
         self.main = self.val = None; self.gt = self.slam = None
-        self.create_subscription(Path, '/planning/centerline', lambda m: setattr(self, 'main', m), QOS)
-        self.create_subscription(Path, '/validation/centerline', self.on_val, QOS)
-        self.create_subscription(Odometry, '/ground_truth/state_odom', lambda m: setattr(self, 'gt', self.pose(m)), QOS)
-        self.create_subscription(Odometry, '/slam/odom', lambda m: setattr(self, 'slam', self.pose(m)), QOS)
+        self.create_subscription(Path, PLANNING_CENTERLINE, lambda m: setattr(self, 'main', m), RELIABLE_QOS)
+        self.create_subscription(Path, VALIDATION_CENTERLINE, self.on_val, RELIABLE_QOS)
+        self.create_subscription(Odometry, GROUND_TRUTH_STATE_ODOM, lambda m: setattr(self, 'gt', self.pose(m)), RELIABLE_QOS)
+        self.create_subscription(Odometry, SLAM_ODOM, lambda m: setattr(self, 'slam', self.pose(m)), RELIABLE_QOS)
         self.dev, self.n_val, self.n_miss = [], 0, 0
         self.create_timer(10.0, self.report)
 
     @staticmethod
     def pose(m):
-        return (m.pose.pose.position.x, m.pose.pose.position.y, yaw_of(m.pose.pose.orientation))
+        return (m.pose.pose.position.x, m.pose.pose.position.y, yaw_from_quaternion(m.pose.pose.orientation))
 
     def on_val(self, m):
         self.n_val += 1
