@@ -71,8 +71,8 @@ RUN pip3 install --upgrade pip && pip3 install uv
 
 RUN uv --no-cache pip install --system \
     ft-fsd-path-planning \
-    ultralytics \
-    numpy \
+    ultralytics==8.4.164 \
+    "numpy<2" \
     scipy \
     pyrealsense2 \
     osqp \
