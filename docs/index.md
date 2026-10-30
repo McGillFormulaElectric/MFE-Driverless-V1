@@ -56,7 +56,7 @@ MFE-Driverless-V1/
 │   ├── mfe_msgs/            ← custom message types
 │   ├── mfe_sensors/         ← sensor driver launch files
 │   ├── mfe_simulation/      ← simulation-specific utilities
-│   ├── mfe_base/            ← shared utilities
+│   ├── mfe_common/          ← shared geometry helpers, topic names, QoS profiles
 │   ├── eufs_msgs/           ← EUFS simulator message types
 │   └── fs_msgs/             ← FSAE common messages (submodule)
 └── training/yolo/           ← YOLO training pipeline (see training.md)

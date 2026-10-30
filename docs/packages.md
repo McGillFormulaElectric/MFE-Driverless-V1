@@ -197,10 +197,12 @@ Alternative simulation interfaces (not the primary EUFS path):
 
 ---
 
-## mfe_base
+## mfe_common
 
-Shared utilities:
-- `utils/angle_conversions.py` — yaw ↔ quaternion helpers
+Shared pure-Python helpers used by planning, control and validation:
+- `geometry.py` — yaw from quaternion, angle wrapping, arc length, point-cloud readers
+- `topics.py` — topic name constants
+- `qos.py` — named QoS profiles
 
 ---
 
