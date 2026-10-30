@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Finish-line detector for FSAE events. Latches a full brake once any enabled check fires:
+Finish-line detector for FSAE events.
+
+Latches a full brake once any enabled check fires:
 
 1. Orange-gate passes (gate_crossings > 0): clusters perceived ORANGE_BIG cones from /planning/cones into
    gates and counts car passes through them. Finish after gate_crossings passes (+ stop_after_gate_m).
@@ -23,104 +25,29 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Int32
 from fs_msgs.msg import ControlCommand
 from mfe_msgs.msg import Track, Cone
-
-_LAP_EXCURSION_M = 15.0        # must leave this far from start before a lap crossing counts
-_SPAWN_DEBOUNCE_M = 5.0        # gate passes before this much travel are ignored
-_GATE_CLUSTER_M = 8.0          # single-linkage distance between pylons of one gate
-_GATE_TRACK_M = 5.0            # a cluster keeps its pass state if its centroid moves less than this
-_GATE_HYSTERESIS_M = 2.0       # car must leave gate_enter_r + this before the next pass counts
-_GATE_NEW_PASS_TRAVEL_M = 20.0  # a gate first confirmed with the car already inside it counts as a pass after this much driving
-                                # (the camera only colours gate pylons ~6 m out, so at speed one can appear under the car)
-_STANDSTILL_MPS = 0.1          # mission_completed is published once the speed drops below this
-_STOP_AFTER_LINE_MAX_M = 30.0  # DD.4.4.4: the run-out past the timing line may not exceed this
-_REANCHOR_LOG_M = 0.05         # re-anchor logged only when a line term moves by more than this (m)
-
-
-def _extract_xyz(msg: PointCloud2) -> np.ndarray:
-    """Return Nx3 float32 array of finite (x, y, z) points from a PointCloud2."""
-    field_map = {f.name: f for f in msg.fields}
-    n = msg.width * msg.height
-    if not all(k in field_map for k in ('x', 'y', 'z')) or n == 0:
-        return np.zeros((0, 3), dtype=np.float32)
-    raw = np.frombuffer(bytes(msg.data), dtype=np.uint8)
-
-    def get_col(name: str) -> np.ndarray:
-        idx = np.arange(n) * msg.point_step + field_map[name].offset
-        return np.stack([raw[idx + k] for k in range(4)], axis=1).view(np.float32).reshape(-1)
-
-    pts = np.stack([get_col('x'), get_col('y'), get_col('z')], axis=1)
-    return pts[np.isfinite(pts).all(axis=1)].astype(np.float32)
-
-
-def orange_timing_line(points, sx, sy, syaw, search_r, margin_m, pylon_m=1.5, pair_long_tol=2.0, center=None):
-    """Timing line through the orange cones at the start, in the start frame: (long, lat, width) or None.
-
-    points: iterable of (x, y) orange cone positions in the map frame. Detections closer than pylon_m are
-    merged into pylons. A left pylon (lat > 0) and a right pylon (lat < 0) whose long coordinates agree within
-    pair_long_tol form a gate pair; the pair whose midpoint is nearest the start wins. The line runs
-    perpendicular to the start heading through the pair's midpoint, and its width is the pylon separation
-    plus 2 * margin_m.
-
-    center: optional map-frame (x, y). Pylons are searched within search_r of it instead of the start pose, and
-    the pair whose midpoint is nearest its long coordinate wins (the lap-return re-anchor uses the car position).
-    The line itself stays in the start frame.
-    """
-    c, s = math.cos(syaw), math.sin(syaw)
-    cx, cy = (sx, sy) if center is None else center
-    car_long = c * (cx - sx) + s * (cy - sy)
-    rel = []
-    for x, y in points:
-        dx, dy = x - cx, y - cy
-        if math.hypot(dx, dy) <= search_r:
-            rel.append((c * (x - sx) + s * (y - sy), -s * (x - sx) + c * (y - sy)))
-    clusters = [[p] for p in rel]
-    merged = True
-    while merged:
-        merged = False
-        for i in range(len(clusters)):
-            for j in range(i + 1, len(clusters)):
-                if any(math.hypot(a[0] - b[0], a[1] - b[1]) < pylon_m for a in clusters[i] for b in clusters[j]):
-                    clusters[i] += clusters.pop(j)
-                    merged = True
-                    break
-            if merged:
-                break
-    pylons = [(float(np.mean([p[0] for p in cl])), float(np.mean([p[1] for p in cl]))) for cl in clusters]
-    left = [p for p in pylons if p[1] > 0.0]
-    right = [p for p in pylons if p[1] < 0.0]
-    best = None
-    for pl in left:
-        for pr in right:
-            if abs(pl[0] - pr[0]) > pair_long_tol:
-                continue
-            mid_long = 0.5 * (pl[0] + pr[0])
-            key = abs(mid_long - car_long)
-            if best is None or key < best[0]:
-                best = (key, mid_long, 0.5 * (pl[1] + pr[1]), abs(pl[1] - pr[1]) + 2.0 * margin_m)
-    if best is None:
-        return None
-    return best[1], best[2], best[3]
-
-
-def line_crossed(prev_long, long, lat, line, heading_ok) -> bool:
-    """True when the car moves from behind to ahead of the timing line (long, lat, width) this step,
-    within the line's width, while heading with the start direction (heading_ok)."""
-    if prev_long is None or line is None or not heading_ok:
-        return False
-    line_long, line_lat, width = line
-    return prev_long - line_long < 0.0 <= long - line_long and abs(lat - line_lat) <= width / 2.0
-
-
-def stop_travel_after_line(travel_at_crossing: float, stop_after_m: float) -> float:
-    """Travel at which the brake latches after the final timing-line crossing (stop_after_m clamped to 0..30 m)."""
-    return travel_at_crossing + min(max(stop_after_m, 0.0), _STOP_AFTER_LINE_MAX_M)
+from mfe_common.geometry import yaw_from_quaternion
+from mfe_path_planning.core.finish import (
+    LAP_EXCURSION_M, REANCHOR_LOG_M, STANDSTILL_MPS, STOP_AFTER_LINE_MAX_M, extract_xyz, gate_pass_step,
+    line_crossed,
+    lidar_forward_count, orange_timing_line, rebuild_gate_states, stop_travel_after_line,
+)
+from mfe_common.qos import LATCHED_QOS, RELIABLE_QOS, SHALLOW_SENSOR_QOS
+from mfe_common.topics import (
+    CONTROL_COMMAND,
+    EKF_OUTPUT,
+    LIDAR_POINTS_RAW,
+    PLANNING_CONES,
+    PLANNING_LAPS_COMPLETED,
+    PLANNING_MISSION_FINISHED,
+    ROS_CAN_MISSION_COMPLETED,
+    SKIDPAD_CONES,
+)
 
 
 class FinishDetectorNode(Node):
@@ -144,12 +71,12 @@ class FinishDetectorNode(Node):
         self.declare_parameter('stop_after_gate_m', 0.0)  # run-out after the final gate pass
         self.declare_parameter('gate_enter_r', 4.5)       # gate pass = within this radius of centroid
         self.declare_parameter('line_crossing', False)    # True: lap = signed crossing of the orange timing line
-        self.declare_parameter('orange_topic', '/planning/cones')   # BIG and SMALL orange cones for the timing line
+        self.declare_parameter('orange_topic', PLANNING_CONES)   # BIG and SMALL orange cones for the timing line
         self.declare_parameter('line_search_r', 25.0)     # orange pylons this close to the start pose are used
         self.declare_parameter('line_margin_m', 2.0)      # timing line width = pylon separation + 2 * margin
         self.declare_parameter('line_offset_m', 6.79)     # fallback virtual line: start + this, along start heading
         self.declare_parameter('stop_after_line_m', 5.0)  # run-out from the final line crossing before braking
-        # Re-anchor the timing line on lap return: after the car has been >= _LAP_EXCURSION_M from the start, the
+        # Re-anchor the timing line on lap return: after the car has been >= LAP_EXCURSION_M from the start, the
         # orange pylons seen near the car (fresh message) replace the stored line. Drift moves the stored line.
         self.declare_parameter('finish_line_reanchor', True)
         # Re-anchor only while the car is within this radius of the START pose and has travelled > min_travel_m.
@@ -179,8 +106,8 @@ class FinishDetectorNode(Node):
         self._stop_after_line_m = float(self.get_parameter('stop_after_line_m').value)
         self._line_reanchor = bool(self.get_parameter('finish_line_reanchor').value)
         self._reanchor_start_r = float(self.get_parameter('reanchor_start_r_m').value)
-        if self._stop_after_line_m > _STOP_AFTER_LINE_MAX_M:
-            self.get_logger().warn(f'stop_after_line_m={self._stop_after_line_m} exceeds {_STOP_AFTER_LINE_MAX_M} m '
+        if self._stop_after_line_m > STOP_AFTER_LINE_MAX_M:
+            self.get_logger().warn(f'stop_after_line_m={self._stop_after_line_m} exceeds {STOP_AFTER_LINE_MAX_M} m '
                                    f'(DD.4.4.4); clamped')
 
         self._car_x = 0.0
@@ -211,34 +138,28 @@ class FinishDetectorNode(Node):
         self._stop_at_travel = None
         self._orange_pts = {}     # 1 m grid cell -> (x, y) of ORANGE_BIG and ORANGE_SMALL cones (timing line)
 
-        sensor_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST, depth=5)
-        reliable_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST, depth=10)
-        latched_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST, depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        sensor_qos = SHALLOW_SENSOR_QOS
+        reliable_qos = RELIABLE_QOS
+        latched_qos = LATCHED_QOS
 
-        self.create_subscription(PointCloud2, '/lidar/points_raw', self._lidar_cb, sensor_qos)
-        self.create_subscription(Odometry, '/ekf/output', self._odom_cb, reliable_qos)
+        self.create_subscription(PointCloud2, LIDAR_POINTS_RAW, self._lidar_cb, sensor_qos)
+        self.create_subscription(Odometry, EKF_OUTPUT, self._odom_cb, reliable_qos)
         if self._gate_crossings > 0:
-            self.create_subscription(Track, '/planning/cones', self._cones_cb, sensor_qos)
-            self.create_subscription(Track, '/skidpad/cones', self._cones_cb, sensor_qos)   # skidpad runs publish the cone map here
-            if self._orange_topic not in ('/planning/cones', '/skidpad/cones'):
+            self.create_subscription(Track, PLANNING_CONES, self._cones_cb, sensor_qos)
+            # skidpad runs publish the cone map on SKIDPAD_CONES
+            self.create_subscription(Track, SKIDPAD_CONES, self._cones_cb, sensor_qos)
+            if self._orange_topic not in (PLANNING_CONES, SKIDPAD_CONES):
                 # orange_only colour mode: ORANGE_BIG pylons are published on orange_topic, not on /planning/cones
                 self.create_subscription(Track, self._orange_topic, self._cones_cb, sensor_qos)
         elif self._line_crossing:
             self.create_subscription(Track, self._orange_topic, self._cones_cb, sensor_qos)
 
         self._mission_completed_pub = self.create_publisher(
-            Bool, '/ros_can/mission_completed', reliable_qos)
+            Bool, ROS_CAN_MISSION_COMPLETED, reliable_qos)
         self._finished_pub = self.create_publisher(
-            Bool, '/planning/mission_finished', latched_qos)
-        self._cmd_pub = self.create_publisher(ControlCommand, '/control/command', reliable_qos)
-        self._laps_pub = self.create_publisher(Int32, '/planning/laps_completed', reliable_qos)
+            Bool, PLANNING_MISSION_FINISHED, latched_qos)
+        self._cmd_pub = self.create_publisher(ControlCommand, CONTROL_COMMAND, reliable_qos)
+        self._laps_pub = self.create_publisher(Int32, PLANNING_LAPS_COMPLETED, reliable_qos)
 
         # Clear any stale latched True from a previous run.
         init_msg = Bool()
@@ -271,7 +192,7 @@ class FinishDetectorNode(Node):
 
     def _check_standstill(self, speed: float) -> None:
         """mission_completed (EUFS state machine) goes out only once the car has stopped."""
-        if self._finished and not self._completed_sent and speed < _STANDSTILL_MPS:
+        if self._finished and not self._completed_sent and speed < STANDSTILL_MPS:
             done = Bool()
             done.data = True
             self._mission_completed_pub.publish(done)
@@ -299,10 +220,11 @@ class FinishDetectorNode(Node):
         # the stored line stays. Guard: the car must be near the START pose after min_travel, and only pylons within
         # line_search_r of the stored line are used.
         near_start = (self._start_x is not None
-                      and math.hypot(self._car_x - self._start_x, self._car_y - self._start_y) <= self._reanchor_start_r)
+                      and math.hypot(self._car_x - self._start_x, self._car_y - self._start_y)
+                      <= self._reanchor_start_r)
         centre = self._line_center_map() if near_start and self._travel_m > self._min_travel_m else None
         if (self._line_crossing and self._line_reanchor and self._start_x is not None
-                and self._stop_at_travel is None and self._max_dist_from_start >= _LAP_EXCURSION_M
+                and self._stop_at_travel is None and self._max_dist_from_start >= LAP_EXCURSION_M
                 and centre is not None):
             fresh = [(cone.location.x, cone.location.y) for cone in msg.track
                      if cone.color in (Cone.ORANGE_BIG, Cone.ORANGE_SMALL)
@@ -313,7 +235,7 @@ class FinishDetectorNode(Node):
             if line is not None:
                 moved = (max(abs(line[i] - self._line[i]) for i in range(3))
                          if self._line is not None else float('inf'))
-                if moved > _REANCHOR_LOG_M:
+                if moved > REANCHOR_LOG_M:
                     old = self._line
                     self.get_logger().info(
                         f'Orange timing line re-anchored near car=({self._car_x:.1f},{self._car_y:.1f}): '
@@ -351,52 +273,28 @@ class FinishDetectorNode(Node):
             self._rebuild_gates()
 
     def _rebuild_gates(self) -> None:
-        """Cluster pylons into gates, carrying each gate's pass state over from the previous clustering."""
-        clusters: list = []
-        for p in self._gate_cones.values():
-            for cl in clusters:
-                if any(math.hypot(p[0] - q[0], p[1] - q[1]) < _GATE_CLUSTER_M for q in cl):
-                    cl.append(p)
-                    break
-            else:
-                clusters.append([p])
-        old = self._gate_states
-        self._gate_states = []
-        for cl in clusters:
-            c = np.mean(cl, axis=0)
-            prev = next((s for s in old
-                         if math.hypot(s['c'][0] - c[0], s['c'][1] - c[1]) < _GATE_TRACK_M), None)
-            # inside=None: initialised on the next odometry tick without counting a pass, so a gate
-            # the car already sits on (spawn, or a camera gate that first forms under it) is not counted.
-            self._gate_states.append({'c': c, 'inside': prev['inside'] if prev is not None else None})
+        """Cluster the pylons into gates, carrying each gate's pass state over (core.finish.rebuild_gate_states)."""
+        self._gate_states = rebuild_gate_states(self._gate_cones.values(), self._gate_states)
 
     def _check_gate_passes(self, x: float, y: float) -> None:
         for g in self._gate_states:
             d = math.hypot(x - g['c'][0], y - g['c'][1])
-            new_under_car = False
-            if g['inside'] is None:
-                g['inside'] = d <= self._gate_enter_r
-                new_under_car = g['inside'] and self._travel_m > _GATE_NEW_PASS_TRAVEL_M
-            if new_under_car or (not g['inside'] and d <= self._gate_enter_r):
-                g['inside'] = True
-                if self._travel_m > _SPAWN_DEBOUNCE_M:
-                    self._gate_passes += 1
-                    self._publish_count(self._gate_passes)
-                    if self._gate_passes >= self._gate_crossings and self._stop_at_travel is None:
-                        if self._stop_after_gate_m <= 0.0:
-                            self._latch_finished(
-                                f'orange gate pass {self._gate_passes}/{self._gate_crossings}')
-                            return
-                        self._stop_at_travel = self._travel_m + self._stop_after_gate_m
-                        self.get_logger().info(
-                            f'Final orange gate pass {self._gate_passes}/{self._gate_crossings} '
-                            f'— braking after {self._stop_after_gate_m:.0f} m run-out.')
-                    else:
-                        self.get_logger().info(
-                            f'Orange gate pass {self._gate_passes}/{self._gate_crossings} '
-                            f'(travel={self._travel_m:.0f} m)')
-            elif g['inside'] and d > self._gate_enter_r + _GATE_HYSTERESIS_M:
-                g['inside'] = False
+            if gate_pass_step(g, d, self._travel_m, self._gate_enter_r):
+                self._gate_passes += 1
+                self._publish_count(self._gate_passes)
+                if self._gate_passes >= self._gate_crossings and self._stop_at_travel is None:
+                    if self._stop_after_gate_m <= 0.0:
+                        self._latch_finished(
+                            f'orange gate pass {self._gate_passes}/{self._gate_crossings}')
+                        return
+                    self._stop_at_travel = self._travel_m + self._stop_after_gate_m
+                    self.get_logger().info(
+                        f'Final orange gate pass {self._gate_passes}/{self._gate_crossings} '
+                        f'— braking after {self._stop_after_gate_m:.0f} m run-out.')
+                else:
+                    self.get_logger().info(
+                        f'Orange gate pass {self._gate_passes}/{self._gate_crossings} '
+                        f'(travel={self._travel_m:.0f} m)')
         if self._stop_at_travel is not None and self._travel_m >= self._stop_at_travel:
             self._latch_finished(f'orange gate + {self._stop_after_gate_m:.0f} m run-out')
 
@@ -408,7 +306,7 @@ class FinishDetectorNode(Node):
         speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
 
         q = msg.pose.pose.orientation
-        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        yaw = yaw_from_quaternion(q)
         if self._start_x is None:
             self._start_x, self._start_y, self._start_yaw = x, y, yaw
         # Position relative to the start pose: along the start heading (long) and across it (lat).
@@ -450,7 +348,7 @@ class FinishDetectorNode(Node):
         # A lap counts when long crosses from behind to past the line, within its width, with the
         # heading within 60 deg of the start heading. Distance alone fired early on peanut.
         if ((self._return_r > 0.0 or self._line_crossing) and self._line is not None and self._stop_at_travel is None
-                and self._travel_m >= self._min_travel_m and self._max_dist_from_start >= _LAP_EXCURSION_M):
+                and self._travel_m >= self._min_travel_m and self._max_dist_from_start >= LAP_EXCURSION_M):
             heading_ok = math.cos(yaw - self._start_yaw) > 0.5
             if line_crossed(prev_long, long, lat, self._line, heading_ok):
                 self._laps_completed += 1
@@ -489,17 +387,12 @@ class FinishDetectorNode(Node):
                 return
         elif self._car_x < self._approach_x:
             return
-        pts = _extract_xyz(msg)
+        pts = extract_xyz(msg)
         if pts.shape[0] == 0:
             return
-        mask = (
-            (pts[:, 0] > self._fwd_min) &
-            (pts[:, 0] < self._fwd_max) &
-            (np.abs(pts[:, 1]) < self._lat_max) &
-            (pts[:, 2] > -0.15)
-        )
-        if int(np.sum(mask)) >= self._min_pts:
-            self._latch_finished(f'LiDAR ({int(np.sum(mask))} pts)')
+        n = lidar_forward_count(pts, self._fwd_min, self._fwd_max, self._lat_max)
+        if n >= self._min_pts:
+            self._latch_finished(f'LiDAR ({n} pts)')
 
     def _brake_loop(self) -> None:
         if not self._finished:
