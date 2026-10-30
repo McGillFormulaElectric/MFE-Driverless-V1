@@ -267,9 +267,11 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     # Perception — LiDAR cone detector (C++)
     # --------------------------------------------------------------------------
-    # NOTE: CUDA support is a compile-time flag (#ifdef PLATFORM_JETSON).
-    # There is no runtime 'enable_cuda' parameter — the node ignores it.
-    # To enable CUDA, rebuild with -DPLATFORM_JETSON=ON.
+    # NOTE: GPU support is partly a compile-time choice. lidar_cone_detector's CMake defines
+    # PLATFORM_DESKTOP_GPU and builds the CUDA filters only when a CUDA compiler is found;
+    # otherwise the node is CPU-only. At runtime the 'use_gpu' parameter (default true)
+    # selects the GPU path, and the node falls back to CPU PCL if no CUDA device is present.
+    # This node does not set use_gpu, so the default applies.
     lidar_perception_node = Node(
         package='lidar_cone_detector',
         executable='lidar_perception_node',
