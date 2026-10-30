@@ -28,12 +28,12 @@ setup(
     maintainer_email="albert@todo.todo",
     keywords=[],
     classifiers=[
-        "Intended Audience :: todo",
+        "Intended Audience :: Developers",
         "License :: GPLv3",
         "Programming Language :: Python",
-        "Topic :: todo",
+        "Topic :: Scientific/Engineering",
     ],
-    description="todo",
+    description="Extended Kalman filter fusing IMU, GPS and wheel-speed data into the vehicle state.",
     license="GPLv3",
     # Like the CMakeLists add_executable macro, you can add your python
     # scripts here.
