@@ -23,12 +23,18 @@ from datetime import datetime
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 import numpy as np
 from nav_msgs.msg import Path
 from std_msgs.msg import Bool
 from mfe_msgs.msg import Track, Cone
+from mfe_common.qos import RELIABLE_QOS
+from mfe_common.topics import (
+    GROUND_TRUTH_STATE,
+    GROUND_TRUTH_TRACK_COLORED,
+    PLANNING_CENTERLINE,
+    PLANNING_MISSION_FINISHED,
+)
 
 try:
     from eufs_msgs.msg import CarState
@@ -36,15 +42,10 @@ try:
 except ImportError:
     _CAR_STATE_AVAILABLE = False
 
-_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.RELIABLE,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=10,
-)
 
 # Lap completion thresholds
 _LAP_RETURN_RADIUS_M = 5.0   # car must come within this distance of start to close a lap
-_LAP_MIN_DIST_M      = 60.0  # car must travel at least this far before a lap can be closed
+_LAP_MIN_DIST_M = 60.0  # car must travel at least this far before a lap can be closed
 
 # Cone hit: standard FSAE cone base ~0.228m radius + car half-width ~0.575m
 _CONE_HIT_RADIUS = 0.40      # m — distance from car centre to cone centre to count as a hit
@@ -83,16 +84,16 @@ class LapValidatorNode(Node):
 
         # Position tracking
         self._start_pos = None        # (x, y) from first odometry message
-        self._last_pos  = None        # (x, y) previous position for dist accumulation
+        self._last_pos = None        # (x, y) previous position for dist accumulation
 
         # Lap counters
-        self._lap_count      = 0
+        self._lap_count = 0
         self._lap_start_time = None
         self._lap_total_dist = 0.0
 
         # Per-lap accumulators
-        self._speeds: list[float]        = []
-        self._lat_accels: list[float]    = []
+        self._speeds: list[float] = []
+        self._lat_accels: list[float] = []
         self._path_deviations: list[float] = []
 
         # Current planned path waypoints (list of (x, y))
@@ -103,24 +104,24 @@ class LapValidatorNode(Node):
         self._gt_yellows: np.ndarray = np.zeros((0, 2), dtype=np.float32)
 
         # Per-lap cone hit tracking
-        self._lap_cones_hit   = 0
+        self._lap_cones_hit = 0
         self._total_cones_hit = 0
-        self._hit_cooldown    = 0.0   # monotonic time until next hit can register (debounce)
+        self._hit_cooldown = 0.0   # monotonic time until next hit can register (debounce)
 
         # Status logging timer
         self._last_status_time = 0.0
-        self._current_speed    = 0.0
-        self._current_dev      = 0.0
+        self._current_speed = 0.0
+        self._current_dev = 0.0
 
         # ---------- Subscribers ----------
         self.create_subscription(
-            CarState, '/ground_truth/state', self._state_cb, _QOS)
+            CarState, GROUND_TRUTH_STATE, self._state_cb, RELIABLE_QOS)
         self.create_subscription(
-            Track, '/ground_truth/track_colored', self._gt_cones_cb, _QOS)
+            Track, GROUND_TRUTH_TRACK_COLORED, self._gt_cones_cb, RELIABLE_QOS)
         self.create_subscription(
-            Path, '/planning/centerline', self._centerline_cb, _QOS)
+            Path, PLANNING_CENTERLINE, self._centerline_cb, RELIABLE_QOS)
         self.create_subscription(
-            Bool, '/planning/mission_finished', self._mission_finished_cb, _QOS)
+            Bool, PLANNING_MISSION_FINISHED, self._mission_finished_cb, RELIABLE_QOS)
 
     # ------------------------------------------------------------------ #
 
@@ -139,7 +140,7 @@ class LapValidatorNode(Node):
                 blues.append([c.location.x, c.location.y])
             elif c.color == Cone.YELLOW:
                 yellows.append([c.location.x, c.location.y])
-        self._gt_blues   = np.array(blues,   dtype=np.float32) if blues   else np.zeros((0, 2), dtype=np.float32)
+        self._gt_blues = np.array(blues,   dtype=np.float32) if blues else np.zeros((0, 2), dtype=np.float32)
         self._gt_yellows = np.array(yellows, dtype=np.float32) if yellows else np.zeros((0, 2), dtype=np.float32)
 
     def _centerline_cb(self, msg: Path) -> None:
@@ -167,8 +168,8 @@ class LapValidatorNode(Node):
 
         # Initialise on first message
         if self._start_pos is None:
-            self._start_pos      = (x, y)
-            self._last_pos       = (x, y)
+            self._start_pos = (x, y)
+            self._last_pos = (x, y)
             self._lap_start_time = time.monotonic()
             self._last_status_time = time.monotonic()
             self.get_logger().info(
@@ -192,12 +193,12 @@ class LapValidatorNode(Node):
             self._path_deviations.append(deviation)
 
         self._current_speed = speed
-        self._current_dev   = deviation if deviation is not None else 0.0
+        self._current_dev = deviation if deviation is not None else 0.0
 
         # Cone hit detection against full GT map (debounced to 1 s to avoid double-counting)
         now = time.monotonic()
         if now >= self._hit_cooldown and self._check_cone_hit(x, y):
-            self._lap_cones_hit   += 1
+            self._lap_cones_hit += 1
             self._total_cones_hit += 1
             self._hit_cooldown = now + 1.0
             self.get_logger().warn(
@@ -262,7 +263,6 @@ class LapValidatorNode(Node):
             f'cones_hit={cones_hit}'
         )
         self.get_logger().info(summary)
-        print(summary, flush=True)
 
         self._csv_writer.writerow([
             lap_num,
@@ -276,15 +276,15 @@ class LapValidatorNode(Node):
         self._csv_file.flush()
 
         # Reset per-lap state for the next lap
-        self._lap_start_time  = time.monotonic()
-        self._lap_total_dist  = 0.0
-        self._lap_cones_hit   = 0
+        self._lap_start_time = time.monotonic()
+        self._lap_total_dist = 0.0
+        self._lap_cones_hit = 0
         self._speeds.clear()
         self._lat_accels.clear()
         self._path_deviations.clear()
 
     def _check_cone_hit(self, car_x: float, car_y: float) -> bool:
-        """True if car centre is within _CONE_HIT_RADIUS of any cone in the full GT map."""
+        """Return True if the car centre is within _CONE_HIT_RADIUS of any cone in the full GT map."""
         r2 = _CONE_HIT_RADIUS ** 2
         for arr in (self._gt_blues, self._gt_yellows):
             if len(arr) == 0:

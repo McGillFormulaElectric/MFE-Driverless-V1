@@ -19,5 +19,5 @@ import pytest
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257():
-    rc = main(argv=['.', 'test'])
+    rc = main(argv=['.', 'test', '--exclude', 'mfe_path_planning/third_party'])
     assert rc == 0, 'Found code style errors / warnings'

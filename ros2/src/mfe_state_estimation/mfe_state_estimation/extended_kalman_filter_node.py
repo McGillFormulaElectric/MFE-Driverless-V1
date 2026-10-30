@@ -4,13 +4,19 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-SensorDataQoS = lambda: QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
 from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFilter
 
 from sensor_msgs.msg import Imu, NavSatFix
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
+
+
+def SensorDataQoS():
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10
+    )
+
 
 R_EARTH = 6_371_000.0  # metres
 
@@ -43,7 +49,7 @@ R_EARTH = 6_371_000.0  # metres
 #   b_gyro_new  = b_gyro
 #
 # Anti-windup bias clamp bounds (applied after every predict/update):
-_BIAS_GPS_MAX_M = 2.0        # GPS bias: ±2 m (a few × OU sigma=0.5 m)
+_BIAS_GPS_MAX_M = 2.0  # GPS bias: ±2 m (a few × OU sigma=0.5 m)
 _BIAS_GYRO_MAX_RAD_S = 0.05  # Gyro bias: ±0.05 rad/s (~3°/s — generous)
 #
 # Backwards compatibility:
@@ -63,20 +69,20 @@ _BIAS_GYRO_MAX_RAD_S = 0.05  # Gyro bias: ±0.05 rad/s (~3°/s — generous)
 # Process noise standard deviations (tuning knobs)
 # Order matches the 8-state vector: [x, y, θ, v, ω, b_gps_x, b_gps_y, b_gyro]
 _DEFAULT_PROC_NOISE = [
-    0.05,    # x          (m)       — small: driven by kinematics
-    0.05,    # y          (m)
-    0.02,    # θ          (rad)
-    0.5,     # v          (m/s)    — allow speed to drift between wheelspeed updates
-    0.1,     # ω          (rad/s)  — allow yaw rate to drift between gyro updates
-    0.005,   # b_gps_x    (m)      — slow GPS bias drift
-    0.005,   # b_gps_y    (m)
+    0.05,  # x          (m)       — small: driven by kinematics
+    0.05,  # y          (m)
+    0.02,  # θ          (rad)
+    0.5,  # v          (m/s)    — allow speed to drift between wheelspeed updates
+    0.1,  # ω          (rad/s)  — allow yaw rate to drift between gyro updates
+    0.005,  # b_gps_x    (m)      — slow GPS bias drift
+    0.005,  # b_gps_y    (m)
     0.0001,  # b_gyro     (rad/s)  — very slow gyro bias drift
 ]
 
 
 def _build_8state_motion_model():
     """
-    Returns (g, G, V) for the 8-state unicycle + bias random walk system.
+    Return (g, G, V) for the 8-state unicycle + bias random walk system.
 
     g : state transition function  mu_{t} = g(mu_{t-1}, u=None, dt)
     G : Jacobian of g w.r.t. state (8×8)
@@ -85,26 +91,28 @@ def _build_8state_motion_model():
 
     def g(mu, u, dt):
         x, y, theta, v, omega, bgx, bgy, bgyro = mu
-        return np.array([
-            x + v * math.cos(theta) * dt,
-            y + v * math.sin(theta) * dt,
-            theta + omega * dt,
-            v,
-            omega,
-            bgx,
-            bgy,
-            bgyro,
-        ])
+        return np.array(
+            [
+                x + v * math.cos(theta) * dt,
+                y + v * math.sin(theta) * dt,
+                theta + omega * dt,
+                v,
+                omega,
+                bgx,
+                bgy,
+                bgyro,
+            ]
+        )
 
     def G(mu, u, dt):
         _, _, theta, v, _, _, _, _ = mu
         # Jacobian of g w.r.t. mu
         Gmat = np.eye(8)
-        Gmat[0, 2] = -v * math.sin(theta) * dt   # dx/dtheta
-        Gmat[0, 3] =  math.cos(theta) * dt        # dx/dv
-        Gmat[1, 2] =  v * math.cos(theta) * dt    # dy/dtheta
-        Gmat[1, 3] =  math.sin(theta) * dt        # dy/dv
-        Gmat[2, 4] =  dt                           # dtheta/domega
+        Gmat[0, 2] = -v * math.sin(theta) * dt  # dx/dtheta
+        Gmat[0, 3] = math.cos(theta) * dt  # dx/dv
+        Gmat[1, 2] = v * math.cos(theta) * dt  # dy/dtheta
+        Gmat[1, 3] = math.sin(theta) * dt  # dy/dv
+        Gmat[2, 4] = dt  # dtheta/domega
         return Gmat
 
     def V(mu, u, dt):
@@ -117,25 +125,25 @@ def _build_8state_motion_model():
 def _H_gps():
     """H matrix for GPS measurement z=[x+b_gps_x, y+b_gps_y]. Shape 2×8."""
     H = np.zeros((2, 8))
-    H[0, 0] = 1.0   # x
-    H[0, 5] = 1.0   # b_gps_x
-    H[1, 1] = 1.0   # y
-    H[1, 6] = 1.0   # b_gps_y
+    H[0, 0] = 1.0  # x
+    H[0, 5] = 1.0  # b_gps_x
+    H[1, 1] = 1.0  # y
+    H[1, 6] = 1.0  # b_gps_y
     return H
 
 
 def _H_wheelspeed():
     """H matrix for wheelspeed measurement z=[v]. Shape 1×8."""
     H = np.zeros((1, 8))
-    H[0, 3] = 1.0   # v
+    H[0, 3] = 1.0  # v
     return H
 
 
 def _H_gyro():
     """H matrix for gyro measurement z=[omega + b_gyro]. Shape 1×8."""
     H = np.zeros((1, 8))
-    H[0, 4] = 1.0   # omega
-    H[0, 7] = 1.0   # b_gyro  (so gyro bias is observable from raw gyro measurements)
+    H[0, 4] = 1.0  # omega
+    H[0, 7] = 1.0  # b_gyro  (so gyro bias is observable from raw gyro measurements)
     return H
 
 
@@ -155,14 +163,18 @@ class ExtendedKalmanFilterNode(Node):
 
         self.imu_topic_name = self.get_parameter("imu_topic").get_parameter_value().string_value
         self.gps_topic_name = self.get_parameter("gps_topic").get_parameter_value().string_value
-        self.wheelspeed_topic_name = self.get_parameter("wheelspeed_topic").get_parameter_value().string_value
+        self.wheelspeed_topic_name = (
+            self.get_parameter("wheelspeed_topic").get_parameter_value().string_value
+        )
 
         # Declare and configure covariance matrices (which indicate noise) in the EKF
         self.declare_parameter("var_imu_acc")
         self.declare_parameter("var_imu_w")
         self.declare_parameter("var_gps")
 
-        self.var_imu_acc = self.get_parameter("var_imu_acc").get_parameter_value().double_array_value
+        self.var_imu_acc = (
+            self.get_parameter("var_imu_acc").get_parameter_value().double_array_value
+        )
         self.var_imu_w = self.get_parameter("var_imu_w").get_parameter_value().double_value
 
         self.var_gps_param = self.get_parameter("var_gps").get_parameter_value().double_array_value
@@ -178,7 +190,7 @@ class ExtendedKalmanFilterNode(Node):
         self._R_gps = np.diag([gps_var, gps_var_y])
 
         # Wheelspeed: proxy from odometry twist, treated as ~0.05 m/s std
-        _WHEELSPEED_VAR = 0.0025   # (0.05 m/s)^2
+        _WHEELSPEED_VAR = 0.0025  # (0.05 m/s)^2
         self._R_wheelspeed = np.array([[_WHEELSPEED_VAR]])
 
         # Gyro: use var_imu_w param
@@ -190,25 +202,14 @@ class ExtendedKalmanFilterNode(Node):
         self._H_gyro = _H_gyro()
 
         # ---- subscriptions ----
+        self.create_subscription(Imu, self.imu_topic_name, self.imu_callback, SensorDataQoS())
         self.create_subscription(
-            Imu,
-            self.imu_topic_name,
-            self.imu_callback,
-            SensorDataQoS()
-        )
-        self.create_subscription(
-            NavSatFix,
-            self.gps_topic_name,
-            self.gps_callback,
-            SensorDataQoS()
+            NavSatFix, self.gps_topic_name, self.gps_callback, SensorDataQoS()
         )
         # Wheelspeed proxy: read twist.linear.x from ground truth or sim odom.
         # On hardware, remap wheelspeed_topic to a real encoder topic.
         self.create_subscription(
-            Odometry,
-            self.wheelspeed_topic_name,
-            self.wheelspeed_callback,
-            SensorDataQoS()
+            Odometry, self.wheelspeed_topic_name, self.wheelspeed_callback, SensorDataQoS()
         )
 
         self.odom_pub_ = self.create_publisher(Odometry, self.output_topic_name.value, 10)
@@ -222,11 +223,11 @@ class ExtendedKalmanFilterNode(Node):
         self._gps_origin = None  # tuple (lat0_rad, lon0_rad)
 
         # Latest sensor readings (used by predict step)
-        self._velocity = 0.0   # forward velocity from wheelspeed proxy (m/s)
-        self.imu_w = 0.0       # latest raw angular velocity from IMU     (rad/s)
-        self.imu_theta = 0.0   # latest yaw from IMU quaternion           (rad)
-        self.imu_acc_x = 0.0   # latest linear acceleration x             (m/s²)
-        self.imu_acc_y = 0.0   # latest linear acceleration y             (m/s²)
+        self._velocity = 0.0  # forward velocity from wheelspeed proxy (m/s)
+        self.imu_w = 0.0  # latest raw angular velocity from IMU     (rad/s)
+        self.imu_theta = 0.0  # latest yaw from IMU quaternion           (rad)
+        self.imu_acc_x = 0.0  # latest linear acceleration x             (m/s²)
+        self.imu_acc_y = 0.0  # latest linear acceleration y             (m/s²)
 
         self._dt = 1.0 / self.imu_freq  # default timestep until first pair of IMU msgs
 
@@ -234,11 +235,13 @@ class ExtendedKalmanFilterNode(Node):
             f"Initialized 8-state EKF Node: {self.imu_topic_name} (IMU), "
             f"{self.gps_topic_name} (GPS), "
             f"{self.wheelspeed_topic_name} (wheelspeed proxy) "
-            f"-> {self.output_topic_name.value}")
+            f"-> {self.output_topic_name.value}"
+        )
         self.get_logger().info(
             "State: [x, y, θ, v, ω, b_gps_x, b_gps_y, b_gyro]  "
-            "(bias anti-windup: GPS ±%.1fm, gyro ±%.4f rad/s)" %
-            (_BIAS_GPS_MAX_M, _BIAS_GYRO_MAX_RAD_S))
+            "(bias anti-windup: GPS ±%.1fm, gyro ±%.4f rad/s)"
+            % (_BIAS_GPS_MAX_M, _BIAS_GYRO_MAX_RAD_S)
+        )
 
     # ------------------------------------------------------------------
     # EKF construction
@@ -266,16 +269,18 @@ class ExtendedKalmanFilterNode(Node):
             return h, H
 
         initial_state = np.array([x0, y0, theta0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        initial_covariance = np.diag([
-            5.0,    # x
-            5.0,    # y
-            0.1,    # theta
-            1.0,    # v
-            0.1,    # omega
-            1.0,    # b_gps_x  (initialised with some uncertainty — not zero)
-            1.0,    # b_gps_y
-            0.01,   # b_gyro
-        ])
+        initial_covariance = np.diag(
+            [
+                5.0,  # x
+                5.0,  # y
+                0.1,  # theta
+                1.0,  # v
+                0.1,  # omega
+                1.0,  # b_gps_x  (initialised with some uncertainty — not zero)
+                1.0,  # b_gps_y
+                0.01,  # b_gyro
+            ]
+        )
 
         self._ekf = ExtendedKalmanFilter(
             initial_state,
@@ -283,11 +288,11 @@ class ExtendedKalmanFilterNode(Node):
             motion_model,
             observation_model,
             proc_noise_std=_DEFAULT_PROC_NOISE,
-            obs_noise_std=[math.sqrt(self._R_gps[0, 0]),
-                           math.sqrt(self._R_gps[1, 1])],
+            obs_noise_std=[math.sqrt(self._R_gps[0, 0]), math.sqrt(self._R_gps[1, 1])],
         )
         self.get_logger().info(
-            f"8-state EKF built — initial pose: x={x0:.2f} m, y={y0:.2f} m, theta={theta0:.3f} rad")
+            f"8-state EKF built — initial pose: x={x0:.2f} m, y={y0:.2f} m, theta={theta0:.3f} rad"
+        )
 
     # ------------------------------------------------------------------
     # Bias anti-windup clamp
@@ -298,8 +303,8 @@ class ExtendedKalmanFilterNode(Node):
         if self._ekf is None:
             return
         mu = self._ekf.mu
-        mu[5] = float(np.clip(mu[5], -_BIAS_GPS_MAX_M,    _BIAS_GPS_MAX_M))
-        mu[6] = float(np.clip(mu[6], -_BIAS_GPS_MAX_M,    _BIAS_GPS_MAX_M))
+        mu[5] = float(np.clip(mu[5], -_BIAS_GPS_MAX_M, _BIAS_GPS_MAX_M))
+        mu[6] = float(np.clip(mu[6], -_BIAS_GPS_MAX_M, _BIAS_GPS_MAX_M))
         mu[7] = float(np.clip(mu[7], -_BIAS_GYRO_MAX_RAD_S, _BIAS_GYRO_MAX_RAD_S))
         self._ekf.mu = mu
 
@@ -309,7 +314,7 @@ class ExtendedKalmanFilterNode(Node):
 
     def _update_with_measurement(self, z: np.ndarray, H: np.ndarray, R: np.ndarray) -> None:
         """
-        Generic EKF update step for heterogeneous measurements.
+        Apply a generic EKF update step for heterogeneous measurements.
 
         Uses the pre-built EKF's Sigma and mu; applies a standard correction step
         with the provided H (measurement Jacobian) and R (measurement noise covariance).
@@ -328,8 +333,8 @@ class ExtendedKalmanFilterNode(Node):
 
         innovation = z - H @ mu
         self._ekf.mu = mu + K @ innovation
-        I = np.eye(len(mu))
-        self._ekf.Sigma = (I - K @ H) @ Sigma
+        eye = np.eye(len(mu))
+        self._ekf.Sigma = (eye - K @ H) @ Sigma
 
         self._clamp_biases()
 
@@ -349,7 +354,7 @@ class ExtendedKalmanFilterNode(Node):
         qz = msg.orientation.z
         qw = msg.orientation.w
         # yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy^2 + qz^2))
-        self.imu_theta = np.arctan2(2.0*(qw*qz + qx*qy), 1.0 - 2.0*(qy*qy + qz*qz))
+        self.imu_theta = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
 
         now = self.get_clock().now()
         if self._last_imu_time is not None:
@@ -443,7 +448,7 @@ class ExtendedKalmanFilterNode(Node):
 
         mu = self._ekf.mu  # [x, y, theta, v, omega, b_gps_x, b_gps_y, b_gyro]
         x, y, yaw = float(mu[0]), float(mu[1]), float(mu[2])
-        v, omega   = float(mu[3]), float(mu[4])
+        v, omega = float(mu[3]), float(mu[4])
 
         # Yaw → quaternion (rotation about z only)
         qz = math.sin(yaw / 2.0)
@@ -464,9 +469,9 @@ class ExtendedKalmanFilterNode(Node):
         # Backwards-compatible: same indices as the original 3-state node
         sigma = self._ekf.Sigma
         cov = [0.0] * 36
-        cov[0]  = float(sigma[0, 0])   # x-x
-        cov[7]  = float(sigma[1, 1])   # y-y
-        cov[35] = float(sigma[2, 2])   # yaw-yaw
+        cov[0] = float(sigma[0, 0])  # x-x
+        cov[7] = float(sigma[1, 1])  # y-y
+        cov[35] = float(sigma[2, 2])  # yaw-yaw
         msg.pose.covariance = cov
 
         # Populate twist for consumers that read velocity (new capability)
@@ -474,8 +479,8 @@ class ExtendedKalmanFilterNode(Node):
         msg.twist.twist.angular.z = omega
 
         twist_cov = [0.0] * 36
-        twist_cov[0]  = float(sigma[3, 3])   # v-v
-        twist_cov[35] = float(sigma[4, 4])   # omega-omega
+        twist_cov[0] = float(sigma[3, 3])  # v-v
+        twist_cov[35] = float(sigma[4, 4])  # omega-omega
         msg.twist.covariance = twist_cov
 
         self.odom_pub_.publish(msg)
