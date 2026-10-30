@@ -1,5 +1,5 @@
-# Planner params for the race-line sim tests (raceline_enable: true, race line from lap 2)
-# raceline_enable: follow a min-curvature race line from lap 2 (built from the lap-1 cone map).
+# Planner params for the race-line sim tests. raceline_enable (default true in the planner) follows a min-curvature
+# race line from lap 2 (built from the lap-1 cone map). It runs only in the trackdrive, autocross and peanut missions.
 path_planner_node:
   ros__parameters:
     pipeline_hysteresis: true
