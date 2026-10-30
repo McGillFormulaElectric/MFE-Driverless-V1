@@ -74,25 +74,6 @@ def generate_launch_description():
         ])
     ) 
 
-    # transform detected cones to universal frame
-    cone_transformer_node = Node(
-        package='lidar_cone_detector',
-        namespace='lidar',
-        name='cone_transformer_node',
-        executable='cone_transformer_node',
-        output='screen',
-        parameters=[
-            {'target_frame': 'universal'}, # temp target frame
-        ]
-    )
-
-    lidar_tf_broadcaster_node = Node(
-        package='lidar_cone_detector',
-        namespace='lidar',
-        name='lidar_tf_broadcaster_node',
-        executable='lidar_tf_broadcaster'
-    )
-
     load_file_arg = DeclareLaunchArgument(
         'load_file',
         default_value='False',
@@ -111,7 +92,5 @@ def generate_launch_description():
         file_loader_node,
         sliding_window_preprocessor_node,
         lidar_perception_node,
-        # cone_transformer_node, # FOR SOME REASON THIS LOADS THE FILE. NO IDEA
-        # lidar_tf_broadcaster_node,
         # launch_pc_to_ls,
     ])
