@@ -47,7 +47,8 @@ from ament_index_python.packages import get_package_share_directory
 
 
 _MFE_REPO   = 'https://github.com/McGillFormulaElectric/MFE-Driverless-V1.git'
-_MFE_DIR    = '~/Develop/MFE-Driverless-V1'
+# Checkout path on each Jetson (expanded by the remote shell). Override with MFE_REMOTE_DIR.
+_MFE_DIR    = os.environ.get('MFE_REMOTE_DIR', '~/Develop/MFE-Driverless-V1')
 _SETUP_SCRIPT = f'{_MFE_DIR}/scripts/setup_jetson.sh'
 # Marker file present only after a successful colcon build on the remote.
 _BUILD_MARKER = f'{_MFE_DIR}/ros2/install/mfe_bringup/share/mfe_bringup/launch/compute.launch.py'
@@ -61,7 +62,7 @@ _BUILD_MARKER = f'{_MFE_DIR}/ros2/install/mfe_bringup/share/mfe_bringup/launch/c
 _SSH_LAUNCH = (
     "bash -lc '"
     # ── Step 1: clone if needed ──────────────────────────────────────────
-    "mkdir -p ~/Develop && "
+    "mkdir -p $(dirname {mfe_dir}) && "
     "if [ ! -d {mfe_dir} ]; then "
     "  echo \"[fleet] Cloning MFE-Driverless-V1 on $(hostname)...\"; "
     "  git clone {repo} {mfe_dir} || exit 1; "

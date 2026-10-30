@@ -8,9 +8,10 @@
 #   laps    — laps before stopping at the orange-cone finish gate (default 1).
 #             On closed-loop tracks each return to start = 1 lap. 0 = endless.
 
-GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
-EUFS_WS=~/Develop/MFE26-eufs-sim
-MFE_WS=~/Develop/MFE-Driverless-V1/ros2
+# Workspace locations. Each can be overridden from the environment.
+GAZEBO_ROS_WS=${GAZEBO_ROS_WS:-$HOME/Develop/gazebo_ros_pkgs}
+EUFS_WS=${EUFS_WS:-$HOME/Develop/MFE26-eufs-sim}
+MFE_WS=${MFE_WS:-$HOME/Develop/MFE-Driverless-V1/ros2}
 LOG_DIR=~/mfe_logs
 
 EVENT=${1:-accel}
