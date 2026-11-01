@@ -156,7 +156,9 @@ class TestSolverOutput:
         node = _make_node()
         d_small = abs(node._solve_mpc(e_y=0.1, e_yaw=0.0, v=5.0))
         d_large = abs(node._solve_mpc(e_y=1.0, e_yaw=0.0, v=5.0))
-        assert d_large >= d_small, \
+        # Both solves can sit at the first-step steer-rate limit (5 deg from zero previous steer).
+        # There the solver residual is ~5e-12 rad: allow 1e-9 rad, not a failure on float noise.
+        assert d_large >= d_small - 1e-9, \
             f"Larger error gave smaller correction: {math.degrees(d_large):.2f}° < {math.degrees(d_small):.2f}°"
 
 
