@@ -33,7 +33,7 @@ setup(
         "Programming Language :: Python",
         "Topic :: Scientific/Engineering",
     ],
-    description="Extended Kalman filter fusing IMU, GPS and wheel-speed data into the vehicle state.",
+    description="Extended Kalman filter fusing IMU, GPS and wheel speeds into the vehicle state.",
     license="GPLv3",
     # Like the CMakeLists add_executable macro, you can add your python
     # scripts here.
