@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    finish_line_reanchor: true   # re-anchor the timing line on lap return from fresh orange pylons
+    gate_enter_r: 4.5            # m, orange gate pass = within this radius of the gate centroid
+    line_margin_m: 2.0           # m, timing line width = pylon separation + 2 * margin
+    line_offset_m: 6.79          # m, fallback virtual line: start pose + this, along start heading
+    line_search_r: 25.0          # m, orange pylons this close to the stored line are used
+    reanchor_start_r_m: 20.0     # m, re-anchor only while within this radius of the start pose
