@@ -479,28 +479,19 @@ def generate_launch_description():
     # PLATFORM_DESKTOP_GPU and builds the CUDA filters only when a CUDA compiler is found;
     # otherwise the node is CPU-only. At runtime the 'use_gpu' parameter (default true)
     # selects the GPU path, and the node falls back to CPU PCL if no CUDA device is present.
-    # Parameters: lidar_cone_detector's config/lidar_perception_node_params.yaml (the lidar_only set).
-    # Sim and car run the same LiDAR configuration: sweep motion correction on, odometry from
-    # the EKF (car) or the sim's noisy odometry (sim). Legacy keeps the YAML defaults.
+    # Parameters: lidar_cone_detector's config/lidar_perception_node_params.yaml (the lidar_only
+    # set) on every platform.
     def _make_lidar_perception(context):
         if 'lidar' not in _sensor_set(context):
             return [LogInfo(msg='[bringup] lidar_perception_node SKIPPED — no lidar in sensors, '
                                 'the stack cannot see cones')]
-        params = [os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
-                               'lidar_perception_node_params.yaml')]
-        if _platform(context) != 'legacy':
-            sim = _platform(context) == 'sim'
-            ekf_on = context.launch_configurations.get('use_ekf') == 'true'
-            params.append({
-                'enable_motion_distortion': ekf_on or sim,
-                'odom_topic': '/sim/xsens/state_odom' if sim and not ekf_on else '/ekf/output',
-            })
         return [Node(
             package='lidar_cone_detector',
             executable='lidar_perception_node',
             name='lidar_perception_node',
             output='screen',
-            parameters=params,
+            parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                                     'lidar_perception_node_params.yaml')],
         )]
 
     lidar_perception_node = OpaqueFunction(function=_make_lidar_perception)

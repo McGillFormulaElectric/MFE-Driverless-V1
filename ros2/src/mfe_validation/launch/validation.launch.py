@@ -26,9 +26,9 @@ def generate_launch_description():
         DeclareLaunchArgument('track_csv', default_value=''),
         DeclareLaunchArgument('log_csv', default_value=''),
         # The node name differs from lidar_perception_node, so the YAML section is read here and
-        # passed as a dict. Motion distortion stays on, as before: lidar_only turns it off.
+        # passed as a dict.
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='validation_lidar_perception', output='log',
-             parameters=[{**_lidar_perception_params(), 'enable_motion_distortion': True}]),
+             parameters=[_lidar_perception_params()]),
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
              parameters=[{'track_csv': LC('track_csv')}]),
         # Second planner: same code as the main one, fed by perception + SLAM; outputs under /validation.
