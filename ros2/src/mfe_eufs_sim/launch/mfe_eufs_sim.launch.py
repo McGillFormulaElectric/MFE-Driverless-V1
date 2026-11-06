@@ -8,10 +8,6 @@ from launch_ros.actions import Node
 
 from mfe_common.topics import CAN_WHEEL_SPEED
 
-
-# The sim's LiDAR scan is instantaneous; with emulate_lidar_sweep:=true the bridge publishes the
-# raw scan on this intermediate topic and lidar_sweep_emulator republishes it on /lidar/points_raw.
-_INSTANT_LIDAR_TOPIC = '/lidar/points_instant'
 _SENSORS = ('lidar', 'camera', 'imu_gps', 'can')
 
 
@@ -28,16 +24,7 @@ def _is_sim(context) -> bool:
     return context.launch_configurations.get('platform', 'legacy') == 'sim'
 
 
-def _resolve_emulate_default(context):
-    """emulate_lidar_sweep defaults to on for the sim platform with a LiDAR; legacy stays off."""
-    if context.launch_configurations.get('emulate_lidar_sweep'):
-        return []
-    sim_lidar = _is_sim(context) and 'lidar' in _sensor_set(context)
-    context.launch_configurations['emulate_lidar_sweep'] = 'true' if sim_lidar else 'false'
-    return []
-
-
-def _bridge_and_sweep_emulator(context):
+def _bridge(context):
     sensors = _sensor_set(context)
     bridge_params = {
         'use_sim_cones_directly': LaunchConfiguration('use_sim_cones_directly'),
@@ -56,31 +43,16 @@ def _bridge_and_sweep_emulator(context):
     # The CAN role: the wheel speed the EKF reads, on the topic the car's CAN node will publish.
     if _is_sim(context) and 'can' in sensors:
         bridge_params['wheel_speed_topic'] = CAN_WHEEL_SPEED
-    nodes = []
-    emulate = LaunchConfiguration('emulate_lidar_sweep').perform(context).lower() == 'true'
-    if emulate:
-        bridge_params['lidar_output_topic'] = _INSTANT_LIDAR_TOPIC
     if 'lidar' not in sensors:
         # Empty topic: the bridge neither subscribes to the scan nor publishes a LiDAR.
         bridge_params['lidar_output_topic'] = ''
-        emulate = False
-    nodes.append(Node(
+    return [Node(
         package='mfe_eufs_sim',
         executable='bridge_node',
         name='mfe_eufs_sim_bridge',
         output='screen',
         parameters=[bridge_params],
-    ))
-    if emulate:
-        nodes.append(Node(
-            package='mfe_eufs_sim',
-            executable='lidar_sweep_emulator',
-            name='lidar_sweep_emulator',
-            output='screen',
-            parameters=[{'input_topic': _INSTANT_LIDAR_TOPIC,
-                         'output_topic': '/lidar/points_raw'}],
-        ))
-    return nodes
+    )]
 
 
 def _sim_sensor_nodes(context):
@@ -133,8 +105,8 @@ def generate_launch_description():
             default_value='legacy',
             choices=['legacy', 'sim'],
             description=(
-                'sim: the sensors listed in sensors:= are emulated, and the LiDAR gets the sweep '
-                'emulator (emulate_lidar_sweep defaults on), the same LiDAR stack as the car. '
+                'sim: the sensors listed in sensors:= are emulated, and the LiDAR gets the same '
+                'stack as the car. '
                 'legacy (default): the behaviour before this argument existed.'
             ),
         ),
@@ -177,18 +149,8 @@ def generate_launch_description():
             description='Front brake bias fraction — reported only, not physically applied (single-track sim model).'),
         DeclareLaunchArgument('regen_braking_enabled', default_value='true',
             description='Whether braking blends in-hub motor regen before friction braking.'),
-        DeclareLaunchArgument(
-            'emulate_lidar_sweep',
-            default_value='',
-            description=(
-                'true  → sim LiDAR is re-expressed as a 10 Hz spinning sweep (motion smear '
-                'from ground-truth velocity) by lidar_sweep_emulator before /lidar/points_raw. '
-                'false → instantaneous sim scan on /lidar/points_raw (unchanged).'
-            )
-        ),
 
-        OpaqueFunction(function=_resolve_emulate_default),
-        OpaqueFunction(function=_bridge_and_sweep_emulator),
+        OpaqueFunction(function=_bridge),
 
         OpaqueFunction(function=_sim_sensor_nodes),
     ])
