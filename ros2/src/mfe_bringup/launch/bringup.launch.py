@@ -32,9 +32,11 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import (
+    get_package_prefix, get_package_share_directory, PackageNotFoundError,
+)
 
-from mfe_common.topics import SLAM_ODOM
+from mfe_common.topics import CAN_WHEEL_SPEED, SLAM_ODOM
 
 # Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
 GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
@@ -51,8 +53,47 @@ _FINISH_X = {
 }
 
 
-def _hardware(context) -> bool:
-    return context.launch_configurations.get('hardware', 'false').lower() == 'true'
+PLATFORMS = ('legacy', 'sim', 'car')
+SENSORS = ('lidar', 'camera', 'imu_gps', 'can')
+
+CAN_NOT_IMPLEMENTED = (
+    'CAN interface not implemented (needs DBC); vehicle will not actuate. '
+    'Control commands stay on /control/command.'
+)
+
+
+def _platform(context) -> str:
+    return context.launch_configurations.get('platform', 'legacy')
+
+
+def _is_car(context) -> bool:
+    return _platform(context) == 'car'
+
+
+def _start_drivers(context) -> bool:
+    return context.launch_configurations.get('start_drivers', 'true').lower() == 'true'
+
+
+def _sensor_set(context) -> set:
+    raw = context.launch_configurations.get('sensors', ','.join(SENSORS))
+    names = {name.strip() for name in raw.split(',') if name.strip()}
+    unknown = names - set(SENSORS)
+    if unknown:
+        raise RuntimeError(f'unknown sensors {sorted(unknown)}; choose from {",".join(SENSORS)}')
+    return names
+
+
+# Sensor that owns each frame in config/sensor_mounts.yaml.
+_FRAME_SENSOR = {'velodyne': 'lidar', 'camera_base': 'camera'}
+
+
+def _require_package(package: str, purpose: str) -> None:
+    try:
+        get_package_prefix(package)
+    except PackageNotFoundError:
+        raise RuntimeError(
+            f'[bringup] {purpose} needs ROS package "{package}", which is not installed. '
+            f'Install it or drop the sensor from sensors:=.') from None
 
 
 def _load_sensor_mounts() -> dict:
@@ -74,13 +115,15 @@ def _static_tf_node(parent: str, child: str, pose: dict) -> Node:
     )
 
 
-def _make_vision_node(model_path_str: str, hardware: bool) -> list:
+def _make_vision_node(model_path_str: str, camera: bool, car: bool) -> list:
     """
     Return a list of launch actions for the vision cone detector.
 
-    If model_path is empty the node is skipped entirely (it would crash on startup
-    because YOLO(model_path) is called unconditionally in __init__).
+    The node is skipped without a camera, and when model_path is empty (it would crash on
+    startup because YOLO(model_path) is called unconditionally in __init__).
     """
+    if not camera:
+        return [LogInfo(msg='[bringup] vision_cone_detection_node SKIPPED — no camera in sensors')]
     if not model_path_str:
         return [LogInfo(msg=(
             '[bringup] vision_cone_detection_node SKIPPED — '
@@ -91,7 +134,7 @@ def _make_vision_node(model_path_str: str, hardware: bool) -> list:
         'model_path': model_path_str,
         'depth_callback': False,
     }
-    if hardware:
+    if car:
         node_params['camera_frame'] = _load_sensor_mounts()['camera_frame']
 
     return [Node(
@@ -109,6 +152,27 @@ def _make_vision_node(model_path_str: str, hardware: bool) -> list:
             ('image/input', '/camera/image_raw'),
         ],
     )]
+
+
+def _resolve_derived_defaults(context):
+    """Fill the empty-default arguments from platform and sensors. Explicit values win."""
+    sensors = _sensor_set(context)
+    car = _is_car(context)
+    sim = _platform(context) == 'sim'
+    use_ekf = context.launch_configurations.get('use_ekf') or (
+        'true' if 'imu_gps' in sensors else 'false')
+    derived = {
+        'use_ekf': 'true' if 'imu_gps' in sensors else 'false',
+        'slam': 'toolbox' if 'imu_gps' in sensors else 'gtsam',
+        'odom_topic': ('/ekf/output' if car or (sim and use_ekf == 'true')
+                       else '/sim/xsens/state_odom'),
+    }
+    for name, value in derived.items():
+        if not context.launch_configurations.get(name):
+            context.launch_configurations[name] = value
+    if context.launch_configurations['slam'] not in ('toolbox', 'gtsam', 'none'):
+        raise RuntimeError(f"slam must be toolbox, gtsam or none, not {context.launch_configurations['slam']!r}")
+    return []
 
 
 def _pose_topic(context) -> str:
@@ -198,14 +262,48 @@ def generate_launch_description():
         ),
     )
 
-    hardware_arg = DeclareLaunchArgument(
-        'hardware',
-        default_value='false',
+    platform_arg = DeclareLaunchArgument(
+        'platform',
+        default_value='legacy',
+        choices=list(PLATFORMS),
         description=(
-            'Real car. Publishes the TF tree the stack needs and points the cone detector at the '
-            'camera frame: base_footprint -> sensors (config/sensor_mounts.yaml), map -> odom '
-            '(identity unless slam_toolbox publishes it), odom -> base_footprint (EKF). '
-            'Leave false in sim: the EUFS launch and mfe_eufs_sim provide those transforms.'
+            'car: real car. Starts the sensor drivers for the listed sensors, publishes the TF tree '
+            'from config/sensor_mounts.yaml, points the cone detector at the camera frame. '
+            'sim: EUFS simulation; the sim launch provides the sensors and transforms. '
+            'legacy (default): the behaviour before the platform argument existed, kept so that '
+            'existing commands resolve unchanged. Scripts always pass sim or car.'
+        ),
+    )
+
+    start_drivers_arg = DeclareLaunchArgument(
+        'start_drivers',
+        default_value='true',
+        choices=['true', 'false'],
+        description=(
+            'platform:=car: false starts no sensor driver (LiDAR, camera, Xsens); topics come '
+            'from a recorded bag. The sensors are still processed.'
+        ),
+    )
+
+    part_arg = DeclareLaunchArgument(
+        'part',
+        default_value='all',
+        choices=['all', 'sensing', 'estimation'],
+        description=(
+            'Which half of the perception group runs on this computer. all: everything. '
+            'sensing: sensor drivers, TF, LiDAR and camera perception, boundary extractor. '
+            'estimation: SLAM (slam:=gtsam), EKF and the evaluators. The car runs sensing on '
+            'Jetson 1 and estimation on Jetson 2 (car.launch.py).'
+        ),
+    )
+
+    sensors_arg = DeclareLaunchArgument(
+        'sensors',
+        default_value=','.join(SENSORS),
+        description=(
+            'Comma list of sensors present: lidar, camera, imu_gps, can. Absent sensors are not '
+            'started. imu_gps absent: no EKF, pose from SLAM odometry (slam:=gtsam). '
+            'camera absent: no YOLO and no camera colouring. can: car logs that no CAN node exists.'
         ),
     )
 
@@ -229,8 +327,7 @@ def generate_launch_description():
 
     slam_arg = DeclareLaunchArgument(
         'slam',
-        default_value='toolbox',
-        choices=['toolbox', 'gtsam', 'none'],
+        default_value='',
         description=(
             'SLAM implementation, started from its package launch/slam.launch.py. '
             'toolbox: slam_toolbox (map→odom, gated by use_slam). '
@@ -238,7 +335,8 @@ def generate_launch_description():
             'It publishes the cone map on /planning/cones, so '
             'the boundary extractor is off, and the planner, pure pursuit and finish detector use '
             '/slam/odom. '
-            'none: no SLAM node.'
+            'none: no SLAM node. Empty: toolbox when imu_gps is in sensors, gtsam otherwise '
+            '(pose from SLAM odometry).'
         ),
     )
 
@@ -268,17 +366,19 @@ def generate_launch_description():
         description='slam:=gtsam: publish each landmark once, at a fixed position (default true).',
     )
     odom_topic_arg = DeclareLaunchArgument(
-        'odom_topic', default_value='/sim/xsens/state_odom',
-        description='slam:=gtsam: odometry for yaw and speed (default /sim/xsens/state_odom).',
+        'odom_topic', default_value='',
+        description='slam:=gtsam: odometry for yaw and speed. Empty: /ekf/output on car, '
+                    '/sim/xsens/state_odom otherwise.',
     )
 
     use_ekf_arg = DeclareLaunchArgument(
         'use_ekf',
-        default_value='true',
+        default_value='',
         description=(
-            'Launch the GPS+IMU EKF node. '
-            'Set false in sim when using pose_topic:=/sim/xsens/state_odom '
-            '(EKF GPS-origin frame does not align with the Gazebo world/TF map frame).'
+            'Launch the GPS+IMU EKF node. Empty: on when imu_gps is in sensors, in sim too (the '
+            'sim emulates /imu and /gps). Set false in sim when using '
+            'pose_topic:=/sim/xsens/state_odom (EKF GPS-origin frame does not align with the '
+            'Gazebo world/TF map frame).'
         ),
     )
 
@@ -380,14 +480,30 @@ def generate_launch_description():
     # otherwise the node is CPU-only. At runtime the 'use_gpu' parameter (default true)
     # selects the GPU path, and the node falls back to CPU PCL if no CUDA device is present.
     # Parameters: lidar_cone_detector's config/lidar_perception_node_params.yaml (the lidar_only set).
-    lidar_perception_node = Node(
-        package='lidar_cone_detector',
-        executable='lidar_perception_node',
-        name='lidar_perception_node',
-        output='screen',
-        parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
-                                 'lidar_perception_node_params.yaml')],
-    )
+    # Sim and car run the same LiDAR configuration: sweep motion correction on, odometry from
+    # the EKF (car) or the sim's noisy odometry (sim). Legacy keeps the YAML defaults.
+    def _make_lidar_perception(context):
+        if 'lidar' not in _sensor_set(context):
+            return [LogInfo(msg='[bringup] lidar_perception_node SKIPPED — no lidar in sensors, '
+                                'the stack cannot see cones')]
+        params = [os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                               'lidar_perception_node_params.yaml')]
+        if _platform(context) != 'legacy':
+            sim = _platform(context) == 'sim'
+            ekf_on = context.launch_configurations.get('use_ekf') == 'true'
+            params.append({
+                'enable_motion_distortion': ekf_on or sim,
+                'odom_topic': '/sim/xsens/state_odom' if sim and not ekf_on else '/ekf/output',
+            })
+        return [Node(
+            package='lidar_cone_detector',
+            executable='lidar_perception_node',
+            name='lidar_perception_node',
+            output='screen',
+            parameters=params,
+        )]
+
+    lidar_perception_node = OpaqueFunction(function=_make_lidar_perception)
 
     # --------------------------------------------------------------------------
     # Perception — Vision cone detector (Python/YOLO)
@@ -396,7 +512,8 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     vision_node_action = OpaqueFunction(
         function=lambda context: _make_vision_node(
-            context.launch_configurations.get('vision_model_path', ''), _hardware(context)
+            context.launch_configurations.get('vision_model_path', ''),
+            'camera' in _sensor_set(context), _is_car(context),
         )
     )
 
@@ -424,6 +541,8 @@ def generate_launch_description():
     def _make_gtsam(context):
         if context.launch_configurations.get('slam') != 'gtsam':
             return []
+        if context.launch_configurations.get('part') == 'sensing':
+            return []
         return [IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(get_package_share_directory('mfe_validation'), 'launch',
@@ -435,25 +554,31 @@ def generate_launch_description():
     gtsam_action = OpaqueFunction(function=_make_gtsam)
 
     # --------------------------------------------------------------------------
-    # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
+    # Sensors — Xsens MTi-670G GNSS/INS (car only; platform:=sim emulates it in mfe_eufs_sim)
     # Publishes: /imu (sensor_msgs/Imu), /gps (sensor_msgs/NavSatFix) — feeds ekf_node below.
     # Gated on use_ekf since that's the only consumer of these topics.
     # --------------------------------------------------------------------------
-    xsens_mti_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
-            )
-        ),
-        condition=IfCondition(use_ekf),
-    )
+    def _make_xsens(context):
+        if context.launch_configurations.get('use_ekf') != 'true' \
+                or _platform(context) == 'sim' or not _start_drivers(context):
+            return []
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
+                )
+            ),
+        )]
+
+    xsens_mti_launch = OpaqueFunction(function=_make_xsens)
 
     # --------------------------------------------------------------------------
     # State estimation — Extended Kalman Filter (custom MFE node)
     # Subscribes: /imu/data (Imu), /gps (NavSatFix)
     # Publishes:  /ekf/output (nav_msgs/Odometry)
-    # Disabled in sim (use_ekf:=false) when pose_topic:=/sim/xsens/state_odom —
-    # EKF GPS origin ≠ Gazebo world frame so EKF pose cannot be used with TF-derived cones.
+    # In sim the EKF runs on the emulated /imu and /gps, like the car. launch_sim.sh still passes
+    # use_ekf:=false with pose_topic:=/sim/xsens/state_odom; that disables it there. The EKF GPS
+    # origin is not the Gazebo world frame, so the EKF pose cannot be used with TF-derived cones.
     # --------------------------------------------------------------------------
     ekf_params_file = os.path.join(
         get_package_share_directory('mfe_state_estimation'), 'config', 'ekf_params.yaml'
@@ -464,8 +589,11 @@ def generate_launch_description():
 
     def _make_ekf(context):
         params = [ekf_params_file]
-        if _hardware(context):
-            params.append({'publish_tf': True})   # odom -> base_footprint, see _make_hardware_tf
+        if _platform(context) in ('sim', 'car'):
+            # Wheel speed from the CAN role: the CAN node on the car, the sim bridge in sim.
+            params.append({'wheelspeed_topic': CAN_WHEEL_SPEED})
+        if _is_car(context):
+            params.append({'publish_tf': True})   # odom -> base_footprint, see _make_car_tf
         return [Node(
             package='mfe_state_estimation',
             executable='extended_kalman_filter_node',
@@ -479,19 +607,21 @@ def generate_launch_description():
     ekf_node = OpaqueFunction(function=_make_ekf)
 
     # --------------------------------------------------------------------------
-    # Hardware TF (hardware:=true only). Sim gets these from the EUFS launch and mfe_eufs_sim.
-    #   base_footprint -> each frame in config/sensor_mounts.yaml (static)
+    # Car TF (platform:=car only). Sim gets these from the EUFS launch and mfe_eufs_sim.
+    #   base_footprint -> each frame in config/sensor_mounts.yaml (static), for listed sensors
     #   map -> odom: identity (static), unless slam_toolbox publishes it (slam:=toolbox with
     #                use_slam:=true). Never two publishers of map -> odom.
     #   odom -> base_footprint: published by ekf_node (publish_tf), not here.
     # Runs in the perception group: the sensors and the EKF live on the perception machine.
     # --------------------------------------------------------------------------
-    def _make_hardware_tf(context):
-        if not _hardware(context):
+    def _make_car_tf(context):
+        if not _is_car(context):
             return []
         mounts = _load_sensor_mounts()
+        sensors = _sensor_set(context)
         actions = [_static_tf_node('base_footprint', frame, pose)
-                   for frame, pose in mounts['frames'].items()]
+                   for frame, pose in mounts['frames'].items()
+                   if frame not in _FRAME_SENSOR or _FRAME_SENSOR[frame] in sensors]
         slam_toolbox_publishes_map_odom = (
             context.launch_configurations.get('slam', 'toolbox') == 'toolbox'
             and context.launch_configurations.get('use_slam', 'true').lower() == 'true'
@@ -502,7 +632,37 @@ def generate_launch_description():
             }))
         return actions
 
-    hardware_tf_action = OpaqueFunction(function=_make_hardware_tf)
+    car_tf_action = OpaqueFunction(function=_make_car_tf)
+
+    # --------------------------------------------------------------------------
+    # Car sensor drivers (platform:=car). Each listed sensor starts its driver; a driver package
+    # that is not installed stops the launch here with a message that names it.
+    # --------------------------------------------------------------------------
+    def _make_car_sensors(context):
+        if not _is_car(context):
+            return []
+        sensors = _sensor_set(context)
+        actions = [LogInfo(msg=f'[bringup] WARNING: {CAN_NOT_IMPLEMENTED}')]
+        if not _start_drivers(context):
+            actions.append(LogInfo(msg='[bringup] start_drivers:=false: sensor drivers not started, '
+                                       'topics come from a bag'))
+            return actions
+        drivers = {
+            'lidar': ('velodyne_driver', 'velodyne.launch.py'),
+            'camera': ('realsense2_camera', 'realsense.launch.py'),
+        }
+        for sensor, (package, launch_file) in drivers.items():
+            if sensor not in sensors:
+                continue
+            _require_package(package, f'sensor "{sensor}"')
+            actions.append(IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(get_package_share_directory('mfe_sensors'), 'launch', launch_file)
+                ),
+            ))
+        return actions
+
+    car_sensors_action = OpaqueFunction(function=_make_car_sensors)
 
     # --------------------------------------------------------------------------
     # Path planning — Boundary extractor (LiDAR + camera fusion)
@@ -732,39 +892,59 @@ def generate_launch_description():
     # All thresholds are ROS2 params — override at launch with e.g.:
     #   lidar_timeout_ms:=300  gps_jump_threshold_m:=3.0
     # --------------------------------------------------------------------------
-    supervisor_node = Node(
-        package='mfe_control',
-        executable='supervisor_node',
-        name='supervisor_node',
-        output='screen',
-        parameters=[
-            os.path.join(get_package_share_directory('mfe_control'), 'config',
-                         'supervisor_node_params.yaml'),
-            {
-                'lidar_timeout_ms':             200,
-                'gps_jump_threshold_m':         2.0,
-                'gps_cov_threshold':           25.0,
-                'control_latency_threshold_ms': 100,
-            },
-        ],
-    )
+    # Not on the sensing computer. The estimation computer has no raw LiDAR, so the LiDAR watchdog
+    # is fed by the cone list (one message per scan, small) instead of the point cloud.
+    def _make_supervisor(context):
+        part = context.launch_configurations.get('part', 'all')
+        if part == 'sensing':
+            return []
+        remappings = [('/lidar/points_raw', '/perception/cones_uncolored')] if part == 'estimation' else []
+        return [Node(
+            package='mfe_control',
+            executable='supervisor_node',
+            name='supervisor_node',
+            output='screen',
+            parameters=[
+                os.path.join(get_package_share_directory('mfe_control'), 'config',
+                             'supervisor_node_params.yaml'),
+                {
+                    'lidar_timeout_ms':             200,
+                    'gps_jump_threshold_m':         2.0,
+                    'gps_cov_threshold':           25.0,
+                    'control_latency_threshold_ms': 100,
+                },
+            ],
+            remappings=remappings,
+        )]
+
+    supervisor_node = OpaqueFunction(function=_make_supervisor)
 
     # --------------------------------------------------------------------------
     # Assemble description
     # --------------------------------------------------------------------------
+    # part splits the perception group across two car computers (see car.launch.py):
+    # sensing (drivers, LiDAR and camera perception, TF) and estimation (SLAM, EKF, evaluators).
+    # Each action is listed once, in its order in the single-computer group.
+    _PERCEPTION_PARTS = (
+        (car_sensors_action, 'sensing'),
+        (car_tf_action, 'sensing'),
+        (lidar_perception_node, 'sensing'),
+        (vision_node_action, 'sensing'),        # skipped unless vision_model_path is set
+        (slam_action, 'estimation'),            # slam:=toolbox
+        (xsens_mti_launch, 'sensing'),          # Xsens MTi-670G GNSS/INS -> /imu, /gps
+        (ekf_node, 'estimation'),
+        (boundary_extractor_node, 'sensing'),
+        (evaluator_node, 'estimation'),
+        (fusion_evaluator_node, 'estimation'),
+    )
+
+    def _perception_actions(context):
+        part = LaunchConfiguration('part').perform(context)
+        return [action for action, owner in _PERCEPTION_PARTS if part in ('all', owner)]
+
     perception_group = GroupAction(
         condition=IfCondition(run_perception),
-        actions=[
-            hardware_tf_action,         # hardware:=true only
-            lidar_perception_node,
-            vision_node_action,         # skipped unless vision_model_path is set
-            slam_action,                # slam:=toolbox
-            xsens_mti_launch,           # Xsens MTi-670G GNSS/INS -> /imu, /gps
-            ekf_node,
-            boundary_extractor_node,
-            evaluator_node,
-            fusion_evaluator_node,
-        ],
+        actions=[OpaqueFunction(function=_perception_actions)],
     )
 
     lap_validator_node = Node(
@@ -793,7 +973,10 @@ def generate_launch_description():
         planner_params_arg,
         vision_model_arg,
         pose_topic_arg,
-        hardware_arg,
+        platform_arg,
+        sensors_arg,
+        part_arg,
+        start_drivers_arg,
         use_perception_arg,
         sim_cones_direct_arg,
         endless_arg,
@@ -816,6 +999,9 @@ def generate_launch_description():
         bag_output_dir_arg,
         lookahead_arg,
         steer_pt2_tau_arg,
+
+        # derived defaults of the low-level arguments above (after every declaration)
+        OpaqueFunction(function=_resolve_derived_defaults),
 
         # node groups — each independently enable/disable-able
         perception_group,

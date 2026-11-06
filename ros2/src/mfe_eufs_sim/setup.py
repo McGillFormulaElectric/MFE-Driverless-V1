@@ -36,6 +36,7 @@ setup(
     entry_points={
         'console_scripts': [
             'bridge_node = mfe_eufs_sim.bridge_node:main',
+            'imu_gps_emulator = mfe_eufs_sim.imu_gps_emulator_node:main',
             'lidar_sweep_emulator = mfe_eufs_sim.lidar_sweep_emulator:main',
             'xsens_noise_node = mfe_eufs_sim.xsens_noise_node:main',
         ],

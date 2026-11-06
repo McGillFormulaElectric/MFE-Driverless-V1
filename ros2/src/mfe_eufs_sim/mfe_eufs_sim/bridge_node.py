@@ -5,10 +5,13 @@ EUFS sim <-> MFE driverless bridge: remaps sensor and ground-truth topics, and c
 steering_angle (drive.speed is not set); the bridge is written for EUFS
 commandMode:=acceleration.
 Never publishes /ekf/output, which belongs to the EKF node.
+With wheel_speed_topic set it also plays the CAN role for the wheel speed: the forward speed from
+the ground-truth odometry, with encoder noise (sensor_emulation.WheelSpeedEmulator), on that topic.
 """
 
 import math
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -22,6 +25,7 @@ from mfe_msgs.msg import Cone, Track
 from fs_msgs.msg import ControlCommand
 
 from mfe_eufs_sim.drivetrain_model import AMKDrivetrainModel
+from mfe_eufs_sim.sensor_emulation import WHEEL_SPEED_RATE_HZ, WheelSpeedEmulator
 
 try:
     from ackermann_msgs.msg import AckermannDriveStamped
@@ -103,6 +107,7 @@ class EufsSimBridge(Node):
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
         self.declare_parameter('lidar_output_topic', '/lidar/points_raw')
+        self.declare_parameter('wheel_speed_topic', '')  # empty: no CAN wheel speed
 
         # Vehicle numbers are placeholders; see drivetrain_model.py.
         self.declare_parameter('gear_ratio', 14.0)
@@ -132,10 +137,14 @@ class EufsSimBridge(Node):
         self._current_speed_ms = 0.0
         self._last_control_time = None
 
-        self.create_subscription(
-            PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
-        self._lidar_pub = self.create_publisher(
-            PointCloud2, self.get_parameter('lidar_output_topic').value, RELIABLE_QOS)
+        # An empty lidar_output_topic means no LiDAR sensor: nothing is subscribed or published.
+        lidar_output_topic = self.get_parameter('lidar_output_topic').value
+        self._lidar_pub = None
+        if lidar_output_topic:
+            self.create_subscription(
+                PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
+            self._lidar_pub = self.create_publisher(
+                PointCloud2, lidar_output_topic, RELIABLE_QOS)
 
         # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
         # (only one of the two ever publishes).
@@ -168,6 +177,15 @@ class EufsSimBridge(Node):
             CarState, '/ground_truth/state', self._car_state_cb, _QOS_EUFS)
         self._odom_pub = self.create_publisher(
             Odometry, '/ground_truth/state_odom', RELIABLE_QOS)
+
+        self._wheel_speed = None
+        self._wheel_speed_pub = None
+        wheel_speed_topic = self.get_parameter('wheel_speed_topic').value
+        if wheel_speed_topic:
+            self._wheel_speed = WheelSpeedEmulator(
+                np.random.default_rng(), WHEEL_SPEED_RATE_HZ, self._base_frame)
+            self._wheel_speed_pub = self.create_publisher(
+                Odometry, wheel_speed_topic, RELIABLE_QOS)
 
         self.create_subscription(
             ControlCommand, '/control/command', self._control_cb, RELIABLE_QOS)
@@ -237,6 +255,11 @@ class EufsSimBridge(Node):
         """Publish ground-truth odometry and cache speed for the drivetrain model."""
         odom = _car_state_to_odometry(msg)
         self._odom_pub.publish(odom)
+        if self._wheel_speed is not None:
+            wheel_speed = self._wheel_speed.on_ground_truth(
+                msg.header.stamp, msg.twist.twist.linear.x)
+            if wheel_speed is not None:
+                self._wheel_speed_pub.publish(wheel_speed)
         # Ground-truth speed stands in for wheel-speed encoders, not the noisy Xsens odom.
         vx = msg.twist.twist.linear.x
         vy = msg.twist.twist.linear.y

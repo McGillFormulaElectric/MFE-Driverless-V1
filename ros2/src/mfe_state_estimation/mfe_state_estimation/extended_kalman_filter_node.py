@@ -129,6 +129,13 @@ def _build_8state_motion_model():
     return g, G, V
 
 
+def local_enu_from_latlon(lat_rad, lon_rad, lat0_rad, lon0_rad):
+    """Flat-earth ENU offset (m) of a fix from the origin fix: x east, y north."""
+    x_local = EARTH_RADIUS_M * math.cos(lat0_rad) * (lon_rad - lon0_rad)
+    y_local = EARTH_RADIUS_M * (lat_rad - lat0_rad)
+    return x_local, y_local
+
+
 def _odom_to_base_tf(stamp, x, y, yaw):
     """Build the odom -> base_footprint transform for the EKF pose (x, y in m, yaw in rad)."""
     tf = TransformStamped()
@@ -411,10 +418,7 @@ class ExtendedKalmanFilterNode(Node):
             return
 
         lat0_rad, lon0_rad = self._gps_origin
-
-        # Flat-earth ENU conversion
-        x_local = EARTH_RADIUS_M * math.cos(lat0_rad) * (lon_rad - lon0_rad)
-        y_local = EARTH_RADIUS_M * (lat_rad - lat0_rad)
+        x_local, y_local = local_enu_from_latlon(lat_rad, lon_rad, lat0_rad, lon0_rad)
 
         # GPS update: z=[x_meas, y_meas], H accounts for GPS bias states
         z_gps = np.array([x_local, y_local])

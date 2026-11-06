@@ -75,6 +75,79 @@ done
 
 Some lint tests currently fail.
 
+## Quick start
+
+The stack has two entry points, one per platform. Both take the same two inputs:
+`platform` (`sim` or `car`, set by the script) and `sensors`, a comma list of
+`lidar,camera,imu_gps,can` (default: all four). In the sim every listed sensor is emulated the way
+the car's sensor behaves, so a sim run and a car run with the same sensors use the same stack
+configuration. See [docs/interfaces.md](docs/interfaces.md#platform-and-sensors) for what each
+sensor switches on and off.
+
+### Simulation (desktop with an NVIDIA GPU)
+
+One-time setup:
+
+```bash
+mkdir -p ~/Develop && cd ~/Develop
+git clone --recurse-submodules https://github.com/McGillFormulaElectric/MFE-Driverless-V1.git
+cd MFE-Driverless-V1
+bash scripts/docker_build.sh        # builds the mfe-driverless-sim image
+```
+
+Start the sim container. `docker_run.sh` installs Docker and the NVIDIA container toolkit if they
+are missing and clones the EUFS simulator into `~/Develop/MFE26-eufs-sim`. The first start builds
+the EUFS workspace and the stack inside the container, which takes a few minutes.
+
+```bash
+bash scripts/docker_run.sh shell    # interactive shell in the container
+```
+
+Then, inside the container, start a run:
+
+```bash
+cd /root/Develop/MFE-Driverless-V1
+scripts/run_sim.sh --mission autocross --laps 1
+scripts/run_sim.sh --track small_track --laps 5 --headless
+scripts/run_sim.sh --mission accel --sensors lidar,imu_gps,can   # no camera
+scripts/run_sim.sh --help
+```
+
+`run_sim.sh` opens a tmux session named `mfe` (Gazebo, sim bridge and sensor emulators, the stack,
+Foxglove). Stop it with `tmux kill-session -t mfe`.
+
+### Car (the two Jetsons)
+
+The car stack always runs on the Jetsons. Jetson 1 (`mfe-driverless-1`) has the sensors attached
+and runs the sensing half; Jetson 2 (`mfe-driverless-2`) runs SLAM, the EKF, planning, control and
+the supervisor. The two are connected through the car's wired switch (`192.168.10.0/24`).
+
+One-time setup on each Jetson (or from your PC: `ssh mfe@<jetson> "bash -s" < scripts/setup_jetson.sh`):
+
+```bash
+bash scripts/setup_jetson.sh
+```
+
+See [docs/jetson_setup.md](docs/jetson_setup.md) for the full Jetson setup.
+
+Then, on Jetson 1:
+
+```bash
+scripts/run_car.sh --dry-run                       # preflight checks and the commands, starts nothing
+scripts/run_car.sh --mission autocross --laps 1    # both Jetsons, over the wired link
+scripts/run_car.sh --help
+```
+
+Before it starts, `run_car.sh` checks the wired link, the ping time and clock offset between the
+Jetsons, that both run the same commit, that each listed sensor's driver is installed, that the
+LiDAR is streaming, and that the CI is not using the Jetsons.
+
+For bench tests on one Jetson without the sensors, replay a recorded bag instead:
+
+```bash
+scripts/run_car.sh --single-host --replay ~/mfe_replay_bags/<bag>
+```
+
 ## Launch
 
 The main entry point is `mfe_bringup`'s `bringup.launch.py`:
@@ -94,6 +167,9 @@ Main arguments (defaults in brackets):
 | `skidpad_mode` | `cone_based` or `hardcoded` (skidpad only) [`cone_based`] |
 | `vision_model_path` | YOLO weights file; empty skips the vision detector [empty] |
 | `pose_topic` | Odometry topic used for vehicle pose [`/ekf/output`] |
+| `platform` | `sim` or `car`; `legacy` (the default) keeps the old behaviour for existing commands [`legacy`] |
+| `sensors` | Comma list of `lidar,camera,imu_gps,can`; absent sensors are not started [all] |
+| `part` | Car split: `all`, `sensing` (Jetson 1) or `estimation` (Jetson 2) [`all`] |
 | `use_perception` / `run_perception` | Launch the perception nodes [`true`] |
 | `run_compute` | Launch planning and control nodes [`true`] |
 | `use_slam` / `use_ekf` | Launch SLAM Toolbox and the EKF [`true`] |
@@ -104,12 +180,13 @@ Main arguments (defaults in brackets):
 
 Run the same launch file with `--show-args` to see every argument.
 
-Multi-machine setups use `perception.launch.py` on the perception computer and
+The car runs on two computers. `scripts/run_car.sh` starts both halves (see above), and `car.launch.py` starts one half. Other multi-machine setups use `perception.launch.py` on the perception computer and
 `compute.launch.py` on the compute computer. `fleet.launch.py` starts perception locally and
 starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 [docs/jetson_setup.md](docs/jetson_setup.md).
 
-To run the EUFS simulator, use `scripts/launch_sim.sh`. It needs the EUFS workspace; see
+`scripts/run_sim.sh` (see Quick start) is the way to run the simulator. It uses
+`scripts/launch_sim.sh`, which also takes positional arguments for older scripts; see
 [docs/simulation_guide.md](docs/simulation_guide.md).
 
 ## Configuration

@@ -3,6 +3,7 @@ from mfe_common import topics as t
 
 EXPECTED = {
     'AS_SUPERVISOR_STATUS': '/as/supervisor/status',
+    'CAN_WHEEL_SPEED': '/can/wheel_speed',
     'CONTROL_COMMAND': '/control/command',
     'CONTROL_COMMAND_MPC': '/control/command_mpc',
     'EKF_OUTPUT': '/ekf/output',
@@ -11,6 +12,7 @@ EXPECTED = {
     'GROUND_TRUTH_STATE_ODOM': '/ground_truth/state_odom',
     'GROUND_TRUTH_TRACK_COLORED': '/ground_truth/track_colored',
     'IMAGE_CONES': '/image/cones',
+    'IMU': '/imu',
     'LIDAR_POINTS_RAW': '/lidar/points_raw',
     'MFE_EMERGENCY_BRAKE': '/mfe/emergency_brake',
     'PERCEPTION_CONES_UNCOLORED': '/perception/cones_uncolored',
