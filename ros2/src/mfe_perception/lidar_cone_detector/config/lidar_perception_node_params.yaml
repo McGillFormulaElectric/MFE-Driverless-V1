@@ -8,7 +8,11 @@ lidar_perception_node:
     lidar_frame_id: velodyne
     min_intensity: 0.0                # Intensity floor. Set to ~100.0 on real VLP-16 (retroreflective tape); 0 in sim.
     enable_motion_distortion: false
-    motion_scan_duration_sec: 0.1
+    motion_scan_duration_sec: 0.1     # Sweep period. Used only when the cloud has no per-point "time" field.
+    motion_start_azimuth_rad: 1.5707963267948966  # atan2(y, x) of the sweep start; pi/2 for the Velodyne driver.
+    motion_counter_clockwise: false   # Velodyne driver: x = d sin(rot), y = d cos(rot), rot clockwise.
+    sensor_x_m: 0.0                   # LiDAR position in base_footprint (sensor_mounts.yaml velodyne frame).
+    sensor_y_m: 0.0
     # Cone-body z band (sensor frame, after ground removal). Fits the EUFS sim VLP-16
     # (sensor ~1.0 m above track); set from the real mount height on hardware.
     cone_z_min: -1.10
