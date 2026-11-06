@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 EUFS sim <-> MFE driverless bridge: remaps sensor and ground-truth topics, and converts
-/control/command to /cmd via the drivetrain model (EUFS must run with commandMode:=acceleration).
+/control/command to /cmd via the drivetrain model. /cmd carries drive.acceleration and
+steering_angle (drive.speed is not set); the bridge is written for EUFS
+commandMode:=acceleration.
 Never publishes /ekf/output, which belongs to the EKF node.
 """
 
@@ -243,8 +245,9 @@ class EufsSimBridge(Node):
         """
         Convert fs_msgs/ControlCommand → ackermann_msgs/AckermannDriveStamped.
 
-        Requires commandMode:=acceleration: AckermannDrive.acceleration is applied directly, bypassing
-        the plugin's velocity loop (see gazebo_ros_race_car_model.cpp).
+        Writes AckermannDrive.acceleration and steering_angle only. The bridge is written for
+        commandMode:=acceleration, where the plugin applies acceleration directly, bypassing its
+        velocity loop (see gazebo_ros_race_car_model.cpp).
         throttle in [0, 1] gives positive acceleration; brake in [0, 1] gives negative acceleration
         and overrides throttle. steering in [-1, 1] maps to steering_angle in radians.
         """
