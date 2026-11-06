@@ -106,7 +106,7 @@ Xsens MTi-670G GNSS/INS via `mfe_sensors/launch/xsens_mti.launch.py` on real har
 
 **Config file**: `config/ekf_params.yaml`
 
-**Implementation**: `mfe_state_estimation/filters/extended_kalman_filter.py` — custom EKF with IMU prediction model in `models/imu_prediction_model.py`.
+**Implementation**: `mfe_state_estimation/filters/extended_kalman_filter.py` — custom EKF.
 
 ---
 
