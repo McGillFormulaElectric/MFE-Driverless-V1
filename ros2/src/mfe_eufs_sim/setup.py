@@ -15,6 +15,8 @@ setup(
         (os.path.join('share', package_name), ['package.xml']),
         # launch files
         (os.path.join('share', package_name, 'launch'), glob.glob('launch/*.launch.py')),
+        # node parameter files
+        (os.path.join('share', package_name, 'config'), glob.glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
