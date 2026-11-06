@@ -1,5 +1,4 @@
-// CUDA PASSTHROUGH and VOXELGRID filters: drop-in for the cuda-pcl cudaFilter subset the node uses.
-// Built from source because cuda-pcl only ships aarch64 binaries.
+// CUDA PASSTHROUGH and VOXELGRID filters used by the GPU path of lidar_perception_node.
 // Points are 4 floats (x, y, z, pad), i.e. pcl::PointXYZ. Device pointers may be device or managed memory.
 #pragma once
 

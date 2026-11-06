@@ -43,7 +43,7 @@ target_link_libraries(lidar_perception_node
   Eigen3::Eigen
 )
 
-# CUDA filters (src/gpu) are built for the local GPU. cuda-pcl is not used: its prebuilt libs are aarch64 only.
+# The GPU path uses the CUDA kernels in src/gpu, built for the local GPU; no external CUDA library is needed.
 # Without a CUDA compiler, lidar_perception_node is built CPU-only.
 include(CheckLanguage)
 check_language(CUDA)
