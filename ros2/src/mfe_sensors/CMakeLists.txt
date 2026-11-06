@@ -24,7 +24,6 @@ add_executable(sim_lidar_node src/sim_lidar_node.cpp)
 add_library(${PROJECT_NAME} SHARED
   src/camera_interface.cpp
   src/lidar_interface.cpp
-  src/sensor_node.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
