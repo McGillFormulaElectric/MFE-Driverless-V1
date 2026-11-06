@@ -3,6 +3,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
+from tf2_ros import TransformBroadcaster
 
 from mfe_common.geometry import EARTH_RADIUS_M
 from mfe_common.qos import SENSOR_QOS
@@ -10,7 +11,7 @@ from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFi
 
 from sensor_msgs.msg import Imu, NavSatFix
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import Quaternion, TransformStamped
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,19 @@ def _build_8state_motion_model():
     return g, G, V
 
 
+def _odom_to_base_tf(stamp, x, y, yaw):
+    """Build the odom -> base_footprint transform for the EKF pose (x, y in m, yaw in rad)."""
+    tf = TransformStamped()
+    tf.header.stamp = stamp
+    tf.header.frame_id = "odom"
+    tf.child_frame_id = "base_footprint"
+    tf.transform.translation.x = x
+    tf.transform.translation.y = y
+    tf.transform.rotation.z = math.sin(yaw / 2.0)
+    tf.transform.rotation.w = math.cos(yaw / 2.0)
+    return tf
+
+
 def _H_gps():
     """H matrix for GPS measurement z=[x+b_gps_x, y+b_gps_y]. Shape 2×8."""
     H = np.zeros((2, 8))
@@ -186,6 +200,13 @@ class ExtendedKalmanFilterNode(Node):
 
         self.declare_parameter("output_topic", value="/ekf/output")
         self.output_topic_name = self.get_parameter("output_topic")
+
+        # odom -> base_footprint from the EKF pose. Only on the car: in sim the EUFS
+        # ground truth provides these transforms.
+        self.declare_parameter("publish_tf", value=False)
+        self.tf_broadcaster = None
+        if self.get_parameter("publish_tf").get_parameter_value().bool_value:
+            self.tf_broadcaster = TransformBroadcaster(self)
 
         # ---- measurement noise matrices ----
         # GPS: [x, y] — use var_gps param
@@ -482,6 +503,14 @@ class ExtendedKalmanFilterNode(Node):
         msg.twist.covariance = twist_cov
 
         self.odom_pub_.publish(msg)
+
+        # The EKF pose is in the GPS-origin ENU frame that is labelled map above. As a TF it
+        # is odom -> base_footprint, so the map -> odom transform (identity, or slam_toolbox)
+        # sits on top of it.
+        if self.tf_broadcaster is not None:
+            self.tf_broadcaster.sendTransform(
+                _odom_to_base_tf(msg.header.stamp, x, y, yaw)
+            )
 
 
 def main(args=None):
