@@ -145,7 +145,7 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/ground_truth/track_colored` | `mfe_msgs/Track` | `bridge_node` | `boundary_extractor`; `slam_node` [`ground_truth_track_topic`, `color_mode=gt`]; `lap_validator_node` |
 | `/d435i/color/image_raw`, `/zed/left/image_rect_color` | `sensor_msgs/Image` | EUFS (external) | `bridge_node` |
 | `/camera/image_raw` | `sensor_msgs/Image` | `bridge_node` | `cone_detection_node` (remap `image/input`) |
-| `/camera/image/raw` | `sensor_msgs/Image` | `file_loader` (vision, `load_file` only); `carmaker_node` (not launched) | none |
+| `/camera/image/raw` | `sensor_msgs/Image` | `image_file_loader` (vision, `load_file` only); `carmaker_node` (not launched) | none |
 | `camera/camera_info` (relative) | `sensor_msgs/CameraInfo` | none in repo | `cone_detection_node`; `fusion_evaluator` |
 | `image/input` (relative) | `sensor_msgs/Image` | see `/camera/image_raw` | `cone_detection_node` |
 | `image/depth` (relative) | `sensor_msgs/Image` | none in repo | `cone_detection_node` (only with `depth_callback`) |
