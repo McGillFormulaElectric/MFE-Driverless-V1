@@ -15,8 +15,8 @@ def generate_launch_description():
 
     file_loader_node = Node(
         package='vision_cone_detector',
-        executable='file_loader',
-        name='file_loader_node',
+        executable='image_file_loader',
+        name='image_file_loader',
         output='screen',
         parameters=[
             {"run_visualization": False},

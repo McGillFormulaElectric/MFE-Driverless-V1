@@ -69,6 +69,8 @@ The bridge reads ALL track cones directly from Gazebo world state and forwards t
 
 - `use_sim_cones_directly:=true` → bridge publishes `/planning/cones` directly
 - `use_perception:=false` → boundary_extractor not launched (prevents dual publishing)
+- `sim_cones_direct:=true` (set by `scripts/launch_sim.sh`) → bringup refuses to launch with
+  `use_perception:=true`, so the two publishers of `/planning/cones` cannot run together
 - `pose_topic:=/sim/xsens/state_odom` → Gazebo ground truth pose, noise-corrupted to be
   representative of the real Xsens MTi-670G (see `mfe_eufs_sim/xsens_noise_node.py`) — do not
   use raw `/ground_truth/state_odom`, it's noiseless

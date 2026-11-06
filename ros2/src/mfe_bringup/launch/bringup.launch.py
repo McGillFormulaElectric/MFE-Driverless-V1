@@ -160,6 +160,15 @@ def generate_launch_description():
         ),
     )
 
+    sim_cones_direct_arg = DeclareLaunchArgument(
+        'sim_cones_direct',
+        default_value='false',
+        description=(
+            'Set true when mfe_eufs_sim runs with use_sim_cones_directly:=true, so bridge_node owns '
+            '/planning/cones. Together with use_perception:=true the launch fails.'
+        ),
+    )
+
     endless_arg = DeclareLaunchArgument(
         'endless',
         default_value='false',
@@ -431,11 +440,19 @@ def generate_launch_description():
         # slam:=gtsam publishes the cone map on /planning/cones; two publishers would conflict.
         if context.launch_configurations.get('slam', 'toolbox') == 'gtsam':
             return []
+        if context.launch_configurations.get('sim_cones_direct', 'false').lower() == 'true':
+            if context.launch_configurations.get('use_perception', 'true').lower() == 'true':
+                raise RuntimeError(
+                    'sim_cones_direct:=true and use_perception:=true both publish /planning/cones '
+                    '(bridge_node and boundary_extractor). Pass use_perception:=false.')
+            return []
         return [Node(
             package='mfe_path_planning',
             executable='boundary_extractor',
             name='boundary_extractor',
             output='screen',
+            parameters=[os.path.join(get_package_share_directory('mfe_path_planning'), 'config',
+                                     'boundary_extractor_params.yaml')],
             condition=IfCondition(use_perception),
         )]
 
@@ -553,15 +570,19 @@ def generate_launch_description():
             executable='finish_detector_node',
             name='finish_detector',
             output='screen',
-            parameters=[{
-                'approach_x': ax,
-                'finish_x': fx,
-                'detect_fwd_min_m': 1.5,
-                'detect_fwd_max_m': 15.0,
-                'detect_lateral_m': 4.0,
-                'min_finish_points': 1,
-                **extra,
-            }],
+            parameters=[
+                os.path.join(get_package_share_directory('mfe_path_planning'), 'config',
+                             'finish_detector_node_params.yaml'),
+                {
+                    'approach_x': ax,
+                    'finish_x': fx,
+                    'detect_fwd_min_m': 1.5,
+                    'detect_fwd_max_m': 15.0,
+                    'detect_lateral_m': 4.0,
+                    'min_finish_points': 1,
+                    **extra,
+                },
+            ],
             remappings=[('/ekf/output', pt)],
         )]
 
@@ -701,6 +722,7 @@ def generate_launch_description():
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
+        sim_cones_direct_arg,
         endless_arg,
         num_laps_arg,
         orange_topic_arg,

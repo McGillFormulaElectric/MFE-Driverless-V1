@@ -116,8 +116,8 @@ To run the EUFS simulator, use `scripts/launch_sim.sh`. It needs the EUFS worksp
 
 | Location | Contents |
 |---|---|
-| `ros2/src/mfe_bringup/config/` | `vehicle.yaml`, `planner_params_raceline.yaml`, `cyclone_tailscale.xml` (DDS config for multi-machine setups) |
-| `ros2/src/mfe_state_estimation/config/` | EKF parameters (`ekf_params.yaml`) and `gps.yaml` |
+| `ros2/src/mfe_bringup/config/` | `vehicle.yaml`, `cyclone_tailscale.xml` (DDS config for multi-machine setups) |
+| `ros2/src/mfe_state_estimation/config/` | EKF parameters (`ekf_params.yaml`) |
 | `ros2/src/mfe_mapping/config/` | `slam_toolbox_params.yaml` |
 | `ros2/src/mfe_sensors/config/` | Sensor configs: `xsens_mti.yaml` |
 

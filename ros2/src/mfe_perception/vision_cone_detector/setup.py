@@ -42,7 +42,7 @@ setup(
     # scripts here.
     entry_points={
         'console_scripts': [
-            'file_loader = vision_cone_detector.file_loader:main',
+            'image_file_loader = vision_cone_detector.file_loader:main',
             'cone_detection_node = vision_cone_detector.cone_detection_node:main'
         ],
     },

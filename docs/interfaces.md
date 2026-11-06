@@ -145,7 +145,7 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/ground_truth/track_colored` | `mfe_msgs/Track` | `bridge_node` | `boundary_extractor`; `slam_node` [`ground_truth_track_topic`, `color_mode=gt`]; `lap_validator_node` |
 | `/d435i/color/image_raw`, `/zed/left/image_rect_color` | `sensor_msgs/Image` | EUFS (external) | `bridge_node` |
 | `/camera/image_raw` | `sensor_msgs/Image` | `bridge_node` | `cone_detection_node` (remap `image/input`) |
-| `/camera/image/raw` | `sensor_msgs/Image` | `file_loader` (vision, `load_file` only); `carmaker_node` (not launched) | none |
+| `/camera/image/raw` | `sensor_msgs/Image` | `image_file_loader` (vision, `load_file` only); `carmaker_node` (not launched) | none |
 | `camera/camera_info` (relative) | `sensor_msgs/CameraInfo` | none in repo | `cone_detection_node`; `fusion_evaluator` |
 | `image/input` (relative) | `sensor_msgs/Image` | see `/camera/image_raw` | `cone_detection_node` |
 | `image/depth` (relative) | `sensor_msgs/Image` | none in repo | `cone_detection_node` (only with `depth_callback`) |
@@ -155,8 +155,6 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/lidar/pcl/input` | `sensor_msgs/PointCloud2` | `file_loader` (C++) | `ground_plane_removal` |
 | `/lidar/pcl/raw`, `/lidar/pcl/acc_cloud` | `sensor_msgs/PointCloud2` | none (raw); `lidar_preprocessor` (acc) | `lidar_preprocessor` (raw); none (acc) |
 | `/lidar/pcl/ground`, `/lidar/pcl/objects` | `sensor_msgs/PointCloud2` | `ground_plane_removal` | none |
-| `/sim/lidar` | `sensor_msgs/PointCloud2` | FSDS (external) | `sim_lidar_node` (not launched) |
-| `/mfe_sensors/lidar/data` | `sensor_msgs/PointCloud2` | `sim_lidar_node` (not launched) | none |
 | `/perception/cones_uncolored` | `sensor_msgs/PointCloud2` | `lidar_perception_node` | `path_planner_node`; `boundary_extractor`; `slam_node`; `fusion_evaluator` |
 | `/perception/cones_markers` | `visualization_msgs/MarkerArray` | `lidar_perception_node` | none (RViz) |
 | `/debug/gpu_objects` | `sensor_msgs/PointCloud2` | `lidar_perception_node` | none |
