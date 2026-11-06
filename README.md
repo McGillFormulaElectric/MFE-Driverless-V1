@@ -73,8 +73,7 @@ for pkg in mfe_control mfe_path_planning mfe_state_estimation; do
 done
 ```
 
-Some lint tests currently fail. CI (`.github/workflows/ci.yml`) runs all of the above on every
-pull request and push to `main`, and shows the current results.
+Some lint tests currently fail.
 
 ## Launch
 
