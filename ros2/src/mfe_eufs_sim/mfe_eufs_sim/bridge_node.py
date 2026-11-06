@@ -6,15 +6,13 @@ Never publishes /ekf/output, which belongs to the EKF node.
 """
 
 import math
-import struct
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from sensor_msgs.msg import Image, PointCloud2, PointField
+from sensor_msgs.msg import Image, PointCloud2
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Header
 
 from eufs_msgs.msg import ConeArrayWithCovariance
 from mfe_msgs.msg import Cone, Track
@@ -23,7 +21,7 @@ from fs_msgs.msg import ControlCommand
 from mfe_eufs_sim.drivetrain_model import AMKDrivetrainModel
 
 try:
-    from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
+    from ackermann_msgs.msg import AckermannDriveStamped
     _ACKERMANN_AVAILABLE = True
 except ImportError:
     _ACKERMANN_AVAILABLE = False
@@ -70,39 +68,6 @@ def _cone_array_to_track(msg: ConeArrayWithCovariance, frame_id: str) -> Track:
         track.track.append(make_cone(cw.point, Cone.UNKNOWN))
 
     return track
-
-
-def _cone_array_to_pointcloud2(msg: ConeArrayWithCovariance) -> PointCloud2:
-    """Flatten all cones into an x, y, z float32 PointCloud2."""
-    all_cones = (
-        list(msg.blue_cones)
-        + list(msg.yellow_cones)
-        + list(msg.orange_cones)
-        + list(msg.big_orange_cones)
-        + list(msg.unknown_color_cones)
-    )
-
-    fields = [
-        PointField(name='x', offset=0,  datatype=PointField.FLOAT32, count=1),
-        PointField(name='y', offset=4,  datatype=PointField.FLOAT32, count=1),
-        PointField(name='z', offset=8,  datatype=PointField.FLOAT32, count=1),
-    ]
-    point_step = 12  # 3 × float32
-    data = bytearray()
-    for cw in all_cones:
-        data += struct.pack('<fff', float(cw.point.x), float(cw.point.y), float(cw.point.z))
-
-    cloud = PointCloud2()
-    cloud.header = msg.header
-    cloud.height = 1
-    cloud.width = len(all_cones)
-    cloud.fields = fields
-    cloud.is_bigendian = False
-    cloud.point_step = point_step
-    cloud.row_step = point_step * len(all_cones)
-    cloud.is_dense = True
-    cloud.data = bytes(data)
-    return cloud
 
 
 def _car_state_to_odometry(msg) -> Odometry:
