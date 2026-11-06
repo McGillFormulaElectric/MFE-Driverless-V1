@@ -647,12 +647,16 @@ def generate_launch_description():
         executable='supervisor_node',
         name='supervisor_node',
         output='screen',
-        parameters=[{
-            'lidar_timeout_ms':             200,
-            'gps_jump_threshold_m':         2.0,
-            'gps_cov_threshold':           25.0,
-            'control_latency_threshold_ms': 100,
-        }],
+        parameters=[
+            os.path.join(get_package_share_directory('mfe_control'), 'config',
+                         'supervisor_node_params.yaml'),
+            {
+                'lidar_timeout_ms':             200,
+                'gps_jump_threshold_m':         2.0,
+                'gps_cov_threshold':           25.0,
+                'control_latency_threshold_ms': 100,
+            },
+        ],
     )
 
     # --------------------------------------------------------------------------
