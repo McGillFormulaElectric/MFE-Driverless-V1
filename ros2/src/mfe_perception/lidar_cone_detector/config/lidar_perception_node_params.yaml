@@ -1,0 +1,17 @@
+lidar_perception_node:
+  ros__parameters:
+    leaf_size: 0.05
+    ground_threshold: 0.04            # RANSAC ground band, m. Larger values eat cone-body returns at the inlier boundary.
+    cluster_tolerance: 0.3            # m. Tighter than the 0.4 default so adjacent cones do not merge.
+    min_cluster_size: 1               # VLP-16 gets 1-2 points per cone at 10 m.
+    max_cluster_size: 50
+    lidar_frame_id: velodyne
+    min_intensity: 0.0                # Intensity floor. Set to ~100.0 on real VLP-16 (retroreflective tape); 0 in sim.
+    enable_motion_distortion: false
+    motion_scan_duration_sec: 0.1
+    # Cone-body z band (sensor frame, after ground removal). Fits the EUFS sim VLP-16
+    # (sensor ~1.0 m above track); set from the real mount height on hardware.
+    cone_z_min: -1.10
+    cone_z_max: -0.50
+    use_gpu: true                     # Ignored when built without CUDA.
+    odom_topic: /ekf/output

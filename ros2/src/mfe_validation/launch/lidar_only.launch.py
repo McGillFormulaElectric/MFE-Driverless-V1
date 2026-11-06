@@ -28,10 +28,9 @@ def generate_launch_description():
         DeclareLaunchArgument('use_gpu', default_value='true'),   # false: CPU (PCL) pipeline, for load comparisons
         DeclareLaunchArgument('slam_lateral_vel', default_value='false'),   # true: SLAM odometry integrates INS lateral velocity (corner sideslip)
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='lidar_perception_node', output='log',
-             parameters=[{'gpu_voxel': False, 'leaf_size': 0.05, 'ground_threshold': 0.04, 'cluster_tolerance': 0.3,
-                          'min_cluster_size': 1, 'far_min_cluster_size': 1, 'max_cluster_size': 50, 'cluster_2d': True,
-                          'height_min': 0.02, 'enable_motion_distortion': False,
-                          'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
+             parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                                      'lidar_perception_node_params.yaml'),
+                         {'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
              parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool), 'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'orange_cones_topic': LC('orange_cones_topic'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
                           'max_range': ParameterValue(LC('max_range'), value_type=float), 'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),

@@ -95,6 +95,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(DIRECTORY
   launch
+  config
   dataset
   DESTINATION share/${PROJECT_NAME}
 )

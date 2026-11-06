@@ -10,6 +10,14 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration as LC
 from launch_ros.actions import Node
+import yaml
+
+
+def _lidar_perception_params():
+    path = os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                        'lidar_perception_node_params.yaml')
+    with open(path) as f:
+        return yaml.safe_load(f)['lidar_perception_node']['ros__parameters']
 
 
 def generate_launch_description():
@@ -17,11 +25,10 @@ def generate_launch_description():
         DeclareLaunchArgument('mission', default_value='acceleration'),
         DeclareLaunchArgument('track_csv', default_value=''),
         DeclareLaunchArgument('log_csv', default_value=''),
-        # CPU voxel: faster than GPU for this workload.
+        # The node name differs from lidar_perception_node, so the YAML section is read here and
+        # passed as a dict. Motion distortion stays on, as before: lidar_only turns it off.
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='validation_lidar_perception', output='log',
-             parameters=[{'gpu_voxel': False, 'leaf_size': 0.05, 'ground_threshold': 0.04, 'cluster_tolerance': 0.3,
-                          'min_cluster_size': 1, 'far_min_cluster_size': 1, 'max_cluster_size': 50, 'cluster_2d': True,
-                          'height_min': 0.02}]),
+             parameters=[{**_lidar_perception_params(), 'enable_motion_distortion': True}]),
         Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
              parameters=[{'track_csv': LC('track_csv')}]),
         # Second planner: same code as the main one, fed by perception + SLAM; outputs under /validation.
