@@ -132,10 +132,14 @@ class EufsSimBridge(Node):
         self._current_speed_ms = 0.0
         self._last_control_time = None
 
-        self.create_subscription(
-            PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
-        self._lidar_pub = self.create_publisher(
-            PointCloud2, self.get_parameter('lidar_output_topic').value, RELIABLE_QOS)
+        # An empty lidar_output_topic means no LiDAR sensor: nothing is subscribed or published.
+        lidar_output_topic = self.get_parameter('lidar_output_topic').value
+        self._lidar_pub = None
+        if lidar_output_topic:
+            self.create_subscription(
+                PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
+            self._lidar_pub = self.create_publisher(
+                PointCloud2, lidar_output_topic, RELIABLE_QOS)
 
         # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
         # (only one of the two ever publishes).
