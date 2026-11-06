@@ -2,6 +2,9 @@
 
 Use via launch_sim_local.sh <track> lidar_only (bringup pose_topic=/slam/odom). Ground truth is only used by slam_node logging.
 """
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
