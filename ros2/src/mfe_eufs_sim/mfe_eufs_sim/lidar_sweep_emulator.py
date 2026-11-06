@@ -27,14 +27,18 @@ from mfe_common.qos import RELIABLE_QOS
 # sensor_msgs PointField datatype codes -> numpy dtype strings.
 _FIELD_DTYPES = {1: 'i1', 2: 'u1', 3: 'i2', 4: 'u2', 5: 'i4', 6: 'u4', 7: 'f4', 8: 'f8'}
 _YAW_RATE_EPS = 1e-9
+_SEAM_TOL = 1e-6  # rad; far below the VLP-16 azimuth resolution (about 3.5e-3 rad)
 
 
 def sweep_times(azimuth, start_azimuth, period_s, counter_clockwise):
     """Sweep time in [0, period_s) for each azimuth, measured from the sweep start."""
     if counter_clockwise:
-        swept = np.mod(azimuth - start_azimuth, 2.0 * math.pi)
+        delta = azimuth - start_azimuth
     else:
-        swept = np.mod(start_azimuth - azimuth, 2.0 * math.pi)
+        delta = start_azimuth - azimuth
+    # Rays on the start edge can come out a rounding error below it; keep them at time 0
+    # instead of wrapping them to the end of the sweep.
+    swept = np.maximum(np.mod(delta + _SEAM_TOL, 2.0 * math.pi) - _SEAM_TOL, 0.0)
     return swept / (2.0 * math.pi) * period_s
 
 

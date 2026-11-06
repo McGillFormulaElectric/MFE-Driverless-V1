@@ -83,6 +83,13 @@ def test_seam_point_displacement_is_v_times_period():
     assert displacement == pytest.approx(SPEED * PERIOD * (1.0 - 1.0 / N), rel=1e-3)
 
 
+def test_ray_on_start_edge_is_not_wrapped_to_sweep_end():
+    # A sim ray on the start edge, a float rounding error below it, is at sweep time 0.
+    start_edge = np.array([[math.cos(START - 1e-7), math.sin(START - 1e-7), 0.0]])
+    tau = sweep_times(np.arctan2(start_edge[:, 1], start_edge[:, 0]), START, PERIOD, True)
+    assert tau[0] == pytest.approx(0.0, abs=1e-9)
+
+
 def test_emulated_scan_is_time_ordered():
     xyz = _ring_scene()
     _, order = _emulate(xyz, SPEED, 0.0, 0.3)
