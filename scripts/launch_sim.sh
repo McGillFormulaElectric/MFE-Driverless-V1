@@ -35,7 +35,7 @@ case "$EVENT" in
         AMI_STATE=13
         BRIDGE_MAX_SPEED=6.0
         ;;
-    autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
+    autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|its_a_mess)
         case "$EVENT" in
             autocross)    TRACK=small_track ;;
             hairpins)     TRACK=hairpins_increasing_difficulty ;;
@@ -46,7 +46,7 @@ case "$EVENT" in
         BRIDGE_MAX_SPEED=8.0
         ;;
     *)
-        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"
+        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins"
         exit 1
         ;;
 esac
