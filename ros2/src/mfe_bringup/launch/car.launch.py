@@ -8,6 +8,7 @@ cross the network. Raw point clouds and images stay on the Jetson that owns the 
                      LiDAR and camera perception, boundary extractor, Xsens driver.
   part:=estimation   Jetson 2 (mfe-driverless-2): SLAM (gtsam), EKF, path planner, pure pursuit,
                      finish detector, lap validator, supervisor.
+  part:=all          both halves on one computer (single-host test; no sensor split).
 
 Both halves run with platform:=car. slam defaults to gtsam: the toolbox needs the raw scan,
 which would have to cross the network.
@@ -40,6 +41,7 @@ def _include_bringup(context):
         'vision_model_path': LaunchConfiguration('vision_model_path').perform(context),
         'endless': LaunchConfiguration('endless').perform(context),
         'num_laps': LaunchConfiguration('num_laps').perform(context),
+        'start_drivers': LaunchConfiguration('start_drivers').perform(context),
     }
     return [IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -52,9 +54,12 @@ def _include_bringup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'part', choices=['sensing', 'estimation'],
-            description='Which half of the car stack this computer runs (see module docstring).',
+            'part', choices=['all', 'sensing', 'estimation'],
+            description='Which half of the car stack this computer runs (see module docstring). '
+                        'all: both halves on one computer (single-host testing).',
         ),
+        DeclareLaunchArgument('start_drivers', default_value='true', choices=['true', 'false'],
+                              description='false: no sensor drivers, a bag provides the topics.'),
         DeclareLaunchArgument('mission', default_value='autocross',
                               description='FSAE mission for the path planner.'),
         DeclareLaunchArgument('sensors', default_value='lidar,camera,imu_gps,can',

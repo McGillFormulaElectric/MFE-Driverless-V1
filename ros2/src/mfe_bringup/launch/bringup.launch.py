@@ -70,6 +70,10 @@ def _is_car(context) -> bool:
     return _platform(context) == 'car'
 
 
+def _start_drivers(context) -> bool:
+    return context.launch_configurations.get('start_drivers', 'true').lower() == 'true'
+
+
 def _sensor_set(context) -> set:
     raw = context.launch_configurations.get('sensors', ','.join(SENSORS))
     names = {name.strip() for name in raw.split(',') if name.strip()}
@@ -264,6 +268,16 @@ def generate_launch_description():
             'sim: EUFS simulation; the sim launch provides the sensors and transforms. '
             'legacy (default): the behaviour before the platform argument existed, kept so that '
             'existing commands resolve unchanged. Scripts always pass sim or car.'
+        ),
+    )
+
+    start_drivers_arg = DeclareLaunchArgument(
+        'start_drivers',
+        default_value='true',
+        choices=['true', 'false'],
+        description=(
+            'platform:=car: false starts no sensor driver (LiDAR, camera, Xsens); topics come '
+            'from a recorded bag. The sensors are still processed.'
         ),
     )
 
@@ -540,14 +554,19 @@ def generate_launch_description():
     # Publishes: /imu (sensor_msgs/Imu), /gps (sensor_msgs/NavSatFix) — feeds ekf_node below.
     # Gated on use_ekf since that's the only consumer of these topics.
     # --------------------------------------------------------------------------
-    xsens_mti_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
-            )
-        ),
-        condition=IfCondition(use_ekf),
-    )
+    def _make_xsens(context):
+        if context.launch_configurations.get('use_ekf') != 'true' \
+                or not _start_drivers(context):
+            return []
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('mfe_sensors'), 'launch', 'xsens_mti.launch.py'
+                )
+            ),
+        )]
+
+    xsens_mti_launch = OpaqueFunction(function=_make_xsens)
 
     # --------------------------------------------------------------------------
     # State estimation — Extended Kalman Filter (custom MFE node)
@@ -616,6 +635,10 @@ def generate_launch_description():
             return []
         sensors = _sensor_set(context)
         actions = [LogInfo(msg=f'[bringup] WARNING: {CAN_NOT_IMPLEMENTED}')]
+        if not _start_drivers(context):
+            actions.append(LogInfo(msg='[bringup] start_drivers:=false: sensor drivers not started, '
+                                       'topics come from a bag'))
+            return actions
         drivers = {
             'lidar': ('velodyne_driver', 'velodyne.launch.py'),
             'camera': ('realsense2_camera', 'realsense.launch.py'),
@@ -945,6 +968,7 @@ def generate_launch_description():
         platform_arg,
         sensors_arg,
         part_arg,
+        start_drivers_arg,
         use_perception_arg,
         sim_cones_direct_arg,
         endless_arg,
