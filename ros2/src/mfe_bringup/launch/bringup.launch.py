@@ -34,6 +34,10 @@ from ament_index_python.packages import get_package_share_directory
 
 from mfe_common.topics import SLAM_ODOM
 
+# Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
+GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
+              'odom_topic')
+
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
     'autocross':    100.0,
@@ -182,6 +186,36 @@ def generate_launch_description():
             '/slam/odom. '
             'none: no SLAM node.'
         ),
+    )
+
+    # Arguments of the gtsam SLAM node (slam:=gtsam only). Names and defaults are lidar_only's.
+    slam_lateral_vel_arg = DeclareLaunchArgument(
+        'slam_lateral_vel', default_value='false',
+        description='slam:=gtsam: integrate INS lateral velocity (lidar_only default false).',
+    )
+    color_mode_arg = DeclareLaunchArgument(
+        'color_mode', default_value='geometric',
+        description='slam:=gtsam: cone colour mode (lidar_only default geometric).',
+    )
+    min_obs_arg = DeclareLaunchArgument(
+        'min_obs', default_value='2',
+        description='slam:=gtsam: observations before a landmark is published (default 2).',
+    )
+    max_range_arg = DeclareLaunchArgument(
+        'max_range', default_value='20.0',
+        description='slam:=gtsam: landmark look-ahead range, m (lidar_only default 20.0).',
+    )
+    publish_hz_arg = DeclareLaunchArgument(
+        'publish_hz', default_value='5.0',
+        description='slam:=gtsam: cone map publish rate, Hz (lidar_only default 5.0).',
+    )
+    freeze_arg = DeclareLaunchArgument(
+        'freeze', default_value='true',
+        description='slam:=gtsam: publish each landmark once, at a fixed position (default true).',
+    )
+    odom_topic_arg = DeclareLaunchArgument(
+        'odom_topic', default_value='/sim/xsens/state_odom',
+        description='slam:=gtsam: odometry for yaw and speed (default /sim/xsens/state_odom).',
     )
 
     use_ekf_arg = DeclareLaunchArgument(
@@ -338,16 +372,24 @@ def generate_launch_description():
                 ),
                 condition=IfCondition(use_slam),
             )]
-        if context.launch_configurations.get('slam') == 'gtsam':
-            return [IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    os.path.join(get_package_share_directory('mfe_validation'), 'launch',
-                                 'slam.launch.py')
-                ),
-            )]
         return []
 
     slam_action = OpaqueFunction(function=_make_slam)
+
+    # slam:=gtsam is outside the perception group: like the harness, the SLAM node runs
+    # with run_perception:=false, where the LiDAR detector is started elsewhere.
+    def _make_gtsam(context):
+        if context.launch_configurations.get('slam') != 'gtsam':
+            return []
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(get_package_share_directory('mfe_validation'), 'launch',
+                             'slam.launch.py')
+            ),
+            launch_arguments={name: LaunchConfiguration(name) for name in GTSAM_ARGS}.items(),
+        )]
+
+    gtsam_action = OpaqueFunction(function=_make_gtsam)
 
     # --------------------------------------------------------------------------
     # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
@@ -621,7 +663,7 @@ def generate_launch_description():
         actions=[
             lidar_perception_node,
             vision_node_action,         # skipped unless vision_model_path is set
-            slam_action,                # SLAM selected by the slam argument
+            slam_action,                # slam:=toolbox
             xsens_mti_launch,           # Xsens MTi-670G GNSS/INS -> /imu, /gps
             ekf_node,
             boundary_extractor_node,
@@ -662,6 +704,13 @@ def generate_launch_description():
         orange_topic_arg,
         use_slam_arg,
         slam_arg,
+        slam_lateral_vel_arg,
+        color_mode_arg,
+        min_obs_arg,
+        max_range_arg,
+        publish_hz_arg,
+        freeze_arg,
+        odom_topic_arg,
         use_ekf_arg,
         run_perception_arg,
         run_compute_arg,
@@ -674,6 +723,7 @@ def generate_launch_description():
         # node groups — each independently enable/disable-able
         perception_group,
         compute_group,
+        gtsam_action,               # slam:=gtsam
 
         # always-on safety supervisor
         supervisor_node,
