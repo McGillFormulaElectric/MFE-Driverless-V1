@@ -11,7 +11,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 class FileLoaderNode(Node):
     def __init__(self):
-        super().__init__('file_loader_node')
+        super().__init__('image_file_loader')
 
         # quality of service type to ensure displayed in RVIZ
         qos_profile = QoSProfile(

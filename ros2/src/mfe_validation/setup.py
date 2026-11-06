@@ -11,6 +11,7 @@ setup(
                 ('share/mfe_validation/config', glob('config/*.yaml'))],
     install_requires=['setuptools'], zip_safe=True,
     entry_points={'console_scripts': ['slam_node = mfe_validation.slam_node:main',
+                                      'cone_colour_fusion_node = mfe_validation.cone_colour_fusion_node:main',
                                       'compare_node = mfe_validation.compare_node:main',
                                       'skidpad_planner = mfe_validation.skidpad_planner:main']},
 )

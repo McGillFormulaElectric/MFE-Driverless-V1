@@ -164,6 +164,7 @@ else
     # SLAM/EKF off: EUFS GT TF owns map->odom.
     BRINGUP_EXTRAS="pose_topic:=/sim/xsens/state_odom use_slam:=false use_ekf:=false"
 fi
+BRINGUP_EXTRAS="$BRINGUP_EXTRAS sim_cones_direct:=$USE_SIM_CONES"
 
 if [ "$LAPS" = "0" ]; then
     BRINGUP_EXTRAS="$BRINGUP_EXTRAS endless:=true"

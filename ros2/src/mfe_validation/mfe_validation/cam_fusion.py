@@ -11,6 +11,8 @@ import numpy as np
 from mfe_common.geometry import wrap_angle
 
 BLUE, YELLOW, ORANGE_BIG, ORANGE_SMALL, UNKNOWN = 0, 1, 2, 3, 4
+# color_mode values that colour the cones from the camera (cone_colour_fusion_node runs for these only)
+CAMERA_COLOUR_MODES = ('yolo', 'orange_only', 'yolo_lidar')
 
 
 def _ry(deg):

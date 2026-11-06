@@ -16,7 +16,7 @@ Usage (sim — perception on host, raw data stays local):
     use_slam:=false use_ekf:=false
 
 Usage (real car — Jetson 1, sensors connected locally):
-  ros2 launch mfe_bringup perception.launch.py
+  ros2 launch mfe_bringup perception.launch.py hardware:=true
 """
 
 import os

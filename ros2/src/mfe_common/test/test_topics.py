@@ -28,6 +28,7 @@ EXPECTED = {
     'SIM_XSENS_STATE_ODOM': '/sim/xsens/state_odom',
     'SKIDPAD_CONES': '/skidpad/cones',
     'SLAM_CONE_MAP': '/planning/cones',
+    'SLAM_CONES': '/slam/cones',
     'SLAM_ODOM': '/slam/odom',
     'VALIDATION_CENTERLINE': '/validation/centerline',
     'VALIDATION_CONES': '/validation/cones',
