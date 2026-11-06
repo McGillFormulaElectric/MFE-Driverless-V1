@@ -80,6 +80,19 @@ _DEFAULT_PROC_NOISE = [
 ]
 
 
+def process_noise_for_dt(base_R, var_imu_acc_x, dt):
+    """
+    Process noise covariance for one predict step of duration dt.
+
+    The IMU longitudinal acceleration a_k (noise variance var_imu_acc_x) integrates into
+    the speed state over the step: v_{k+1} = v_k + a_k * dt. Its contribution to Var(v) is
+    therefore var_imu_acc_x * dt^2, added on top of the base diagonal from base_R.
+    """
+    Q = base_R.copy()
+    Q[3, 3] += var_imu_acc_x * dt * dt
+    return Q
+
+
 def _build_8state_motion_model():
     """
     Return (g, G, V) for the 8-state unicycle + bias random walk system.
@@ -152,9 +165,7 @@ class ExtendedKalmanFilterNode(Node):
         super().__init__("ekf_node")
 
         self.declare_parameter("imu_frequency", value=20)
-        self.declare_parameter("gps_frequency", value=2)
         self.imu_freq = self.get_parameter("imu_frequency").get_parameter_value().integer_value
-        self.gps_freq = self.get_parameter("gps_frequency").get_parameter_value().integer_value
 
         # Configure necessary topics names to subscribe to
         self.declare_parameter("imu_topic", value="/imu/data")
@@ -223,11 +234,8 @@ class ExtendedKalmanFilterNode(Node):
         self._gps_origin = None  # tuple (lat0_rad, lon0_rad)
 
         # Latest sensor readings (used by predict step)
-        self._velocity = 0.0  # forward velocity from wheelspeed proxy (m/s)
         self.imu_w = 0.0  # latest raw angular velocity from IMU     (rad/s)
         self.imu_theta = 0.0  # latest yaw from IMU quaternion           (rad)
-        self.imu_acc_x = 0.0  # latest linear acceleration x             (m/s²)
-        self.imu_acc_y = 0.0  # latest linear acceleration y             (m/s²)
 
         self._dt = 1.0 / self.imu_freq  # default timestep until first pair of IMU msgs
 
@@ -343,9 +351,6 @@ class ExtendedKalmanFilterNode(Node):
     # ------------------------------------------------------------------
 
     def imu_callback(self, msg: Imu):
-        self.imu_msg = msg
-        self.imu_acc_x = msg.linear_acceleration.x
-        self.imu_acc_y = msg.linear_acceleration.y
         self.imu_w = msg.angular_velocity.z
 
         # Extract yaw from quaternion using numpy
@@ -414,7 +419,6 @@ class ExtendedKalmanFilterNode(Node):
             return
 
         wheelspeed = msg.twist.twist.linear.x
-        self._velocity = wheelspeed
 
         z_ws = np.array([wheelspeed])
         self._update_with_measurement(z_ws, self._H_ws, self._R_wheelspeed)
@@ -431,7 +435,8 @@ class ExtendedKalmanFilterNode(Node):
         # Control input is not used in the new motion model (v and ω are states).
         # Pass zero placeholder for API compatibility.
         u = np.zeros(2)
-        self._ekf.predict(u, self._dt)
+        Q = process_noise_for_dt(self._ekf.R, self.var_imu_acc[0], self._dt)
+        self._ekf.predict(u, self._dt, Q)
         self._clamp_biases()
         self._publish_odom()
 
