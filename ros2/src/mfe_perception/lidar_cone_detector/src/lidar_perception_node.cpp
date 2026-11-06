@@ -43,6 +43,12 @@ public:
         this->declare_parameter("min_intensity", 0.0);
         this->declare_parameter("enable_motion_distortion", true);
         this->declare_parameter("motion_scan_duration_sec", 0.1);
+        // Sweep model, used only for clouds without a per-point "time" field.
+        this->declare_parameter("motion_start_azimuth_rad", 1.5707963267948966);
+        this->declare_parameter("motion_counter_clockwise", false);
+        // LiDAR position in base_footprint (lever arm for the body twist).
+        this->declare_parameter("sensor_x_m", 0.0);
+        this->declare_parameter("sensor_y_m", 0.0);
         // Cone-body z band (sensor frame, after ground removal). Defaults fit the EUFS sim
         // VLP-16 (sensor ~1.0 m above track); set from the real mount height on hardware.
         this->declare_parameter("cone_z_min", -1.10f);
@@ -60,8 +66,18 @@ public:
         min_intensity_ = this->get_parameter("min_intensity").as_double();
         enable_motion_distortion_ = this->get_parameter("enable_motion_distortion").as_bool();
         motion_scan_duration_sec_ = this->get_parameter("motion_scan_duration_sec").as_double();
+        motion_start_azimuth_rad_ = this->get_parameter("motion_start_azimuth_rad").as_double();
+        motion_counter_clockwise_ = this->get_parameter("motion_counter_clockwise").as_bool();
+        sensor_x_m_ = this->get_parameter("sensor_x_m").as_double();
+        sensor_y_m_ = this->get_parameter("sensor_y_m").as_double();
 
-        distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>();
+        perception::SweepModel sweep;
+        sweep.period_s = motion_scan_duration_sec_;
+        sweep.start_azimuth_rad = motion_start_azimuth_rad_;
+        sweep.counter_clockwise = motion_counter_clockwise_;
+        sweep.sensor_x_m = sensor_x_m_;
+        sweep.sensor_y_m = sensor_y_m_;
+        distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>(sweep);
         cone_z_min_ = this->get_parameter("cone_z_min").as_double();
         cone_z_max_ = this->get_parameter("cone_z_max").as_double();
         use_gpu_ = false;
@@ -123,6 +139,14 @@ private:
     }
 
 #if USE_GPU_PIPELINE
+    // Byte offset of the FLOAT32 "time" field, or -1.
+    static int raw_time_offset(const sensor_msgs::msg::PointCloud2& m) {
+        for (const auto& f : m.fields)
+            if (f.name == "time" && f.datatype == sensor_msgs::msg::PointField::FLOAT32 && f.count == 1)
+                return static_cast<int>(f.offset);
+        return -1;
+    }
+
     // x/y/z byte offsets for direct GPU upload (float32, aligned, little-endian).
     // Returns false to fall back to the CPU conversion.
     static bool raw_xyz_offsets(const sensor_msgs::msg::PointCloud2& m, unsigned off[3]) {
@@ -149,16 +173,17 @@ private:
 #endif
         pcl::PointCloud<pcl::PointXYZ>::Ptr host_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         if (!gpu_raw) {
-            // Strip NaN returns (organized Velodyne clouds mark invalid points as NaN).
-            pcl::fromROSMsg(*msg, *host_cloud);
-            std::vector<int> nan_indices;
-            pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
+            if (enable_motion_distortion_) {
+                // Drops NaN returns and corrects each point to the scan stamp.
+                host_cloud = distortion_corrector_->correct(*msg);
+            } else {
+                // Strip NaN returns (organized Velodyne clouds mark invalid points as NaN).
+                pcl::fromROSMsg(*msg, *host_cloud);
+                std::vector<int> nan_indices;
+                pcl::removeNaNFromPointCloud(*host_cloud, *host_cloud, nan_indices);
+            }
 
             if (host_cloud->empty()) return;
-
-            if (enable_motion_distortion_) {
-                host_cloud = distortion_corrector_->correctMotionDistortion(host_cloud, motion_scan_duration_sec_);
-            }
         }
 
         // Intensity cloud for the optional intensity filter.
@@ -194,7 +219,12 @@ private:
                 mo.vx = static_cast<float>(last_vx_);
                 mo.vy = static_cast<float>(last_vy_);
                 mo.omega = static_cast<float>(last_omega_);
-                mo.scan_duration = static_cast<float>(motion_scan_duration_sec_);
+                mo.scan_period = static_cast<float>(motion_scan_duration_sec_);
+                mo.start_azimuth = static_cast<float>(motion_start_azimuth_rad_);
+                mo.counter_clockwise = motion_counter_clockwise_;
+                mo.sensor_x = static_cast<float>(sensor_x_m_);
+                mo.sensor_y = static_cast<float>(sensor_y_m_);
+                mo.time_offset = raw_time_offset(*msg);
                 gpu_pipe_->runRaw(msg->data.data(), msg->width * msg->height, msg->point_step,
                                   raw_off[0], raw_off[1], raw_off[2], mo, gp, res);
             } else {
@@ -390,6 +420,8 @@ private:
 
     bool enable_motion_distortion_;
     double motion_scan_duration_sec_;
+    double motion_start_azimuth_rad_, sensor_x_m_, sensor_y_m_;
+    bool motion_counter_clockwise_;
     double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;
     std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
 };

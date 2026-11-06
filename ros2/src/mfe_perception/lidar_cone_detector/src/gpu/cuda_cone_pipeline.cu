@@ -19,35 +19,62 @@ inline unsigned blocksFor(unsigned n) { return (n + kBlock - 1) / kBlock; }
 
 __device__ inline float3 sub3(float4 a, float4 b) { return make_float3(a.x - b.x, a.y - b.y, a.z - b.z); }
 
+// Mirrors MotionDistortionCorrector::sweepTime (azimuth fallback) and its non-finite time check.
+__device__ inline float rawSweepTime(const uint8_t *pt, float x, float y, const GpuMotion &M) {
+  if (M.time_offset >= 0) return *reinterpret_cast<const float *>(pt + M.time_offset);
+  const float az = atan2f(y, x);
+  const float delta = M.counter_clockwise ? az - M.start_azimuth : M.start_azimuth - az;
+  const float seam_tol = 1e-6f, two_pi = 2.0f * 3.14159265358979323846f;
+  float swept = fmodf(delta + seam_tol, two_pi);
+  if (swept < 0.0f) swept += two_pi;
+  return fmaxf(swept - seam_tol, 0.0f) / two_pi * M.scan_period;
+}
+
 __global__ void rawFlags(const uint8_t *data, unsigned n, unsigned step, unsigned ox, unsigned oy, unsigned oz,
-                         unsigned *flags) {
+                         GpuMotion M, unsigned *flags) {
   const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
   const uint8_t *pt = data + static_cast<size_t>(i) * step;
   const float x = *reinterpret_cast<const float *>(pt + ox);
   const float y = *reinterpret_cast<const float *>(pt + oy);
   const float z = *reinterpret_cast<const float *>(pt + oz);
-  flags[i] = isfinite(x) && isfinite(y) && isfinite(z);
+  bool keep = isfinite(x) && isfinite(y) && isfinite(z);
+  if (keep && M.enable && M.time_offset >= 0) keep = isfinite(rawSweepTime(pt, x, y, M));
+  flags[i] = keep;
 }
 
+// Motion-corrected points carry their sweep time in w until motionCorrect consumes it.
 __global__ void rawScatter(const uint8_t *data, unsigned n, unsigned step, unsigned ox, unsigned oy, unsigned oz,
-                           const unsigned *flags, const unsigned *offs, float4 *out) {
+                           GpuMotion M, const unsigned *flags, const unsigned *offs, float4 *out) {
   const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n || !flags[i]) return;
   const uint8_t *pt = data + static_cast<size_t>(i) * step;
-  out[offs[i]] = make_float4(*reinterpret_cast<const float *>(pt + ox), *reinterpret_cast<const float *>(pt + oy),
-                             *reinterpret_cast<const float *>(pt + oz), 0.0f);
+  const float x = *reinterpret_cast<const float *>(pt + ox);
+  const float y = *reinterpret_cast<const float *>(pt + oy);
+  const float z = *reinterpret_cast<const float *>(pt + oz);
+  const float tau = M.enable ? rawSweepTime(pt, x, y, M) : 0.0f;
+  out[offs[i]] = make_float4(x, y, z, tau);
 }
 
-// Matches perception::MotionDistortionCorrector; capture time is index-based.
-__global__ void motionCorrect(float4 *pts, unsigned n, float vx, float vy, float omega, float T) {
+// Expresses each point in the sensor frame at the scan stamp (see motion_distortion.hpp):
+// p_ref = R(-theta) (p - d(Delta)), Delta = -tau, theta = omega * Delta.
+__global__ void motionCorrect(float4 *pts, unsigned n, GpuMotion M) {
   const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
-  const float dt = T - (static_cast<float>(i) / static_cast<float>(n)) * T;
-  float s, c;
-  sincosf(omega * dt, &s, &c);
   const float4 p = pts[i];
-  pts[i] = make_float4(c * p.x - s * p.y + vx * dt, s * p.x + c * p.y + vy * dt, p.z, p.w);
+  const float delta = -p.w;
+  const float theta = M.omega * delta;
+  float a = delta, b = 0.0f;
+  if (fabsf(M.omega) >= 1e-9f) {
+    a = sinf(theta) / M.omega;
+    b = (1.0f - cosf(theta)) / M.omega;
+  }
+  const float u = M.vx - M.omega * M.sensor_y;
+  const float w = M.vy + M.omega * M.sensor_x;
+  const float qx = p.x - (a * u - b * w);
+  const float qy = p.y - (b * u + a * w);
+  const float c = cosf(theta), s = sinf(theta);
+  pts[i] = make_float4(c * qx + s * qy, -s * qx + c * qy, p.z, 0.0f);
 }
 
 __global__ void planeHyp(const float4 *pts, const int3 *samples, int K, float cos_eps, float4 *planes) {
@@ -239,17 +266,17 @@ void GpuConePipeline::runRaw(const uint8_t *data, unsigned n, unsigned step, uns
   grow(s.bytes, nbytes); grow(s.flags, n); grow(s.offs, n); grow(s.raw, n);
   checkCudaErrors(cudaMemcpyAsync(raw_ptr(s.bytes), data, nbytes, cudaMemcpyHostToDevice, st));
   checkCudaErrors(cudaEventRecord(s.ev[1], st));
-  rawFlags<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, raw_ptr(s.flags));
+  rawFlags<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, M, raw_ptr(s.flags));
   thrust::exclusive_scan(thrust::cuda::par.on(st), raw_ptr(s.flags), raw_ptr(s.flags) + n, raw_ptr(s.offs));
   unsigned lo = 0, lf = 0;
   checkCudaErrors(cudaMemcpyAsync(&lo, raw_ptr(s.offs) + n - 1, sizeof(unsigned), cudaMemcpyDeviceToHost, st));
   checkCudaErrors(cudaMemcpyAsync(&lf, raw_ptr(s.flags) + n - 1, sizeof(unsigned), cudaMemcpyDeviceToHost, st));
   checkCudaErrors(cudaStreamSynchronize(st));
   const unsigned nv = lo + lf;
-  rawScatter<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, raw_ptr(s.flags),
+  rawScatter<<<blocksFor(n), kBlock, 0, st>>>(raw_ptr(s.bytes), n, step, ox, oy, oz, M, raw_ptr(s.flags),
                                               raw_ptr(s.offs), raw_ptr(s.raw));
   if (M.enable && nv > 0)
-    motionCorrect<<<blocksFor(nv), kBlock, 0, st>>>(raw_ptr(s.raw), nv, M.vx, M.vy, M.omega, M.scan_duration);
+    motionCorrect<<<blocksFor(nv), kBlock, 0, st>>>(raw_ptr(s.raw), nv, M);
   checkCudaErrors(cudaEventRecord(s.ev[2], st));
   out.valid = nv;
   if (nv == 0) return;
