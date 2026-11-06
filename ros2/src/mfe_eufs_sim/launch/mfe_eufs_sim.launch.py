@@ -6,6 +6,8 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from mfe_common.topics import CAN_WHEEL_SPEED
+
 
 # The sim's LiDAR scan is instantaneous; with emulate_lidar_sweep:=true the bridge publishes the
 # raw scan on this intermediate topic and lidar_sweep_emulator republishes it on /lidar/points_raw.
@@ -22,12 +24,15 @@ def _sensor_set(context) -> set:
     return names
 
 
+def _is_sim(context) -> bool:
+    return context.launch_configurations.get('platform', 'legacy') == 'sim'
+
+
 def _resolve_emulate_default(context):
     """emulate_lidar_sweep defaults to on for the sim platform with a LiDAR; legacy stays off."""
     if context.launch_configurations.get('emulate_lidar_sweep'):
         return []
-    sim_lidar = (context.launch_configurations.get('platform', 'legacy') == 'sim'
-                 and 'lidar' in _sensor_set(context))
+    sim_lidar = _is_sim(context) and 'lidar' in _sensor_set(context)
     context.launch_configurations['emulate_lidar_sweep'] = 'true' if sim_lidar else 'false'
     return []
 
@@ -48,6 +53,9 @@ def _bridge_and_sweep_emulator(context):
         'brake_bias_front': LaunchConfiguration('brake_bias_front'),
         'regen_braking_enabled': LaunchConfiguration('regen_braking_enabled'),
     }
+    # The CAN role: the wheel speed the EKF reads, on the topic the car's CAN node will publish.
+    if _is_sim(context) and 'can' in sensors:
+        bridge_params['wheel_speed_topic'] = CAN_WHEEL_SPEED
     nodes = []
     emulate = LaunchConfiguration('emulate_lidar_sweep').perform(context).lower() == 'true'
     if emulate:
@@ -86,6 +94,14 @@ def _sim_sensor_nodes(context):
         parameters=[os.path.join(get_package_share_directory('mfe_eufs_sim'), 'config',
                                  'xsens_noise_node_params.yaml')],
     )]
+    # Car IMU and GNSS as the Xsens driver publishes them, from ground truth (platform:=sim only).
+    if _is_sim(context) and 'imu_gps' in sensors:
+        nodes.append(Node(
+            package='mfe_eufs_sim',
+            executable='imu_gps_emulator',
+            name='imu_gps_emulator',
+            output='screen',
+        ))
     # Static TFs from EUFS frames to the stack frames; adjust to sensor mounting.
     # LiDAR at car origin, 0.3 m up.
     if 'lidar' in sensors:
