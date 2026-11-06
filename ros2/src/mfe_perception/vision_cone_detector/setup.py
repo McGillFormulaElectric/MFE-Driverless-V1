@@ -7,7 +7,7 @@ package_name = "vision_cone_detector"
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='1.1.0',
     # Packages to export
     packages=[package_name],
     # Files we want to install, specifically launch files

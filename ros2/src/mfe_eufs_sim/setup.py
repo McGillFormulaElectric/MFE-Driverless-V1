@@ -6,7 +6,7 @@ package_name = 'mfe_eufs_sim'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='1.1.0',
     packages=[package_name],
     data_files=[
         # ament index resource
