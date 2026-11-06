@@ -39,7 +39,6 @@ CAMERA_MATCH_R = 0.5    # m — max dist to assign camera colour to a LiDAR cent
 PIXEL_MATCH_R  = 60.0   # px — max pixel distance to assign colour from camera (pixel mode)
 EVAL_RADIUS    = 1.5    # m — GT ↔ detection association radius
 UNKNOWN        = 4
-COLOR_NAMES    = {0: 'BLUE', 1: 'YELLOW', 2: 'ORANGE_BIG', 3: 'ORANGE_SMALL', 4: 'UNKNOWN'}
 
 
 def _quat_to_rot3(qx, qy, qz, qw) -> np.ndarray:
