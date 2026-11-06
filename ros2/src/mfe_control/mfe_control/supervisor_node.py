@@ -94,7 +94,6 @@ class SupervisorNode(Node):
         self.declare_parameter('gps_jump_threshold_m',         2.0)
         self.declare_parameter('gps_cov_threshold',           25.0)
         self.declare_parameter('control_latency_threshold_ms', 100)
-        self.declare_parameter('cone_hit_radius_m',            0.5)   # kept for backwards compat
         self.declare_parameter('car_half_length',              1.5)   # half of ~3m wheelbase+bumpers
         self.declare_parameter('car_half_width',               0.8)   # half of ~1.6m track width
 
@@ -102,7 +101,6 @@ class SupervisorNode(Node):
         self._gps_jump_thr_m    = float(self.get_parameter('gps_jump_threshold_m').value)
         self._gps_cov_thr       = float(self.get_parameter('gps_cov_threshold').value)
         self._ctrl_lat_thr_s    = self.get_parameter('control_latency_threshold_ms').value / 1000.0
-        self._cone_hit_r        = float(self.get_parameter('cone_hit_radius_m').value)
         self._car_half_length   = float(self.get_parameter('car_half_length').value)
         self._car_half_width    = float(self.get_parameter('car_half_width').value)
 
