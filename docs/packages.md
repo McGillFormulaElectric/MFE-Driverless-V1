@@ -60,7 +60,7 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 
 **Subscribes**: `/planning/centerline` (Path), `/ekf/output` (Odometry), `/planning/mission_finished` (Bool)
 
-**Publishes**: `/control/command` (fs_msgs/ControlCommand) at 20 Hz
+**Publishes**: `/control/command` (fs_msgs/ControlCommand) at 50 Hz
 
 **Speed profile**: scans upcoming waypoints for curvature, computes corner speed target from `v = sqrt(a_lat * R)`, brakes if within stopping distance, full throttle otherwise.
 

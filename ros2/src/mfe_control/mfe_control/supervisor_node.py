@@ -14,7 +14,7 @@ Implements Chalmers-style failsafes for the autonomous Formula Student car:
     Status is broadcast on /as/supervisor/status.
 
   Control latency watchdog:
-    The pure_pursuit_node publishes /control/command at 20 Hz.  If the inter-arrival
+    The pure_pursuit_node publishes /control/command at 50 Hz.  If the inter-arrival
     gap between consecutive commands exceeds control_latency_threshold_ms, the car is
     assumed to have experienced a compute overrun; the supervisor publishes a reduced-
     throttle command on /mfe/emergency_brake to trigger the safety response in the ACU.

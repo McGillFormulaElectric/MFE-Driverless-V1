@@ -211,7 +211,7 @@ Not launched when `use_perception:=false` (no_perception mode).
 
 | Topic | Type | Rate |
 |-------|------|------|
-| `/control/command` | fs_msgs/ControlCommand | 20 Hz |
+| `/control/command` | fs_msgs/ControlCommand | 50 Hz |
 
 ### Velocity profile algorithm
 
