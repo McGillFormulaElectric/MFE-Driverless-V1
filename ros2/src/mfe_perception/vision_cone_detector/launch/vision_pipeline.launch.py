@@ -38,6 +38,8 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
+            os.path.join(get_package_share_directory('vision_cone_detector'), 'config',
+                         'cone_detection_node_params.yaml'),
             {"run_visualization": False},
             {"model_path": model_path },
             {"depth_callback": LaunchConfiguration('depth_callback')},
