@@ -152,8 +152,9 @@ if ! timeout 3 ros2 topic echo /ros_can/state_str --once 2>/dev/null | grep -q A
 fi
 echo "==> Gazebo ready."
 
+# MFE_SIM_ARGS (optional, set by run_sim.sh): platform:=sim sensors:=... for both launches.
 tmux send-keys -t mfe:0.1 \
-    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0" Enter
+    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0${MFE_SIM_ARGS:+ $MFE_SIM_ARGS}" Enter
 
 # pose_topic: noisy Xsens-like odom, not ground truth. Do not point it back at /ground_truth/state_odom.
 # no_perception: use_perception:=false skips boundary_extractor (bridge owns /planning/cones).
@@ -172,7 +173,7 @@ else
     BRINGUP_EXTRAS="$BRINGUP_EXTRAS num_laps:=$LAPS"
 fi
 tmux send-keys -t mfe:0.2 \
-    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS" Enter
+    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS${MFE_SIM_ARGS:+ $MFE_SIM_ARGS}" Enter
 
 tmux send-keys -t mfe:0.3 \
     "$SOURCE_ALL && ros2 launch foxglove_bridge foxglove_bridge_launch.xml" Enter
