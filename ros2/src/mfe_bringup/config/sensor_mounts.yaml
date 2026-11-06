@@ -1,0 +1,29 @@
+# Sensor mounts for hardware:=true, read by bringup.launch.py.
+#
+# Each frame is the pose of a sensor frame in base_footprint: x forward, y left, z up,
+# roll/pitch/yaw in rad, applied in that order.
+#
+# VALUES ARE SIM VALUES, not measurements. They are the static TFs in
+# mfe_eufs_sim/launch/mfe_eufs_sim.launch.py, which is what the stack sees in sim.
+# Measure on the car and replace them. The EUFS car URDF places the LiDAR at
+# (-0.15, 0, 0.79) and the D435i at (-0.08, 0, 0.76), so the sim sources disagree.
+#
+# camera_frame is the frame the cone detector labels its output with (its camera_frame
+# parameter under hardware:=true). It must be one of the frames below.
+camera_frame: camera_base
+
+frames:
+  velodyne:
+    x: 0.0
+    y: 0.0
+    z: 0.3
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  camera_base:
+    x: 0.3
+    y: 0.0
+    z: 0.5
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
