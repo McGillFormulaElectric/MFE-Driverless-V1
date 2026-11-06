@@ -593,6 +593,8 @@ def generate_launch_description():
         executable='fusion_evaluator_node',
         name='fusion_evaluator',
         output='screen',
+        parameters=[os.path.join(get_package_share_directory('perception_evaluator'), 'config',
+                                 'fusion_evaluator_node_params.yaml')],
     )
 
     # --------------------------------------------------------------------------
