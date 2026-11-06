@@ -358,6 +358,9 @@ def generate_launch_description():
     ekf_params_file = os.path.join(
         get_package_share_directory('mfe_state_estimation'), 'config', 'ekf_params.yaml'
     )
+    vehicle_params_file = os.path.join(
+        get_package_share_directory('mfe_bringup'), 'config', 'vehicle.yaml'
+    )
     ekf_node = Node(
         package='mfe_state_estimation',
         executable='extended_kalman_filter_node',
@@ -409,17 +412,14 @@ def generate_launch_description():
     def _make_pure_pursuit(context):
         mission_str = context.launch_configurations.get('mission', 'autocross')
         pt = context.launch_configurations.get('pose_topic', '/ekf/output')
-        # Base vehicle constants (from vehicle.yaml — inlined here because vehicle.yaml
-        # uses a 'vehicle:' namespace, not a valid ROS2 params-file format)
+        # Vehicle constants come from vehicle.yaml; MAX_STEER_DEG overrides its max_steering_deg.
         params = {
-            'wheelbase': 1.56,
             # The pose (SLAM/EKF) is the CG, 0.69 m ahead of the rear axle (cg_x 0.44 x wheelbase 1.56), but tracking
             # from the rear axle made sim laps ~20% slower with cone touches, so it is off by default
             'rear_axle_offset': float(os.environ.get('REAR_AXLE_OFFSET', '0.0')),
-            'max_steering_deg': float(os.environ.get('MAX_STEER_DEG', '28.0')),
-            'max_lateral_accel': 8.0,
-            'max_deceleration': 10.0,
         }
+        if 'MAX_STEER_DEG' in os.environ:
+            params['max_steering_deg'] = float(os.environ['MAX_STEER_DEG'])
         if mission_str == 'skidpad':
             params.update({'max_speed': 4.5, 'lookahead_distance': 3.0})
         elif mission_str == 'acceleration':
@@ -447,7 +447,7 @@ def generate_launch_description():
             executable='pure_pursuit_node',
             name='pure_pursuit_node',
             output='screen',
-            parameters=[params],
+            parameters=[vehicle_params_file, params],
             remappings=[('/ekf/output', pt)],
         )]
 
