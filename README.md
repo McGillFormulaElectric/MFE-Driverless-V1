@@ -128,8 +128,7 @@ One-time setup on each Jetson (or from your PC: `ssh mfe@<jetson> "bash -s" < sc
 bash scripts/setup_jetson.sh
 ```
 
-See [docs/jetson_setup.md](docs/jetson_setup.md) for the full Jetson setup and
-[docs/jetson_access.md](docs/jetson_access.md) for Tailscale and SSH access.
+See [docs/jetson_setup.md](docs/jetson_setup.md) for the full Jetson setup.
 
 Then, on Jetson 1:
 
