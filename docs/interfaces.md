@@ -154,10 +154,11 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/velodyne_points` | `sensor_msgs/PointCloud2` | EUFS sim (external) | `bridge_node`; `lidar_pipeline` remap target (navigation only) |
 | `/lidar/points_raw` | `sensor_msgs/PointCloud2` | `bridge_node` (sim). No hardware publisher in the repo | `lidar_perception_node`; `supervisor_node`; `finish_detector_node`; `pointcloud_to_laserscan` (remap `cloud_in`); MCAP recorder |
 | `/lidar/pcl/laserscan` | `sensor_msgs/LaserScan` | `pointcloud_to_laserscan` (external) | `slam_toolbox` (external) |
-| `/imu` | `sensor_msgs/Imu` | Xsens MTi driver (external) | `ekf_node` |
-| `/gps` | `sensor_msgs/NavSatFix` | Xsens MTi driver (external) | `ekf_node`; `supervisor_node`; MCAP recorder |
+| `/imu` | `sensor_msgs/Imu` | Xsens MTi driver (car); `imu_gps_emulator` (sim, `platform:=sim` with `imu_gps`) | `ekf_node`; MCAP recorder |
+| `/gps` | `sensor_msgs/NavSatFix` | Xsens MTi driver (car); `imu_gps_emulator` (sim) | `ekf_node`; `supervisor_node`; MCAP recorder |
+| `/can/wheel_speed` | `nav_msgs/Odometry` (`twist.linear.x`, forward speed) | CAN node on the car (not written yet, needs DBC); `bridge_node` in sim (with `can`) | `ekf_node` on `platform:=sim` and `platform:=car` |
 | `/ground_truth/state` | `eufs_msgs/CarState` | EUFS (external) | `bridge_node`; `lap_validator_node` |
-| `/ground_truth/state_odom` | `nav_msgs/Odometry` | `bridge_node` | `xsens_noise_node`; `ekf_node` (wheelspeed default); `slam_node` [`ground_truth_odom_topic`]; `compare_node` |
+| `/ground_truth/state_odom` | `nav_msgs/Odometry` | `bridge_node` | `xsens_noise_node`; `imu_gps_emulator`; `ekf_node` (wheelspeed on `legacy` only); `slam_node` [`ground_truth_odom_topic`]; `compare_node` |
 | `/ground_truth/cones` | `eufs_msgs/ConeArrayWithCovariance` | EUFS (external) | `bridge_node` |
 | `/ground_truth/track` | `eufs_msgs/ConeArrayWithCovariance` | EUFS (external) | `bridge_node` |
 | `/ground_truth/cones_colored` | `mfe_msgs/Track` | `bridge_node` | `perception_evaluator` (evaluator); `fusion_evaluator` |
@@ -267,10 +268,10 @@ Derived defaults (the low-level arguments stay as explicit overrides; an explici
 
 | Sensor | Present | Absent |
 |---|---|---|
-| `imu_gps` | `use_ekf` on, except on `sim` (the sim has no `/imu` or `/gps` yet). `slam` defaults to `toolbox`. | no EKF; `slam` defaults to `gtsam`, pose from `/slam/odom`. |
-| `lidar` | `lidar_perception_node` runs; on `sim` and `car` with motion correction on (`enable_motion_distortion`). `odom_topic` is `/sim/xsens/state_odom` on sim and `/ekf/output` on car. Sim: `emulate_lidar_sweep` on. | no LiDAR cones; warning. |
+| `imu_gps` | `use_ekf` on, on `sim` too (`imu_gps_emulator` provides `/imu` and `/gps`). `slam` defaults to `toolbox`. | no EKF; `slam` defaults to `gtsam`, pose from `/slam/odom`. |
+| `lidar` | `lidar_perception_node` runs; on `sim` and `car` with motion correction on (`enable_motion_distortion`). `odom_topic` is `/ekf/output` on car, and on sim with the EKF on; `/sim/xsens/state_odom` on sim without it. Sim: `emulate_lidar_sweep` on. | no LiDAR cones; warning. |
 | `camera` | YOLO runs if `vision_model_path` is set. | no YOLO. |
-| `can` | `car`: warning that the CAN interface is not implemented (needs DBC); the vehicle will not actuate. `sim`: the bridge plays the CAN role. | nothing. |
+| `can` | `car`: warning that the CAN interface is not implemented (needs DBC); the vehicle will not actuate. `sim`: the bridge plays the CAN role and publishes the wheel speed on `/can/wheel_speed`. | nothing. |
 
 Driver packages on the car: `velodyne_driver` and `velodyne_pointcloud` (`lidar`), `realsense2_camera` (`camera`), `xsens_mti_ros2_driver` (`imu_gps`, via `mfe_sensors/launch/xsens_mti.launch.py`). A missing package stops the launch with a message that names it.
 
