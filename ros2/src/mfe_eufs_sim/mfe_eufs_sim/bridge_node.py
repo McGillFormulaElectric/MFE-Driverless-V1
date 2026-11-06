@@ -100,6 +100,7 @@ class EufsSimBridge(Node):
         self.declare_parameter('max_steering_deg', 28.0)
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
+        self.declare_parameter('lidar_output_topic', '/lidar/points_raw')
 
         # Vehicle numbers are placeholders; see drivetrain_model.py.
         self.declare_parameter('gear_ratio', 14.0)
@@ -132,7 +133,7 @@ class EufsSimBridge(Node):
         self.create_subscription(
             PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
         self._lidar_pub = self.create_publisher(
-            PointCloud2, '/lidar/points_raw', RELIABLE_QOS)
+            PointCloud2, self.get_parameter('lidar_output_topic').value, RELIABLE_QOS)
 
         # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
         # (only one of the two ever publishes).
