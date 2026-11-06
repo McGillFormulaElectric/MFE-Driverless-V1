@@ -110,7 +110,6 @@ class LapValidatorNode(Node):
 
         # Status logging timer
         self._last_status_time = 0.0
-        self._current_speed = 0.0
         self._current_dev = 0.0
 
         # ---------- Subscribers ----------
@@ -192,7 +191,6 @@ class LapValidatorNode(Node):
         if deviation is not None:
             self._path_deviations.append(deviation)
 
-        self._current_speed = speed
         self._current_dev = deviation if deviation is not None else 0.0
 
         # Cone hit detection against full GT map (debounced to 1 s to avoid double-counting)

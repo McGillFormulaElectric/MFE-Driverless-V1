@@ -128,13 +128,13 @@ class BoundaryExtractor(Node):
         self._max_misses = int(self.get_parameter('max_misses').value)
         self._match_r = float(self.get_parameter('match_radius').value)
 
-        self.sub_lidar = self.create_subscription(
+        self.create_subscription(
             PointCloud2,
             PERCEPTION_CONES_UNCOLORED,
             self._lidar_callback,
             SENSOR_QOS)
 
-        self.sub_camera = self.create_subscription(
+        self.create_subscription(
             Track,
             'image/track',
             self._camera_callback,
@@ -142,7 +142,7 @@ class BoundaryExtractor(Node):
 
         # Sim-only GT color fallback, used when the camera is not running. The full track list
         # (map frame) is independent of car position, unlike /ground_truth/cones_colored.
-        self.sub_gt = self.create_subscription(
+        self.create_subscription(
             Track,
             GROUND_TRUTH_TRACK_COLORED,
             self._gt_callback,
