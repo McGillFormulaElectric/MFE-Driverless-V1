@@ -332,22 +332,14 @@ def generate_launch_description():
     # PLATFORM_DESKTOP_GPU and builds the CUDA filters only when a CUDA compiler is found;
     # otherwise the node is CPU-only. At runtime the 'use_gpu' parameter (default true)
     # selects the GPU path, and the node falls back to CPU PCL if no CUDA device is present.
-    # This node does not set use_gpu, so the default applies.
+    # Parameters: lidar_cone_detector's config/lidar_perception_node_params.yaml (the lidar_only set).
     lidar_perception_node = Node(
         package='lidar_cone_detector',
         executable='lidar_perception_node',
         name='lidar_perception_node',
         output='screen',
-        parameters=[{
-            'leaf_size': 0.1,           # coarser voxel fine for 16-beam VLP-16
-            'ground_threshold': 0.05,   # tight: only removes flat ground ±5 cm; larger values
-                                        # eat cone-body returns at the RANSAC inlier boundary.
-                                        # Sim VLP-16 ±1.33° beams: 0.15 m threshold limits
-                                        # detection to <6.5 m; 0.05 m extends it to ~10.8 m.
-            'cluster_tolerance': 0.3,   # tighter than default 0.4 — prevents adjacent cone merges
-            'min_cluster_size': 1,      # VLP-16 gets 1-2 pts per cone at 10 m; default 3 drops all
-            'max_cluster_size': 50,     # cones won't produce 150 pts; tighter cap
-        }],
+        parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                                 'lidar_perception_node_params.yaml')],
     )
 
     # --------------------------------------------------------------------------

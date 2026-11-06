@@ -48,8 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# CUDA 12.8 is the first toolkit with sm_120 (RTX 50-series). cuda-pcl's aarch64 libs are not used;
-# the driver comes from the host (run with --gpus all). Without a GPU the node falls back to CPU PCL.
+# CUDA 12.8 is the first toolkit with sm_120 (RTX 50-series). The driver comes from the host
+# (run with --gpus all). Without a GPU the node falls back to CPU PCL.
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && \
     wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb && \

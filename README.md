@@ -25,8 +25,8 @@ Packages live under `ros2/src/`.
 | `mfe_state_estimation` | Extended Kalman filter that fuses IMU, GPS and wheel-speed data. |
 | `mfe_validation` | Live validation stack: GTSAM cone-landmark SLAM and a second path planner fed only by LiDAR perception. |
 
-Git submodules provide the message packages `fs_msgs` (`ros2/src/fs_msgs`), `eufs_msgs`
-(`ros2/src/eufs_msgs`), and `cuda-pcl` (inside `lidar_cone_detector`). `lib/gtsam` is a further submodule
+Git submodules provide the message packages `fs_msgs` (`ros2/src/fs_msgs`) and `eufs_msgs`
+(`ros2/src/eufs_msgs`). `lib/gtsam` is a further submodule
 (see `docs/jetson_setup.md` for how it is used on the Jetsons).
 
 ## Requirements
