@@ -43,8 +43,6 @@ public:
         this->declare_parameter("min_intensity", 0.0);
         this->declare_parameter("enable_motion_distortion", true);
         this->declare_parameter("motion_scan_duration_sec", 0.1);
-        this->declare_parameter("high_intensity_threshold", 150.0);
-        this->declare_parameter("low_intensity_threshold", 50.0);
         // Cone-body z band (sensor frame, after ground removal). Defaults fit the EUFS sim
         // VLP-16 (sensor ~1.0 m above track); set from the real mount height on hardware.
         this->declare_parameter("cone_z_min", -1.10f);
@@ -64,10 +62,6 @@ public:
         motion_scan_duration_sec_ = this->get_parameter("motion_scan_duration_sec").as_double();
 
         distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>();
-        intensity_classifier_ = std::make_shared<perception::IntensityClassifier>(
-            this->get_parameter("high_intensity_threshold").as_double(),
-            this->get_parameter("low_intensity_threshold").as_double()
-        );
         cone_z_min_ = this->get_parameter("cone_z_min").as_double();
         cone_z_max_ = this->get_parameter("cone_z_max").as_double();
         use_gpu_ = false;
@@ -173,8 +167,6 @@ private:
             pcl::fromROSMsg(*msg, *host_cloud_i);
             std::vector<int> nan_i;
             pcl::removeNaNFromPointCloud(*host_cloud_i, *host_cloud_i, nan_i);
-
-            auto classified = intensity_classifier_->classify(host_cloud_i);
         }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -400,7 +392,6 @@ private:
     double motion_scan_duration_sec_;
     double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;
     std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
-    std::shared_ptr<perception::IntensityClassifier> intensity_classifier_;
 };
 
 int main(int argc, char * argv[]) {
