@@ -67,10 +67,14 @@ def _make_vision_node(model_path_str: str) -> list:
         executable='cone_detection_node',
         name='cone_detection_node',
         output='screen',
-        parameters=[{
-            'model_path': model_path_str,
-            'depth_callback': False,
-        }],
+        parameters=[
+            os.path.join(get_package_share_directory('vision_cone_detector'), 'config',
+                         'cone_detection_node_params.yaml'),
+            {
+                'model_path': model_path_str,
+                'depth_callback': False,
+            },
+        ],
         remappings=[
             # vision detector subscribes to 'image/input'; camera publishes /camera/image_raw
             ('image/input', '/camera/image_raw'),
