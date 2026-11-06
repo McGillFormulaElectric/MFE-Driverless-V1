@@ -18,7 +18,7 @@ Arguments (all optional, all positional):
 
 | Argument | Default | Options |
 |----------|---------|---------|
-| track | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `rand`, `its_a_mess` |
+| track | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `its_a_mess` |
 | mode | `no_perception` | `no_perception`, `perception` |
 | gui | `gui` | `gui`, `nogui` |
 | laps | `1` | any positive integer, or `0` for endless |
@@ -57,7 +57,6 @@ bash scripts/docker_run.sh small_track no_perception nogui 0
 | `boa_constrictor` | autocross | Closed loop | Spawn at origin |
 | `comp_2021` | autocross | Competition track | Spawn at origin |
 | `hairpins` | autocross | Tight hairpins | Uses `hairpins_increasing_difficulty` track |
-| `rand` | autocross | Random | Spawn at origin |
 | `its_a_mess` | autocross | Complex | Spawn at origin |
 
 ---

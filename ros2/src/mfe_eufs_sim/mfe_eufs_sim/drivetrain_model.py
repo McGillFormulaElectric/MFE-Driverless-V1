@@ -6,14 +6,11 @@ Vehicle numbers (gear ratio, wheel radius, mass, power cap, tire mu) are placeho
 import math
 
 # AMK DD5-14-10-POW datasheet constants, not tunable.
-RATED_TORQUE_NM = 9.8
 CONTINUOUS_STALL_TORQUE_NM = 13.8
 PEAK_TORQUE_NM = 21.0
 PEAK_TORQUE_MAX_DURATION_S = 1.24
 RATED_POWER_W = 12_300.0
 NO_LOAD_SPEED_RPM = 18617.0
-MAX_MECH_SPEED_RPM = 20000.0
-MOTOR_MASS_KG = 3.55
 N_MOTORS = 4
 
 # Read off the datasheet power curve (not tabulated): ~21 Nm at ~16000 rpm.

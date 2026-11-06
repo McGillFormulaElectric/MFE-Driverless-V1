@@ -9,6 +9,7 @@
 
 numpy<2
 scipy>=1.13
+numba                 # path planner speed (pure-Python fallback is ~10x slower); unpinned as in the Docker image
 quadprog==0.1.13
 gtsam==4.2            # x86_64 wheel only; Jetson builds lib/gtsam from source
 ultralytics==8.4.164  # YOLO; installs torch (CPU or CUDA wheel) and opencv-python

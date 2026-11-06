@@ -61,7 +61,7 @@ bash scripts/launch_sim.sh [track] [mode] [gui] [laps]
 
 | Argument | Default | Options |
 |----------|---------|---------|
-| `track` | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `rand`, `its_a_mess` |
+| `track` | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `its_a_mess` |
 | `mode` | `no_perception` | `no_perception`, `perception` |
 | `gui` | `gui` | `gui`, `nogui` |
 | `laps` | `1` | positive integer; `0` = endless loop |

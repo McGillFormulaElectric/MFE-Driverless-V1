@@ -7,8 +7,6 @@ All notable changes to this repository are recorded here. The format follows
 ## 1.1.0 – Unreleased
 
 ### Added
-- GitHub Actions CI: builds and tests the workspace in the `ros:humble` container on pull requests
-  and pushes to `main`.
 - `requirements.txt` with pinned pip-only dependencies (numpy, scipy, quadprog, gtsam, ultralytics).
 - `scripts/bump_version.sh` to set one version across all packages.
 - Repository README with build, test, launch and configuration instructions.

@@ -129,8 +129,3 @@ def remaining_ahead(xy, pos) -> float:
     t = np.clip(np.sum((pos - a) * ab, axis=1) / np.maximum(np.sum(ab * ab, axis=1), 1e-12), 0.0, 1.0)
     i = int(np.argmin(np.linalg.norm(pos - (a + t[:, None] * ab), axis=1)))
     return max(float(np.sum(seg) - np.sum(seg[:i]) - t[i] * seg[i]), 0.0)
-
-
-def polyline_length(xy: np.ndarray) -> float:
-    """Sum of segment lengths of a polyline (0 for fewer than two points)."""
-    return float(np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1))) if len(xy) > 1 else 0.0

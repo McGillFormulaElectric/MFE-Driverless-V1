@@ -20,6 +20,6 @@ Local changes (only these):
   `from . import X`, and the matching `trajectory_planning_helpers.X.` prefixes removed, so the files work inside
   `mfe_path_planning.third_party.tph`.
 - `opt_min_curv.py`: the top-level `import quadprog` is moved into the function that calls it, so importing the
-  package does not need quadprog. quadprog is needed only by `mfe_path_planning.raceline.build`.
+  package does not need quadprog. quadprog is needed only by `mfe_path_planning.core.raceline.build`.
 
 Not vendored: the plotting and `__main__` test blocks (matplotlib is imported only there).

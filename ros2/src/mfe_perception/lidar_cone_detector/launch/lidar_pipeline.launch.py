@@ -5,9 +5,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -63,17 +62,6 @@ def generate_launch_description():
         ],
     )
 
-    # Convert to LaserScan for use in 2D Ceres Solver slam_toolbox (Graph-SLAM based)
-    launch_pc_to_ls = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([ 
-                FindPackageShare('lidar_cone_detector'),
-                'launch',
-                'pointcloud_to_laserscan.launch.py'
-            ])
-        ])
-    ) 
-
     load_file_arg = DeclareLaunchArgument(
         'load_file',
         default_value='False',
@@ -92,5 +80,4 @@ def generate_launch_description():
         file_loader_node,
         sliding_window_preprocessor_node,
         lidar_perception_node,
-        # launch_pc_to_ls,
     ])
