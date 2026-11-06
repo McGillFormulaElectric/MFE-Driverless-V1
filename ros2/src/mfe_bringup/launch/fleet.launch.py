@@ -40,7 +40,6 @@ from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
     LogInfo, RegisterEventHandler,
 )
-from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
