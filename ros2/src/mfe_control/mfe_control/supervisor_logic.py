@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-EARTH_RADIUS_M = 6_371_000.0
+from mfe_common.geometry import EARTH_RADIUS_M
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

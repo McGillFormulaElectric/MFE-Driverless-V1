@@ -4,6 +4,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 
+from mfe_common.geometry import EARTH_RADIUS_M
 from mfe_common.qos import SENSOR_QOS
 from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFilter
 
@@ -11,8 +12,6 @@ from sensor_msgs.msg import Imu, NavSatFix
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
 
-
-R_EARTH = 6_371_000.0  # metres
 
 # ---------------------------------------------------------------------------
 # 8-state EKF: [x, y, θ, v, ω, b_gps_x, b_gps_y, b_gyro]
@@ -388,8 +387,8 @@ class ExtendedKalmanFilterNode(Node):
         lat0_rad, lon0_rad = self._gps_origin
 
         # Flat-earth ENU conversion
-        x_local = R_EARTH * math.cos(lat0_rad) * (lon_rad - lon0_rad)
-        y_local = R_EARTH * (lat_rad - lat0_rad)
+        x_local = EARTH_RADIUS_M * math.cos(lat0_rad) * (lon_rad - lon0_rad)
+        y_local = EARTH_RADIUS_M * (lat_rad - lat0_rad)
 
         # GPS update: z=[x_meas, y_meas], H accounts for GPS bias states
         z_gps = np.array([x_local, y_local])
