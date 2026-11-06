@@ -53,15 +53,21 @@ class ExtendedKalmanFilter:
         self.exec_times_pred = []
         self.exec_times_upd = []
 
-    def predict(self, u, dt):
-        """Run the prediction step of the Extended Kalman Filter."""
+    def predict(self, u, dt, process_noise=None):
+        """
+        Run the prediction step of the Extended Kalman Filter.
+
+        process_noise is the process noise covariance for this step (e.g. one that depends on
+        dt). It defaults to self.R.
+        """
         start_time = time.time()
         # Predict state estimate (mu)
         mu_prior = self.mu.copy()
         self.mu = self.g(self.mu, u, dt)
         # Predict covariance (Sigma) — G evaluated at prior mu, before state update
         G = self.G(mu_prior, u, dt)
-        self.Sigma = G @ self.Sigma @ G.T + self.R
+        R = self.R if process_noise is None else process_noise
+        self.Sigma = G @ self.Sigma @ G.T + R
 
         end_time = time.time()
         execution_time = end_time - start_time

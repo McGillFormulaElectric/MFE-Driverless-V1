@@ -3,6 +3,9 @@
 Usage: ros2 launch mfe_validation validation.launch.py mission:=acceleration track_csv:=<path>
 Nothing here publishes /cmd or /planning/*, so it cannot affect the car.
 """
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration as LC
@@ -28,5 +31,7 @@ def generate_launch_description():
                          ('/planning/centerline', '/validation/centerline'),
                          ('/planning/track_left', '/validation/track_left'), ('/planning/track_right', '/validation/track_right')]),
         Node(package='mfe_validation', executable='compare_node', name='compare_node', output='screen',
-             parameters=[{'log_csv': LC('log_csv')}]),
+             parameters=[os.path.join(get_package_share_directory('mfe_validation'), 'config',
+                                      'compare_node_params.yaml'),
+                         {'log_csv': LC('log_csv')}]),
     ])

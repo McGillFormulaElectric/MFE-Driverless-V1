@@ -1,0 +1,4 @@
+/**:
+  ros__parameters:
+    camera_frame: "zed_depth_camera_frame"
+    camera_frame_is_optical: false

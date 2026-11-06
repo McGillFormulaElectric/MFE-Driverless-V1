@@ -1,3 +1,6 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -69,6 +72,8 @@ def generate_launch_description():
             executable='xsens_noise_node',
             name='xsens_noise_node',
             output='screen',
+            parameters=[os.path.join(get_package_share_directory('mfe_eufs_sim'), 'config',
+                                     'xsens_noise_node_params.yaml')],
         ),
 
         # Static TFs from EUFS frames to the stack frames; adjust to sensor mounting.
