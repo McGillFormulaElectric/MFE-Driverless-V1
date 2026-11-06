@@ -105,10 +105,6 @@ class ConeDetectionNode(Node):
         self.processing_t = threading.Thread(target=self.object_predicting, daemon=True)
         self.processing_t.start()
 
-        # UNUSED: Start tracker thread
-        # self.object_tracking_t = threading.Thread(target=self.object_predicting, daemon=True)
-        # self.object_tracking_t.start()
-
     @staticmethod
     def _imgmsg_to_bgr(msg: Image) -> np.ndarray:
         """Convert sensor_msgs/Image to a contiguous BGR numpy array without cv_bridge."""
@@ -516,48 +512,8 @@ class ConeDetectionNode(Node):
         cloud.data = binary
 
         return cloud
-        
 
-    def object_tracking(self) -> None:
-        """
-        DEPRECATED WARNING: Not used currently.
 
-        Launch YOLO's tracker model on a continuous stream of frames coming from frame_generator().
-        The .track(...) call will loop internally over frames until shutdown.
-
-        Args:
-            None
-        
-         Returns:
-            None
-        """
-
-        for frame in self.frame_generator():
-
-            results = self.model.track(
-                source=frame,
-                tracker="bytetrack.yaml",
-                persist=True,
-                stream=True,
-                conf=self.conf,
-                iou=self.iou,
-                verbose=True
-            )
-
-            for result in results:
-                annotated_frame = result.plot()
-                cv2.imshow("YOLO11 Tracking", annotated_frame)
-
-                if ((result.boxes and result.boxes.is_track) and 
-                    self.cone_image_publisher.get_subscription_count()):
-                    
-                    boxes = result.boxes.xywh.cpu()
-                    track_ids = result.boxes.id.int().cpu().tolist()
-
-                    for frame_result in zip(boxes, track_ids):
-                        # Publish the results through ROS subscribers and publishers
-                        continue
-        
 def main(args=None):
     rclpy.init(args=args)
     node = ConeDetectionNode()
