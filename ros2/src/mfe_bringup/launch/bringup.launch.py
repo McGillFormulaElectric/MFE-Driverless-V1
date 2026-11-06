@@ -459,6 +459,8 @@ def generate_launch_description():
             executable='boundary_extractor',
             name='boundary_extractor',
             output='screen',
+            parameters=[os.path.join(get_package_share_directory('mfe_path_planning'), 'config',
+                                     'boundary_extractor_params.yaml')],
             condition=IfCondition(use_perception),
         )]
 
@@ -576,15 +578,19 @@ def generate_launch_description():
             executable='finish_detector_node',
             name='finish_detector',
             output='screen',
-            parameters=[{
-                'approach_x': ax,
-                'finish_x': fx,
-                'detect_fwd_min_m': 1.5,
-                'detect_fwd_max_m': 15.0,
-                'detect_lateral_m': 4.0,
-                'min_finish_points': 1,
-                **extra,
-            }],
+            parameters=[
+                os.path.join(get_package_share_directory('mfe_path_planning'), 'config',
+                             'finish_detector_node_params.yaml'),
+                {
+                    'approach_x': ax,
+                    'finish_x': fx,
+                    'detect_fwd_min_m': 1.5,
+                    'detect_fwd_max_m': 15.0,
+                    'detect_lateral_m': 4.0,
+                    'min_finish_points': 1,
+                    **extra,
+                },
+            ],
             remappings=[('/ekf/output', pt)],
         )]
 
