@@ -102,6 +102,20 @@ public:
         pub_debug_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/debug/gpu_objects", 10);
 
+        // One line that says which pipeline is active, and why the CPU one is used if it is.
+#if USE_GPU_PIPELINE
+        if (use_gpu_) {
+            cudaDeviceProp prop{};
+            cudaGetDeviceProperties(&prop, 0);
+            RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: GPU (CUDA device %s, sm %d%d)",
+                prop.name, prop.major, prop.minor);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: CPU PCL (%s)",
+                this->get_parameter("use_gpu").as_bool() ? "no device" : "use_gpu false");
+        }
+#else
+        RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: CPU PCL (built without CUDA)");
+#endif
         RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s",
             use_gpu_ ? "GPU (CUDA: raw unpack, NaN strip, motion correction, ROI, voxel, RANSAC ground, band, clustering)" : "Standard PCL (CPU)");
     }
