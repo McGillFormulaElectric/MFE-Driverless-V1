@@ -28,6 +28,7 @@ import time
 import numpy as np
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from mfe_common.geometry import quat_to_rot3
 from mfe_msgs.msg import Track  # noqa: F401
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, PointCloud2
@@ -40,15 +41,6 @@ PIXEL_MATCH_R  = 60.0   # px — max pixel distance to assign colour from camera
 EVAL_RADIUS    = 1.5    # m — GT ↔ detection association radius
 UNKNOWN        = 4
 COLOR_NAMES    = {0: 'BLUE', 1: 'YELLOW', 2: 'ORANGE_BIG', 3: 'ORANGE_SMALL', 4: 'UNKNOWN'}
-
-
-def _quat_to_rot3(qx, qy, qz, qw) -> np.ndarray:
-    """3×3 rotation matrix from unit quaternion."""
-    return np.array([
-        [1-2*(qy*qy+qz*qz),  2*(qx*qy-qw*qz),    2*(qx*qz+qw*qy)],
-        [2*(qx*qy+qw*qz),    1-2*(qx*qx+qz*qz),  2*(qy*qz-qw*qx)],
-        [2*(qx*qz-qw*qy),    2*(qy*qz+qw*qx),    1-2*(qx*qx+qy*qy)],
-    ], dtype=np.float64)
 
 
 def _extract_xyz(cloud: PointCloud2) -> np.ndarray:
@@ -160,7 +152,7 @@ class FusionEvaluator(Node):
             return None
         r = tf.transform.rotation
         t = tf.transform.translation
-        R = _quat_to_rot3(r.x, r.y, r.z, r.w)
+        R = quat_to_rot3(r.x, r.y, r.z, r.w)
         T = np.array([t.x, t.y, t.z])
         return R, T
 
@@ -216,7 +208,7 @@ class FusionEvaluator(Node):
 
         r = tf_cam.transform.rotation
         t = tf_cam.transform.translation
-        R = _quat_to_rot3(r.x, r.y, r.z, r.w)
+        R = quat_to_rot3(r.x, r.y, r.z, r.w)
         T = np.array([t.x, t.y, t.z])
 
         # Lift XY to XYZ (z=0 in base_footprint plane) then transform
