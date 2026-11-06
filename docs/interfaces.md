@@ -89,10 +89,32 @@ ros2 launch mfe_bringup bringup.launch.py slam:=none
 | `slam` | Starts | Pose topic for planner, pure pursuit, finish detector | `boundary_extractor` |
 |---|---|---|---|
 | `toolbox` (default) | `mfe_mapping/launch/slam.launch.py`: pointcloud_to_laserscan and slam_toolbox, only when `use_slam:=true` | `pose_topic` | on, if `use_perception:=true` |
-| `gtsam` | `mfe_validation/launch/slam.launch.py`: `slam_node` (same parameters as `lidar_only.launch.py`) | `/slam/odom` (`pose_topic` ignored) | off |
+| `gtsam` | `mfe_validation/launch/slam.launch.py`: `slam_node`, with the arguments below. Runs with `run_perception:=true` or `false` | `/slam/odom` (`pose_topic` ignored) | off |
 | `none` | nothing | `pose_topic` | on, if `use_perception:=true` |
 
 `use_slam` and `pose_topic` keep their meaning. `use_slam` only applies to `toolbox`.
+
+### Arguments for `slam:=gtsam`
+
+These pass through to `mfe_validation/launch/slam.launch.py`. Names and defaults are those of `lidar_only.launch.py`, so the same values give the same `slam_node` parameters. They are ignored by the other choices.
+
+| Argument | Default | `slam_node` parameter |
+|---|---|---|
+| `slam_lateral_vel` | `false` | `use_lateral_vel` (integrate INS lateral velocity) |
+| `color_mode` | `geometric` | `color_mode` |
+| `min_obs` | `2` | `min_obs_publish` |
+| `max_range` | `20.0` | `max_range` |
+| `publish_hz` | `5.0` | `publish_hz` |
+| `freeze` | `true` | `freeze` |
+| `odom_topic` | `/sim/xsens/state_odom` | `odom_topic` (odometry for yaw and speed) |
+
+`slam_lateral_vel` keeps lidar_only's name. The other names have no `slam_` prefix because bringup has no argument they would clash with. The cone topic is fixed to `/planning/cones` and the orange topic to `/planning/orange_cones`, as in the bringup route.
+
+With `slam:=gtsam` the LiDAR detector is not started. Under bringup it comes from the perception group (`run_perception:=true`, bringup's detector parameters). The harness instead starts it from `lidar_only.launch.py`, with its own parameters, so `run_perception:=false` is the usual setting.
+
+### Fleet
+
+`fleet.launch.py` takes `slam` and forwards it to the local bringup and to the remote compute and perception launches, like `pose_topic`. The `slam_*` tuning arguments above are not forwarded, so remote `gtsam` nodes use the defaults.
 
 ### Steps to add a SLAM implementation
 
