@@ -1,21 +1,14 @@
 # MFE25 Vehicle Constants
 
-Vehicle geometry, mass, powertrain, battery, aerodynamic and suspension values for MFE25, plus the control limits the stack uses. Physical values are taken from Pseudo-TwoTrack-LapSim / VehicleDefinitionsGUI.m (MFE25).
+Single source of truth for MFE25 geometry, mass, powertrain, and battery parameters.
+
+File: `ros2/src/mfe_bringup/config/vehicle.yaml`
 
 ---
 
-## What the stack loads
+## Why a central YAML?
 
-Only one file is read by a node: `ros2/src/mfe_bringup/config/vehicle.yaml`. It is a ROS 2 parameter file for `pure_pursuit_node`, and it holds the four values that node uses:
-
-| Parameter | Value | Unit |
-|-----------|-------|------|
-| `wheelbase` | 1.56 | m |
-| `max_steering_deg` | 28.0 | deg |
-| `max_lateral_accel` | 8.0 | m/s² |
-| `max_deceleration` | 10.0 | m/s² |
-
-The tables below are the full vehicle reference. Those values are not read by any node, so editing them has no effect on the stack. The loaded values are in the Control Limits section.
+All nodes that need vehicle dimensions (pure pursuit, EKF, path planner) load the same file at launch rather than hard-coding values. Change one number in `vehicle.yaml` — every node picks it up on next launch.
 
 ---
 
@@ -116,20 +109,19 @@ Cell specs: 6 Ah, 3.7 V nominal, 4.2 V max, 150 A peak discharge.
 
 ## Control Limits
 
-These are the values `bringup.launch.py` loads into `pure_pursuit_node` from `vehicle.yaml`. The physical URDF steering joint limit is ±29.8° (0.52 rad), so `max_steering_deg` stays under it.
+These are the **software defaults** loaded by `pure_pursuit_node`. Physical URDF steering joint limit is ±29.8° (0.52 rad).
 
 | Parameter | Value | Unit | Notes |
 |-----------|-------|------|-------|
-| `max_steering_deg` | 28.0 | deg | Overridable with the `MAX_STEER_DEG` environment variable |
+| `max_steering_deg` | 28.0 | deg | Stay under URDF joint limit of ±29.8° |
 | `max_lateral_accel` | 8.0 | m/s² | Corner speed: v = √(a × R) |
 | `max_deceleration` | 10.0 | m/s² | |
 
-Mission-specific values are set in `bringup.launch.py` on top of the file, together with the lookahead (`ld_min` is set to the same value):
+Mission-specific overrides applied on top of these defaults:
 
 | Mission | max_speed | lookahead | Notes |
 |---------|-----------|-----------|-------|
-| autocross / trackdrive | 8.0 m/s | 5.0 m | `speed_smooth_window` 5 (`SPEED_SMOOTH`) |
-| peanut | 6.0 m/s | 3.5 m | Tighter lookahead for the figure-8 crossing |
+| autocross / trackdrive | 10.0 m/s | 7.0 m | max_lateral_accel overridden to 5.0 m/s² |
 | skidpad | 4.5 m/s | 3.0 m | Tight 9.1 m radius circles |
 | acceleration | 13.0 m/s | 8.0 m | Full throttle straight |
 
@@ -138,16 +130,16 @@ Mission-specific values are set in `bringup.launch.py` on top of the file, toget
 ## How vehicle.yaml is loaded
 
 ```python
-# bringup.launch.py, in generate_launch_description()
-vehicle_params_file = os.path.join(
+# In bringup.launch.py
+_VEHICLE_YAML = os.path.join(
     get_package_share_directory('mfe_bringup'), 'config', 'vehicle.yaml'
 )
 
-# in _make_pure_pursuit(context): the mission values and env overrides go in a dict loaded after the file
+# Node using it (e.g. pure_pursuit)
 Node(
     package='mfe_control',
     executable='pure_pursuit_node',
-    parameters=[vehicle_params_file, params],
+    parameters=[_VEHICLE_YAML, mission_params],  # mission_params override
 )
 ```
 

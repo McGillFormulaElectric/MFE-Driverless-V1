@@ -7,7 +7,7 @@ Out: /slam/odom (start-relative frame), cones_topic (mfe_msgs/Track of confirmed
 Colours: color_mode='gt' comes from /ground_truth/track_colored (validation only; positions never use ground truth);
 'geometric' is left=blue/right=yellow; any other mode leaves the cones UNKNOWN. The camera colour modes (yolo,
 orange_only, yolo_lidar) are coloured by cone_colour_fusion_node from the cone map this node publishes, so for them
-cones_topic is the uncoloured map (see docs/interfaces.md).
+cones_topic is the uncoloured map.
 Accuracy against /ground_truth/state_odom is logged for scoring only.
 """
 import math

@@ -85,7 +85,7 @@ No reverse: speed clamped to ≥ 0.
 | `/perception/cones_uncolored` | PointCloud2 (out, centroids) |
 | `/lidar/pcl/objects` | PointCloud2 (out, for LaserScan) |
 
-**CUDA note**: the CUDA filters in `src/gpu` are built only when a CUDA compiler is found. They run when `use_gpu` is true and a CUDA device is present; otherwise the node uses CPU PCL.
+**CUDA note**: `#ifdef PLATFORM_JETSON` compile-time flag enables CUDA-PCL. x86_64 desktop always uses CPU PCL.
 
 ---
 
@@ -211,7 +211,7 @@ Not launched when `use_perception:=false` (no_perception mode).
 
 | Topic | Type | Rate |
 |-------|------|------|
-| `/control/command` | fs_msgs/ControlCommand | 50 Hz |
+| `/control/command` | fs_msgs/ControlCommand | 20 Hz |
 
 ### Velocity profile algorithm
 

@@ -167,6 +167,7 @@ bash /root/Develop/MFE-Driverless-V1/scripts/launch_sim.sh [track] [mode] [gui]
 | `boa_constrictor` | boa_constrictor | autocross | — |
 | `comp_2021` | comp_2021 | autocross | — |
 | `hairpins` | hairpins_increasing_difficulty | autocross | — |
+| `rand` | rand | autocross | Random layout |
 
 ### Starting the car (after the sim launches)
 

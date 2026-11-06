@@ -39,7 +39,7 @@ docker build -t mfe-driverless-sim Docker/fs-driverless-sim
 
 **Entrypoint**: `Docker/fs-driverless-sim/entrypoint.sh` — sources ROS 2 setup files.
 
-**CUDA note**: the desktop sim image uses CPU PCL. On Jetson, build natively without Docker.
+**CUDA note**: `cuda-pcl` (NVIDIA-AI-IOT) ships ARM aarch64 `.so` files only. No x86_64 build exists. The desktop sim image uses CPU PCL. On Jetson, build natively without Docker.
 
 ---
 
@@ -165,7 +165,7 @@ ros2 service call /ros_can/set_mission eufs_msgs/srv/SetCanState '{ami_state: 13
 The `Docker/jetson/Dockerfile` targets the Jetson Orin Nano (aarch64, JetPack 6.x). It does not use the EUFS sim or Gazebo. Instead it runs the hardware stack:
 
 - Sensor drivers (`mfe_sensors`)
-- LiDAR cone detector (CUDA filters in `src/gpu`, built with `-DPLATFORM_JETSON=ON`)
+- LiDAR cone detector (compiled with `-DPLATFORM_JETSON=ON` for CUDA-PCL)
 - Vision cone detector (YOLO on GPU)
 - Path planning and control stack
 

@@ -81,8 +81,7 @@ The stack has two entry points, one per platform. Both take the same two inputs:
 `platform` (`sim` or `car`, set by the script) and `sensors`, a comma list of
 `lidar,camera,imu_gps,can` (default: all four). In the sim every listed sensor is emulated the way
 the car's sensor behaves, so a sim run and a car run with the same sensors use the same stack
-configuration. See [docs/interfaces.md](docs/interfaces.md#platform-and-sensors) for what each
-sensor switches on and off.
+configuration.
 
 ### Simulation (desktop with an NVIDIA GPU)
 
@@ -219,9 +218,7 @@ scripts/bump_version.sh X.Y.Z
 
 The script does not commit or tag. Release steps:
 
-- Record changes under the current version heading in `CHANGELOG.md` as they are merged.
-- When a release is merged to `main`, bump the version, move the changelog entries to a new
-  section, and tag the merge commit `vX.Y.Z`.
+- When a release is merged to `main`, bump the version and tag the merge commit `vX.Y.Z`.
 - Builds that ran on the car are tagged `car-YYYY-MM-DD` so they can be traced back to the code.
 
 Python dependencies are pinned in `requirements.txt`. Docker images are defined in `Docker/`.

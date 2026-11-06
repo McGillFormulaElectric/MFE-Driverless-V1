@@ -47,7 +47,7 @@ McGill Formula Electric Driverless V1 — system overview, data-flow, TF frames,
                /planning/centerline  (nav_msgs/Path)
                         │
                ┌────────▼────────────┐
-               │  pure_pursuit_node  │  50 Hz control loop
+               │  pure_pursuit_node  │  20 Hz control loop
                └────────┬────────────┘
                         │
                /control/command  (fs_msgs/ControlCommand)

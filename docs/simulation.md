@@ -18,7 +18,7 @@ Arguments (all optional, all positional):
 
 | Argument | Default | Options |
 |----------|---------|---------|
-| track | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `its_a_mess` |
+| track | `accel` | `accel`, `skidpad`, `peanut`, `small_track`, `rectangle`, `autocross`, `garden_light`, `boa_constrictor`, `comp_2021`, `hairpins`, `rand`, `its_a_mess` |
 | mode | `no_perception` | `no_perception`, `perception` |
 | gui | `gui` | `gui`, `nogui` |
 | laps | `1` | any positive integer, or `0` for endless |
@@ -57,6 +57,7 @@ bash scripts/docker_run.sh small_track no_perception nogui 0
 | `boa_constrictor` | autocross | Closed loop | Spawn at origin |
 | `comp_2021` | autocross | Competition track | Spawn at origin |
 | `hairpins` | autocross | Tight hairpins | Uses `hairpins_increasing_difficulty` track |
+| `rand` | autocross | Random | Spawn at origin |
 | `its_a_mess` | autocross | Complex | Spawn at origin |
 
 ---
@@ -69,8 +70,6 @@ The bridge reads ALL track cones directly from Gazebo world state and forwards t
 
 - `use_sim_cones_directly:=true` → bridge publishes `/planning/cones` directly
 - `use_perception:=false` → boundary_extractor not launched (prevents dual publishing)
-- `sim_cones_direct:=true` (set by `scripts/launch_sim.sh`) → bringup refuses to launch with
-  `use_perception:=true`, so the two publishers of `/planning/cones` cannot run together
 - `pose_topic:=/sim/xsens/state_odom` → Gazebo ground truth pose, noise-corrupted to be
   representative of the real Xsens MTi-670G (see `mfe_eufs_sim/xsens_noise_node.py`) — do not
   use raw `/ground_truth/state_odom`, it's noiseless

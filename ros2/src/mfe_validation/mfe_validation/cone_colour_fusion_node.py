@@ -1,4 +1,4 @@
-"""Camera colour for the SLAM cone map: the stage after slam_node (see docs/interfaces.md).
+"""Camera colour for the SLAM cone map: the stage after slam_node.
 
 In : slam_cones_topic (mfe_msgs/Track, the SLAM cone map; UNKNOWN colours in the camera modes),
      odom_topic (/slam/odom, to place each camera frame where the car was when it was taken),

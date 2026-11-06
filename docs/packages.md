@@ -18,7 +18,6 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 | `vision_model_path` | `~/mfe_models/yolo/yolov8s/weights/best.pt` | Path to YOLO weights; empty = skip |
 | `pose_topic` | `/ekf/output` | Odometry source; use `/sim/xsens/state_odom` in sim (not raw ground truth) |
 | `use_perception` | `true` | Set `false` in no_perception sim mode |
-| `sim_cones_direct` | `false` | Set `true` with `use_sim_cones_directly:=true` on mfe_eufs_sim; errors if `use_perception:=true` |
 | `endless` | `false` | Set `true` to disable finish detector |
 | `num_laps` | `1` | Stop after this many lap crossings |
 
@@ -61,7 +60,7 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 
 **Subscribes**: `/planning/centerline` (Path), `/ekf/output` (Odometry), `/planning/mission_finished` (Bool)
 
-**Publishes**: `/control/command` (fs_msgs/ControlCommand) at 50 Hz
+**Publishes**: `/control/command` (fs_msgs/ControlCommand) at 20 Hz
 
 **Speed profile**: scans upcoming waypoints for curvature, computes corner speed target from `v = sqrt(a_lat * R)`, brakes if within stopping distance, full throttle otherwise.
 
@@ -107,7 +106,7 @@ Xsens MTi-670G GNSS/INS via `mfe_sensors/launch/xsens_mti.launch.py` on real har
 
 **Config file**: `config/ekf_params.yaml`
 
-**Implementation**: `mfe_state_estimation/filters/extended_kalman_filter.py` — custom EKF.
+**Implementation**: `mfe_state_estimation/filters/extended_kalman_filter.py` — custom EKF with IMU prediction model in `models/imu_prediction_model.py`.
 
 ---
 
@@ -180,8 +179,10 @@ Hardware sensor drivers (not used in simulation). Contains:
   `xsens_mti_ros2_driver` package — see [[jetson_setup]]).
   Publishes `/imu` (sensor_msgs/Imu) + `/gps` (sensor_msgs/NavSatFix), consumed by
   `mfe_state_estimation`'s EKF node.
+- Simulation stub (`sim_lidar_node`) — built and wired into `sensors.launch.py`
 
-**Launch files**: `launch/xsens_mti.launch.py` (GNSS/INS, plain node — included from `mfe_bringup/bringup.launch.py`
+**Launch files**: `launch/sensors.launch.py` (LiDAR/camera lifecycle-managed nodes),
+`launch/xsens_mti.launch.py` (GNSS/INS, plain node — included from `mfe_bringup/bringup.launch.py`
 under `use_ekf`, not lifecycle-managed)
 
 ---
@@ -190,17 +191,16 @@ under `use_ekf`, not lifecycle-managed)
 
 Alternative simulation interfaces (not the primary EUFS path):
 - `carmaker_node` / `carmaker_interface` — CarMaker co-simulation bridge
+- `fsds_node` (C++) — FS Driverless Sim interface
 
-**Launch files**: `launch/sim.launch.py`
+**Launch files**: `launch/sim.launch.py`, `launch/fs_driverless_sim.launch.py`
 
 ---
 
-## mfe_common
+## mfe_base
 
-Shared pure-Python helpers used by planning, control and validation:
-- `geometry.py` — yaw from quaternion, angle wrapping, arc length, point-cloud readers
-- `topics.py` — topic name constants
-- `qos.py` — named QoS profiles
+Shared utilities:
+- `utils/angle_conversions.py` — yaw ↔ quaternion helpers
 
 ---
 
