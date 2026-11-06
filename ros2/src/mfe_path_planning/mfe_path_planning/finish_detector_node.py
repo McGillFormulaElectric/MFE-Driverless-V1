@@ -32,6 +32,8 @@ _SPAWN_DEBOUNCE_M = 5.0        # gate passes before this much travel are ignored
 _GATE_CLUSTER_M = 8.0          # single-linkage distance between pylons of one gate
 _GATE_TRACK_M = 5.0            # a cluster keeps its pass state if its centroid moves less than this
 _GATE_HYSTERESIS_M = 2.0       # car must leave gate_enter_r + this before the next pass counts
+_GATE_NEW_PASS_TRAVEL_M = 20.0  # a gate first confirmed with the car already inside it counts as a pass after this much driving
+                                # (the camera only colours gate pylons ~6 m out, so at speed one can appear under the car)
 
 
 def _extract_xyz(msg: PointCloud2) -> np.ndarray:
@@ -114,6 +116,7 @@ class FinishDetectorNode(Node):
         self.create_subscription(Odometry, '/ekf/output', self._odom_cb, reliable_qos)
         if self._gate_crossings > 0:
             self.create_subscription(Track, '/planning/cones', self._cones_cb, sensor_qos)
+            self.create_subscription(Track, '/skidpad/cones', self._cones_cb, sensor_qos)   # skidpad runs publish the cone map here
 
         self._mission_completed_pub = self.create_publisher(
             Bool, '/ros_can/mission_completed', reliable_qos)
@@ -193,9 +196,11 @@ class FinishDetectorNode(Node):
     def _check_gate_passes(self, x: float, y: float) -> None:
         for g in self._gate_states:
             d = math.hypot(x - g['c'][0], y - g['c'][1])
+            new_under_car = False
             if g['inside'] is None:
                 g['inside'] = d <= self._gate_enter_r
-            elif not g['inside'] and d <= self._gate_enter_r:
+                new_under_car = g['inside'] and self._travel_m > _GATE_NEW_PASS_TRAVEL_M
+            if new_under_car or (not g['inside'] and d <= self._gate_enter_r):
                 g['inside'] = True
                 if self._travel_m > _SPAWN_DEBOUNCE_M:
                     self._gate_passes += 1
