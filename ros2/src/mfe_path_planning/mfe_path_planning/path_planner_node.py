@@ -200,7 +200,6 @@ class PathPlannerNode(Node):
         self._local = LocalPlanner(
             FSD_TYPES, self._planner, self._tracer, self._cones, self._lap_ban, self._side_votes, self._hint,
             self._pipeline, self._accel, unknown_mode=cfg.unknown_cone_mode,
-            colourless_raceline=cfg.colourless_raceline, colour_lap_raceline=cfg.colour_lap_raceline,
             colour_after_lap=cfg.colour_after_lap, pipeline_hysteresis=cfg.pipeline_hysteresis,
             accel_refit=cfg.accel_refit_midline)
 
