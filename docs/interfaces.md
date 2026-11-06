@@ -155,8 +155,6 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/lidar/pcl/input` | `sensor_msgs/PointCloud2` | `file_loader` (C++) | `ground_plane_removal` |
 | `/lidar/pcl/raw`, `/lidar/pcl/acc_cloud` | `sensor_msgs/PointCloud2` | none (raw); `lidar_preprocessor` (acc) | `lidar_preprocessor` (raw); none (acc) |
 | `/lidar/pcl/ground`, `/lidar/pcl/objects` | `sensor_msgs/PointCloud2` | `ground_plane_removal` | none |
-| `/sim/lidar` | `sensor_msgs/PointCloud2` | FSDS (external) | `sim_lidar_node` (not launched) |
-| `/mfe_sensors/lidar/data` | `sensor_msgs/PointCloud2` | `sim_lidar_node` (not launched) | none |
 | `/perception/cones_uncolored` | `sensor_msgs/PointCloud2` | `lidar_perception_node` | `path_planner_node`; `boundary_extractor`; `slam_node`; `fusion_evaluator` |
 | `/perception/cones_markers` | `visualization_msgs/MarkerArray` | `lidar_perception_node` | none (RViz) |
 | `/debug/gpu_objects` | `sensor_msgs/PointCloud2` | `lidar_perception_node` | none |

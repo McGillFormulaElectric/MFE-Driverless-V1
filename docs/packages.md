@@ -179,10 +179,8 @@ Hardware sensor drivers (not used in simulation). Contains:
   `xsens_mti_ros2_driver` package — see [[jetson_setup]]).
   Publishes `/imu` (sensor_msgs/Imu) + `/gps` (sensor_msgs/NavSatFix), consumed by
   `mfe_state_estimation`'s EKF node.
-- Simulation stub (`sim_lidar_node`) — built and wired into `sensors.launch.py`
 
-**Launch files**: `launch/sensors.launch.py` (LiDAR/camera lifecycle-managed nodes),
-`launch/xsens_mti.launch.py` (GNSS/INS, plain node — included from `mfe_bringup/bringup.launch.py`
+**Launch files**: `launch/xsens_mti.launch.py` (GNSS/INS, plain node — included from `mfe_bringup/bringup.launch.py`
 under `use_ekf`, not lifecycle-managed)
 
 ---
