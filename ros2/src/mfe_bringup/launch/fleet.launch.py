@@ -145,6 +145,12 @@ def generate_launch_description():
         description='Enable SLAM toolbox on perception machine.',
     )
 
+    slam_arg = DeclareLaunchArgument(
+        'slam', default_value='toolbox',
+        choices=['toolbox', 'gtsam', 'none'],
+        description='SLAM implementation, forwarded to all remote launches (see bringup).',
+    )
+
     use_ekf_arg = DeclareLaunchArgument(
         'use_ekf', default_value='true',
         description='Enable EKF on perception machine.',
@@ -171,6 +177,7 @@ def generate_launch_description():
         use_ekf     = context.launch_configurations.get('use_ekf', 'true')
         endless     = context.launch_configurations.get('endless', 'false')
         model_path  = context.launch_configurations.get('vision_model_path', '')
+        slam = context.launch_configurations.get('slam', 'toolbox')
 
         if role == 'none':
             return [LogInfo(msg='[fleet] local_role=none — no nodes launched locally')]
@@ -186,6 +193,7 @@ def generate_launch_description():
                 'mission':            mission,
                 'pose_topic':         pose_topic,
                 'use_slam':           use_slam,
+                'slam':               slam,
                 'use_ekf':            use_ekf,
                 'endless':            endless,
                 'vision_model_path':  model_path,
@@ -207,12 +215,14 @@ def generate_launch_description():
         use_ekf          = context.launch_configurations.get('use_ekf', 'true')
         endless          = context.launch_configurations.get('endless', 'false')
         model_path       = context.launch_configurations.get('vision_model_path', '')
+        slam = context.launch_configurations.get('slam', 'toolbox')
 
-        # Common args forwarded to every remote launch
+        # Common args forwarded to every remote launch (slam also selects the planner pose route)
         common = (
             f'mission:={mission} '
             f'pose_topic:={pose_topic} '
-            f'endless:={endless}'
+            f'endless:={endless} '
+            f'slam:={slam}'
         )
 
         # SSH → compute Jetson (unless compute runs locally)
@@ -256,6 +266,7 @@ def generate_launch_description():
         mission_arg,
         pose_topic_arg,
         use_slam_arg,
+        slam_arg,
         use_ekf_arg,
         endless_arg,
         vision_model_arg,
