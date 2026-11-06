@@ -93,7 +93,7 @@ echo "── [4/7] Python dependencies ─────────────�
 # =============================================================================
 pip3 install --upgrade pip
 pip3 install uv
-uv pip install --system "numpy<2" scipy scikit-learn icecream
+uv pip install --system "numpy<2" scipy scikit-learn icecream numba
 
 # ft-fsd-path-planning (used by path_planner_node)
 FSD_DIR=$DEVELOP_DIR/ft-fsd-path-planning
