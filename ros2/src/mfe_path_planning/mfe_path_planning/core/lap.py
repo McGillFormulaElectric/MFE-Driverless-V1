@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 
 from mfe_path_planning.core.paths import clearance_guard, closed_resample, extend_trail, midpoint_walk, smooth_cyclic
-from mfe_path_planning.core.racing_line import _min_curvature_path as min_curvature_path
+from mfe_path_planning.core.raceline import _min_curvature_path as min_curvature_path
 
 
 def lap_return_banned(cone_keys, centre_xy, radius_m) -> set:

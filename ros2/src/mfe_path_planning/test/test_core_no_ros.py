@@ -27,7 +27,7 @@ def _core_module_names():
 def test_core_has_modules():
     names = _core_module_names()
     for expected in ('accel', 'boundary_tracer', 'cone_map', 'colour', 'finish', 'jump_gate', 'lap', 'params',
-                     'paths', 'planning', 'raceline', 'raceline_runner', 'racing_line', 'skidpad'):
+                     'paths', 'planning', 'raceline', 'raceline_runner', 'skidpad'):
         assert expected in names, expected
 
 

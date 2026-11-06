@@ -12,7 +12,7 @@ import numpy as np
 
 from mfe_path_planning.core.cone_map import CONE_BEHIND_M, bucket_counts
 from mfe_path_planning.core.paths import cone_arrays
-from mfe_path_planning.core.racing_line import _min_curvature_path
+from mfe_path_planning.core.raceline import _min_curvature_path
 
 OFF_MAP_M = 20.0          # car this far from every mapped cone: off track, publish nothing
 COLOUR_LOG_EVERY = 50     # colour laps: summary log period (cycles)
