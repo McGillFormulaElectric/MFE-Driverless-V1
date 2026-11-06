@@ -24,14 +24,10 @@ class PlannerParams:
     #   fasttube      - uncoloured cones go to ft-fsd unchanged; its own sorting picks the sides
     #   colour_hint   - trace always (colours stripped); cone colours only vote which traced wall is left/right
     unknown_cone_mode: str = 'trace'
-    # Racing-line optimiser on colourless (traced) paths. Off by default: traced paths are short and the
-    # optimiser's ~0.27 s per cycle made the path lag the car.
-    colourless_raceline: bool = False
     # Colour laps (local missions, unknown_cone_mode colour_hint): from lap colour_after_lap on (laps counted on
     # /planning/laps_completed), plan with the camera's BLUE/YELLOW cones through the library backend instead of
     # the tracer. UNKNOWN cones take the side the lap-1 tracer gave their map cell. 0 = off.
     colour_after_lap: int = 0
-    colour_lap_raceline: bool = False        # racing-line optimiser on the colour-lap library path
     # Latch between the trace and library pipelines (local missions). Off: the pipeline is picked per cycle from the
     # visible coloured count, which flip-flops when YOLO colours appear/disappear at the window edge.
     #   min_coloured_each - trace -> library once the window holds this many BLUE and YELLOW cones each

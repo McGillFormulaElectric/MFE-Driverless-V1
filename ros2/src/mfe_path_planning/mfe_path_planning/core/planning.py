@@ -11,7 +11,7 @@ from typing import List, Optional
 import numpy as np
 
 from mfe_path_planning.core.cone_map import CONE_BEHIND_M, bucket_counts
-from mfe_path_planning.core.paths import clamp_to_corridor, cone_arrays
+from mfe_path_planning.core.paths import cone_arrays
 from mfe_path_planning.core.racing_line import _min_curvature_path
 
 OFF_MAP_M = 20.0          # car this far from every mapped cone: off track, publish nothing
@@ -63,7 +63,7 @@ class LocalPlanner:
     """
 
     def __init__(self, types, planner, tracer, cones, lap_ban, side_votes, hint, pipeline, accel, *, unknown_mode,
-                 colourless_raceline, colour_lap_raceline, colour_after_lap, pipeline_hysteresis, accel_refit):
+                 colour_after_lap, pipeline_hysteresis, accel_refit):
         self.types = types
         self.planner = planner
         self.tracer = tracer
@@ -74,8 +74,6 @@ class LocalPlanner:
         self.pipeline = pipeline
         self.accel = accel
         self.unknown_mode = unknown_mode
-        self.colourless_raceline = colourless_raceline
-        self.colour_lap_raceline = colour_lap_raceline
         self.colour_after_lap = colour_after_lap
         self.pipeline_hysteresis = pipeline_hysteresis
         self.accel_refit = accel_refit
@@ -103,7 +101,7 @@ class LocalPlanner:
                 events.append(('info', f'COLOUR LAPS ON: laps_completed={ctx.laps_done} '
                                        f'(colour_after_lap={self.colour_after_lap}) t={ctx.now_s:.1f}s: planning with '
                                        f'camera BLUE/YELLOW cones via the library backend; side votes='
-                                       f'{len(self.side_votes)} cells, raceline={self.colour_lap_raceline}'))
+                                       f'{len(self.side_votes)} cells'))
             return self._plan_colour_lap(ctx, buckets, events)
 
         # colour_hint: always trace the walls (colours stripped); the colours only pick the left/right labels.
@@ -156,7 +154,7 @@ class LocalPlanner:
             # lap-1 lock-in optimises once) and a per-cycle optimiser pushes the replan period past pure
             # pursuit's stale threshold.
             if (not ctx.global_planning
-                    and (self.colourless_raceline or not colourless_native)
+                    and not colourless_native
                     and len(path_xy) > 3
                     and left_xy is not None and len(left_xy) > 3
                     and right_xy is not None and len(right_xy) > 3):
@@ -233,15 +231,11 @@ class LocalPlanner:
             path = self._backend_on_labels(xy, res, ctx, events)
             if path is None:
                 return Plan(events=events)
-        optimized = path
-        if self.colourless_raceline and len(path) > 3 and len(left) > 3 and len(right) > 3:
-            # the optimiser sizes its corridor from the nearest wall cone, which past the traced walls is the wrong cone
-            optimized = clamp_to_corridor(self._racing_line(path, left, right, events), path, left, right)
-        horizon = _horizon(optimized)
+        horizon = _horizon(path)
         events.append(('info', f'boundary tracer: left={len(left)} right={len(right)} '
                                f'gates={res.debug.get("n_gates")} labelled={res.debug.get("n_labelled")} '
                                f'horizon={horizon:.1f} m', {'throttle_duration_sec': 2.0}))
-        return Plan(publish=True, centerline=optimized, left=left, right=right, horizon=horizon,
+        return Plan(publish=True, centerline=path, left=left, right=right, horizon=horizon,
                     cycles=[dict(n_cones=len(xy), reason='ok', dbg=self.tracer.debug, horizon=horizon)],
                     events=events)
 
@@ -279,10 +273,6 @@ class LocalPlanner:
             return sub
         path_xy, left_xy, right_xy = result
         centerline = np.array(path_xy)[:, 1:3]
-        if (self.colour_lap_raceline and not ctx.global_planning
-                and len(path_xy) > 3 and left_xy is not None and len(left_xy) > 3
-                and right_xy is not None and len(right_xy) > 3):
-            centerline = self._racing_line(centerline, np.array(left_xy)[:, :2], np.array(right_xy)[:, :2], events)
         horizon = _horizon(centerline)
         self.colour_cycles += 1
         self.colour_cam_sum += n_cam
