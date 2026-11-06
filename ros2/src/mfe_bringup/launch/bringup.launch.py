@@ -36,7 +36,7 @@ from ament_index_python.packages import (
     get_package_prefix, get_package_share_directory, PackageNotFoundError,
 )
 
-from mfe_common.topics import SLAM_ODOM
+from mfe_common.topics import CAN_WHEEL_SPEED, SLAM_ODOM
 
 # Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
 GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
@@ -158,10 +158,14 @@ def _resolve_derived_defaults(context):
     """Fill the empty-default arguments from platform and sensors. Explicit values win."""
     sensors = _sensor_set(context)
     car = _is_car(context)
+    sim = _platform(context) == 'sim'
+    use_ekf = context.launch_configurations.get('use_ekf') or (
+        'true' if 'imu_gps' in sensors else 'false')
     derived = {
-        'use_ekf': 'true' if 'imu_gps' in sensors and _platform(context) != 'sim' else 'false',
+        'use_ekf': 'true' if 'imu_gps' in sensors else 'false',
         'slam': 'toolbox' if 'imu_gps' in sensors else 'gtsam',
-        'odom_topic': '/ekf/output' if car else '/sim/xsens/state_odom',
+        'odom_topic': ('/ekf/output' if car or (sim and use_ekf == 'true')
+                       else '/sim/xsens/state_odom'),
     }
     for name, value in derived.items():
         if not context.launch_configurations.get(name):
@@ -371,8 +375,8 @@ def generate_launch_description():
         'use_ekf',
         default_value='',
         description=(
-            'Launch the GPS+IMU EKF node. Empty: on when imu_gps is in sensors and platform is not '
-            'sim (the sim has no /imu or /gps yet). Set false in sim when using '
+            'Launch the GPS+IMU EKF node. Empty: on when imu_gps is in sensors, in sim too (the '
+            'sim emulates /imu and /gps). Set false in sim when using '
             'pose_topic:=/sim/xsens/state_odom (EKF GPS-origin frame does not align with the '
             'Gazebo world/TF map frame).'
         ),
@@ -486,10 +490,10 @@ def generate_launch_description():
                                'lidar_perception_node_params.yaml')]
         if _platform(context) != 'legacy':
             sim = _platform(context) == 'sim'
+            ekf_on = context.launch_configurations.get('use_ekf') == 'true'
             params.append({
-                'enable_motion_distortion': context.launch_configurations.get('use_ekf') == 'true'
-                or sim,
-                'odom_topic': '/sim/xsens/state_odom' if sim else '/ekf/output',
+                'enable_motion_distortion': ekf_on or sim,
+                'odom_topic': '/sim/xsens/state_odom' if sim and not ekf_on else '/ekf/output',
             })
         return [Node(
             package='lidar_cone_detector',
@@ -550,13 +554,13 @@ def generate_launch_description():
     gtsam_action = OpaqueFunction(function=_make_gtsam)
 
     # --------------------------------------------------------------------------
-    # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
+    # Sensors — Xsens MTi-670G GNSS/INS (car only; platform:=sim emulates it in mfe_eufs_sim)
     # Publishes: /imu (sensor_msgs/Imu), /gps (sensor_msgs/NavSatFix) — feeds ekf_node below.
     # Gated on use_ekf since that's the only consumer of these topics.
     # --------------------------------------------------------------------------
     def _make_xsens(context):
         if context.launch_configurations.get('use_ekf') != 'true' \
-                or not _start_drivers(context):
+                or _platform(context) == 'sim' or not _start_drivers(context):
             return []
         return [IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -572,8 +576,9 @@ def generate_launch_description():
     # State estimation — Extended Kalman Filter (custom MFE node)
     # Subscribes: /imu/data (Imu), /gps (NavSatFix)
     # Publishes:  /ekf/output (nav_msgs/Odometry)
-    # Disabled in sim (use_ekf:=false) when pose_topic:=/sim/xsens/state_odom —
-    # EKF GPS origin ≠ Gazebo world frame so EKF pose cannot be used with TF-derived cones.
+    # In sim the EKF runs on the emulated /imu and /gps, like the car. launch_sim.sh still passes
+    # use_ekf:=false with pose_topic:=/sim/xsens/state_odom; that disables it there. The EKF GPS
+    # origin is not the Gazebo world frame, so the EKF pose cannot be used with TF-derived cones.
     # --------------------------------------------------------------------------
     ekf_params_file = os.path.join(
         get_package_share_directory('mfe_state_estimation'), 'config', 'ekf_params.yaml'
@@ -584,6 +589,9 @@ def generate_launch_description():
 
     def _make_ekf(context):
         params = [ekf_params_file]
+        if _platform(context) in ('sim', 'car'):
+            # Wheel speed from the CAN role: the CAN node on the car, the sim bridge in sim.
+            params.append({'wheelspeed_topic': CAN_WHEEL_SPEED})
         if _is_car(context):
             params.append({'publish_tf': True})   # odom -> base_footprint, see _make_car_tf
         return [Node(
