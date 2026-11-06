@@ -21,6 +21,8 @@ config/cyclone_tailscale.xml (or be on the same LAN for multicast).
 
 import os
 
+import yaml
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, GroupAction, IncludeLaunchDescription, LogInfo,
@@ -49,7 +51,30 @@ _FINISH_X = {
 }
 
 
-def _make_vision_node(model_path_str: str) -> list:
+def _hardware(context) -> bool:
+    return context.launch_configurations.get('hardware', 'false').lower() == 'true'
+
+
+def _load_sensor_mounts() -> dict:
+    path = os.path.join(get_package_share_directory('mfe_bringup'), 'config', 'sensor_mounts.yaml')
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def _static_tf_node(parent: str, child: str, pose: dict) -> Node:
+    return Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name=f'{child}_tf_pub',
+        arguments=['--x', str(pose['x']), '--y', str(pose['y']), '--z', str(pose['z']),
+                   '--roll', str(pose['roll']), '--pitch', str(pose['pitch']),
+                   '--yaw', str(pose['yaw']),
+                   '--frame-id', parent, '--child-frame-id', child],
+        output='screen',
+    )
+
+
+def _make_vision_node(model_path_str: str, hardware: bool) -> list:
     """
     Return a list of launch actions for the vision cone detector.
 
@@ -62,6 +87,13 @@ def _make_vision_node(model_path_str: str) -> list:
             'model_path is empty. Pass model_path:=<path/to/weights.pt> to enable.'
         ))]
 
+    node_params = {
+        'model_path': model_path_str,
+        'depth_callback': False,
+    }
+    if hardware:
+        node_params['camera_frame'] = _load_sensor_mounts()['camera_frame']
+
     return [Node(
         package='vision_cone_detector',
         executable='cone_detection_node',
@@ -70,10 +102,7 @@ def _make_vision_node(model_path_str: str) -> list:
         parameters=[
             os.path.join(get_package_share_directory('vision_cone_detector'), 'config',
                          'cone_detection_node_params.yaml'),
-            {
-                'model_path': model_path_str,
-                'depth_callback': False,
-            },
+            node_params,
         ],
         remappings=[
             # vision detector subscribes to 'image/input'; camera publishes /camera/image_raw
@@ -157,6 +186,17 @@ def generate_launch_description():
         description=(
             'Launch boundary_extractor (LiDAR + camera fusion). '
             'Set false in no_perception sim mode to avoid dual publishing on /planning/cones.'
+        ),
+    )
+
+    hardware_arg = DeclareLaunchArgument(
+        'hardware',
+        default_value='false',
+        description=(
+            'Real car. Publishes the TF tree the stack needs and points the cone detector at the '
+            'camera frame: base_footprint -> sensors (config/sensor_mounts.yaml), map -> odom '
+            '(identity unless slam_toolbox publishes it), odom -> base_footprint (EKF). '
+            'Leave false in sim: the EUFS launch and mfe_eufs_sim provide those transforms.'
         ),
     )
 
@@ -322,9 +362,6 @@ def generate_launch_description():
     record_bag = LaunchConfiguration('record_bag')
     bag_output_dir = LaunchConfiguration('bag_output_dir')
 
-    # NOTE: Static TF publishers (base_footprint → velodyne, base_footprint → zed_camera_center)
-    # are published by mfe_eufs_sim.launch.py in simulation.  In hardware mode add them here.
-
     # --------------------------------------------------------------------------
     # Perception — LiDAR cone detector (C++)
     # --------------------------------------------------------------------------
@@ -357,7 +394,7 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     vision_node_action = OpaqueFunction(
         function=lambda context: _make_vision_node(
-            context.launch_configurations.get('vision_model_path', '')
+            context.launch_configurations.get('vision_model_path', ''), _hardware(context)
         )
     )
 
@@ -422,15 +459,48 @@ def generate_launch_description():
     vehicle_params_file = os.path.join(
         get_package_share_directory('mfe_bringup'), 'config', 'vehicle.yaml'
     )
-    ekf_node = Node(
-        package='mfe_state_estimation',
-        executable='extended_kalman_filter_node',
-        name='ekf_node',
-        output='screen',
-        parameters=[ekf_params_file],
-        remappings=[('/imu/data', '/imu')],
-        condition=IfCondition(use_ekf),
-    )
+
+    def _make_ekf(context):
+        params = [ekf_params_file]
+        if _hardware(context):
+            params.append({'publish_tf': True})   # odom -> base_footprint, see _make_hardware_tf
+        return [Node(
+            package='mfe_state_estimation',
+            executable='extended_kalman_filter_node',
+            name='ekf_node',
+            output='screen',
+            parameters=params,
+            remappings=[('/imu/data', '/imu')],
+            condition=IfCondition(use_ekf),
+        )]
+
+    ekf_node = OpaqueFunction(function=_make_ekf)
+
+    # --------------------------------------------------------------------------
+    # Hardware TF (hardware:=true only). Sim gets these from the EUFS launch and mfe_eufs_sim.
+    #   base_footprint -> each frame in config/sensor_mounts.yaml (static)
+    #   map -> odom: identity (static), unless slam_toolbox publishes it (slam:=toolbox with
+    #                use_slam:=true). Never two publishers of map -> odom.
+    #   odom -> base_footprint: published by ekf_node (publish_tf), not here.
+    # Runs in the perception group: the sensors and the EKF live on the perception machine.
+    # --------------------------------------------------------------------------
+    def _make_hardware_tf(context):
+        if not _hardware(context):
+            return []
+        mounts = _load_sensor_mounts()
+        actions = [_static_tf_node('base_footprint', frame, pose)
+                   for frame, pose in mounts['frames'].items()]
+        slam_toolbox_publishes_map_odom = (
+            context.launch_configurations.get('slam', 'toolbox') == 'toolbox'
+            and context.launch_configurations.get('use_slam', 'true').lower() == 'true'
+        )
+        if not slam_toolbox_publishes_map_odom:
+            actions.append(_static_tf_node('map', 'odom', {
+                'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
+            }))
+        return actions
+
+    hardware_tf_action = OpaqueFunction(function=_make_hardware_tf)
 
     # --------------------------------------------------------------------------
     # Path planning — Boundary extractor (LiDAR + camera fusion)
@@ -671,6 +741,7 @@ def generate_launch_description():
     perception_group = GroupAction(
         condition=IfCondition(run_perception),
         actions=[
+            hardware_tf_action,         # hardware:=true only
             lidar_perception_node,
             vision_node_action,         # skipped unless vision_model_path is set
             slam_action,                # slam:=toolbox
@@ -708,6 +779,7 @@ def generate_launch_description():
         planner_params_arg,
         vision_model_arg,
         pose_topic_arg,
+        hardware_arg,
         use_perception_arg,
         endless_arg,
         num_laps_arg,
