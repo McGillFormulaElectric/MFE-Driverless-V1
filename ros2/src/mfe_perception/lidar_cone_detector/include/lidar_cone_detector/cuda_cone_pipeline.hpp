@@ -21,14 +21,10 @@ struct GpuConeParams {
   int min_cluster_size = 3, max_cluster_size = 150;
 };
 
-struct GpuMotion {        // ego motion and sweep model for distortion correction, runRaw only
+struct GpuMotion {        // ego motion for distortion correction, runRaw only
   bool enable = false;
-  float vx = 0, vy = 0, omega = 0;   // body twist in base_footprint: m/s, m/s, rad/s
-  float sensor_x = 0, sensor_y = 0;  // LiDAR position in base_footprint, m
-  float scan_period = 0.1f;          // s
-  float start_azimuth = 1.5707963f;  // rad; used when time_offset < 0
-  bool counter_clockwise = false;
-  int time_offset = -1;              // byte offset of the FLOAT32 "time" field, -1 if absent
+  float vx = 0, vy = 0, omega = 0;   // m/s, m/s, rad/s (sensor frame)
+  float scan_duration = 0.1f;        // s
 };
 
 struct GpuConeTiming {  // ms, CUDA event timings on the pipeline stream
