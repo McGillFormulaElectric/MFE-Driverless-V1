@@ -24,6 +24,7 @@ flowchart LR
   subgraph SLAM["SLAM (slam:= selects one)"]
     TB["slam_toolbox: map to odom TF"]
     GS["slam_node GTSAM: /slam/odom and cone map"]
+    CF["cone_colour_fusion_node: camera colours (camera colour modes)"]
   end
   subgraph Localisation
     EKF["ekf_node: /ekf/output"]
@@ -49,7 +50,11 @@ flowchart LR
   EKF -->|"pose_topic (slam:=toolbox, none)"| PP
   GS -->|"/slam/odom (slam:=gtsam)"| PP
   BE -->|"/planning/cones"| PP
-  GS -->|"/planning/cones (slam:=gtsam)"| PP
+  GS -->|"/planning/cones (slam:=gtsam, no camera colour)"| PP
+  GS -->|"/slam/cones (slam:=gtsam, camera colour modes)"| CF
+  YOLO -->|"/image/cones"| CF
+  GS -->|"/slam/odom"| CF
+  CF -->|"/planning/cones, /planning/orange_cones"| PP
   PP --> PU --> V
   FD --> V
   SV --> V
@@ -67,12 +72,26 @@ A SLAM implementation is a package with a `launch/slam.launch.py` that starts it
 |---|---|---|---|---|
 | In | `odom_topic` (parameter) | `nav_msgs/Odometry` | any | Odometry the implementation integrates. Default `/sim/xsens/state_odom` in `mfe_validation`. Not used by bringup, which passes no remap. |
 | In | `/perception/cones_uncolored` (`PERCEPTION_CONES_UNCOLORED`) | `sensor_msgs/PointCloud2` | sensor | LiDAR cone centroids from `lidar_perception_node`. Fixed name. |
-| In (optional) | camera cones (`/image/cones`, `IMAGE_CONES`) | `mfe_msgs/Cone` | camera | Only for camera colour modes. |
 | Out | `/slam/odom` (`SLAM_ODOM`) | `nav_msgs/Odometry` | `map`, child `base_footprint` | Start-relative pose. Required for `slam:=gtsam` to drive the planner. |
-| Out | cone map on `cones_topic` (parameter; `SLAM_CONE_MAP` = `/planning/cones` in bringup) | `mfe_msgs/Track` | `map` | Confirmed landmarks. The planner reads `/planning/cones`. |
+| Out | cone map on `cones_topic` (parameter; `SLAM_CONE_MAP` = `/planning/cones` in bringup) | `mfe_msgs/Track` | `map` | Confirmed landmarks. The planner reads `/planning/cones`. Coloured from geometry or ground truth only: with a camera colour mode it is uncoloured and goes to `/slam/cones` (`SLAM_CONES`) instead. |
 | Out (optional) | TF `map` to `odom` | TF | | Only if the implementation provides it. `slam_toolbox` does; `gtsam` does not. |
 
 Implementations must not publish to `/planning/cones` while `boundary_extractor` runs. Bringup disables `boundary_extractor` for `slam:=gtsam` for this reason.
+
+### Camera colour stage
+
+SLAM output is geometric (or ground truth) coloured. Colour from the camera is a separate stage, `cone_colour_fusion_node` in `mfe_validation`, so the camera colours survive a change of SLAM implementation. It runs only for the camera colour modes (`yolo`, `orange_only`, `yolo_lidar`); `mfe_validation/launch/slam.launch.py` and `lidar_only.launch.py` start it for those modes and leave it out otherwise.
+
+| Direction | Topic | Type | Notes |
+|---|---|---|---|
+| In | `/slam/cones` (`SLAM_CONES`) | `mfe_msgs/Track` | The SLAM cone map with UNKNOWN colours. Written by `slam_node` in the camera colour modes. |
+| In | `/slam/odom` (`SLAM_ODOM`) | `nav_msgs/Odometry` | Car pose at each camera frame. |
+| In | `/image/cones` (`IMAGE_CONES`) | `mfe_msgs/Cone` | Camera detections, one message each. |
+| Out | `cones_topic` (`/planning/cones`) | `mfe_msgs/Track` | The planner map. `orange_only` leaves the planner cones UNKNOWN. |
+| Out | `orange_cones_topic` (`/planning/orange_cones`) | `mfe_msgs/Track` | Orange cones, for `orange_only` and `yolo_lidar`. |
+| Out | `/planning/cones_camera_colours` | `mfe_msgs/Track` | Display only: the latest map cones with their camera colour. |
+
+Cones are matched by position (SLAM freezes each cone's position). A cone keeps its votes while it stays in the map or leaves and comes back. The colour rules are those of `cam_fusion.py`. The `yolo` fallback (`color_fallback`, geometric by default) applies here too.
 
 ---
 
@@ -149,7 +168,7 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `camera/camera_info` (relative) | `sensor_msgs/CameraInfo` | none in repo | `cone_detection_node`; `fusion_evaluator` |
 | `image/input` (relative) | `sensor_msgs/Image` | see `/camera/image_raw` | `cone_detection_node` |
 | `image/depth` (relative) | `sensor_msgs/Image` | none in repo | `cone_detection_node` (only with `depth_callback`) |
-| `/image/cones` | `mfe_msgs/Cone` | `cone_detection_node` | `slam_node` (camera colour modes) |
+| `/image/cones` | `mfe_msgs/Cone` | `cone_detection_node` | `cone_colour_fusion_node` (camera colour modes) |
 | `/image/track` | `mfe_msgs/Track` | `cone_detection_node` | `boundary_extractor`; `fusion_evaluator` |
 | `image/cones_image`, `image/cone_centres` | `sensor_msgs/Image`, `PointCloud2` | `cone_detection_node` | none |
 | `/lidar/pcl/input` | `sensor_msgs/PointCloud2` | `file_loader` (C++) | `ground_plane_removal` |
@@ -162,11 +181,12 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `/debug/gpu_objects` | `sensor_msgs/PointCloud2` | `lidar_perception_node` | none |
 | `/ekf/output` | `nav_msgs/Odometry` | `ekf_node` | `path_planner_node`, `pure_pursuit_node`, `finish_detector_node` (remapped to `pose_topic`); `supervisor_node` and `lidar_perception_node` (`odom_topic`, default, not remapped); MCAP recorder |
 | `/sim/xsens/state_odom` | `nav_msgs/Odometry` | `xsens_noise_node` | `slam_node` [`odom_topic`, default]; planner, pure pursuit, finish detector when passed as `pose_topic` |
-| `/slam/odom` | `nav_msgs/Odometry` | `slam_node` (`slam:=gtsam`) | `path_planner_node`, `pure_pursuit_node`, `finish_detector_node` (when `slam:=gtsam`); `skidpad_planner`; `compare_node`; validation planner |
-| `/planning/cones` | `mfe_msgs/Track` | `boundary_extractor` (`slam:=toolbox`, `none`); `slam_node` (`slam:=gtsam`); `bridge_node` (`use_sim_cones_directly`) | `path_planner_node`; `finish_detector_node` (gate and line modes); `supervisor_node`; `evaluator_node` |
+| `/slam/odom` | `nav_msgs/Odometry` | `slam_node` (`slam:=gtsam`) | `path_planner_node`, `pure_pursuit_node`, `finish_detector_node` (when `slam:=gtsam`); `cone_colour_fusion_node` (camera colour modes); `skidpad_planner`; `compare_node`; validation planner |
+| `/slam/cones` | `mfe_msgs/Track` | `slam_node` (`slam:=gtsam`, camera colour modes) | `cone_colour_fusion_node` |
+| `/planning/cones` | `mfe_msgs/Track` | `boundary_extractor` (`slam:=toolbox`, `none`); `slam_node` (`slam:=gtsam`, non-camera colour modes); `cone_colour_fusion_node` (`slam:=gtsam`, camera colour modes); `bridge_node` (`use_sim_cones_directly`) | `path_planner_node`; `finish_detector_node` (gate and line modes); `supervisor_node`; `evaluator_node` |
 | `/validation/cones` | `mfe_msgs/Track` | `slam_node` (validation chain, default `cones_topic`) | `path_planner_node` (remapped in validation) |
-| `/planning/orange_cones` | `mfe_msgs/Track` | `slam_node` (`orange_only`, `yolo_lidar`) | `finish_detector_node` (when `orange_topic` is set to it) |
-| `/planning/cones_camera_colours` | `mfe_msgs/Track` | `slam_node` | none (display) |
+| `/planning/orange_cones` | `mfe_msgs/Track` | `cone_colour_fusion_node` (`orange_only`, `yolo_lidar`) | `finish_detector_node` (when `orange_topic` is set to it) |
+| `/planning/cones_camera_colours` | `mfe_msgs/Track` | `cone_colour_fusion_node` | none (display) |
 | `/validation/centerline` | `nav_msgs/Path` | `path_planner_node` (validation remap) | `compare_node` |
 | `/planning/centerline` | `nav_msgs/Path` | `path_planner_node`; `skidpad_planner` | `pure_pursuit_node`; `lap_validator_node`; `compare_node` |
 | `/planning/track_left`, `/planning/track_right` | `nav_msgs/Path` | `path_planner_node` | none |
