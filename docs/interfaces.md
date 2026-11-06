@@ -216,7 +216,7 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 `map`, `odom` and `base_footprint` follow REP 105. The stack looks up `map` from the LiDAR frame
 (`velodyne`) and from the camera frame, and `base_footprint` from the pose.
 
-### Sim (`hardware:=false`, default)
+### Sim (`platform:=sim` or `platform:=legacy`, default)
 
 | Transform | Published by |
 |---|---|
@@ -228,10 +228,9 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 The cone detector labels its cones with `camera_frame` `camera_base` (its default). Sim publishes
 `zed_camera_center`, not `camera_base`, so those cones have no TF in sim.
 
-### Hardware (`hardware:=true`)
+### Car (`platform:=car`)
 
-Set on the perception machine (`perception.launch.py hardware:=true` or
-`bringup.launch.py hardware:=true`). Nothing else in the repo publishes these transforms.
+Set on the sensing computer (`car.launch.py part:=sensing`, Jetson 1; or `platform:=car` on a single computer). Only the frames of the listed sensors are published. Nothing else in the repo publishes these transforms.
 
 | Transform | Published by | Notes |
 |---|---|---|
@@ -247,6 +246,73 @@ on top of `odom`. This departs from REP 105: the EKF is GPS-fused, so `odom` can
 update and is not a locally smooth odometry frame.
 
 Single-publisher rule: `map` to `odom` is published by `slam_toolbox` or by the identity static
-TF, never both. Under `hardware:=true` the identity TF is skipped whenever `slam_toolbox`
+TF, never both. Under `platform:=car` the identity TF is skipped whenever `slam_toolbox`
 publishes. Sensor and EKF transforms are in the perception group, so `compute.launch.py` (which
 runs without perception) publishes no transforms.
+
+---
+
+## Platform and sensors
+
+Two bringup inputs describe the car. Sim and car run the same stack configuration for the same sensor list; only the source of the data differs.
+
+| Argument | Values | Default | Meaning |
+|---|---|---|---|
+| `platform` | `sim`, `car`, `legacy` | `legacy` | `car`: start the drivers of the listed sensors and their TF from `config/sensor_mounts.yaml`. `sim`: the sim launch emulates the listed sensors. `legacy`: the behaviour before this argument, kept so that existing commands resolve unchanged. `run_sim.sh` and `run_car.sh` always pass `sim` or `car`. |
+| `sensors` | comma list of `lidar,camera,imu_gps,can` | all four | Sensors present. An absent sensor is not started and nothing waits for it. |
+| `part` | `all`, `sensing`, `estimation` | `all` | Splits the perception group between the two car computers (see below). |
+| `start_drivers` | `true`, `false` | `true` | `false` on the car: no sensor driver starts, a bag provides the topics. |
+
+Derived defaults (the low-level arguments stay as explicit overrides; an explicit value always wins):
+
+| Sensor | Present | Absent |
+|---|---|---|
+| `imu_gps` | `use_ekf` on, except on `sim` (the sim has no `/imu` or `/gps` yet). `slam` defaults to `toolbox`. | no EKF; `slam` defaults to `gtsam`, pose from `/slam/odom`. |
+| `lidar` | `lidar_perception_node` runs; on `sim` and `car` with motion correction on (`enable_motion_distortion`). `odom_topic` is `/sim/xsens/state_odom` on sim and `/ekf/output` on car. Sim: `emulate_lidar_sweep` on. | no LiDAR cones; warning. |
+| `camera` | YOLO runs if `vision_model_path` is set. | no YOLO. |
+| `can` | `car`: warning that the CAN interface is not implemented (needs DBC); the vehicle will not actuate. `sim`: the bridge plays the CAN role. | nothing. |
+
+Driver packages on the car: `velodyne_driver` and `velodyne_pointcloud` (`lidar`), `realsense2_camera` (`camera`), `xsens_mti_ros2_driver` (`imu_gps`, via `mfe_sensors/launch/xsens_mti.launch.py`). A missing package stops the launch with a message that names it.
+
+### Two-computer car split
+
+The car runs on two Jetsons. Jetson 1 (`mfe-driverless-1`, `192.168.10.1`) has the sensors attached. Jetson 2 (`mfe-driverless-2`, `192.168.10.2`) runs the rest. `car.launch.py part:=sensing` starts Jetson 1's half and `part:=estimation` starts Jetson 2's. `run_car.sh` starts both.
+
+Measured on the replay runs (`/home/neil/Develop/jetson_bags/_work/jetson_replay_jetson/pr48/`, mean per-process CPU as a percent of one core, the stack on one Jetson):
+
+| Node | Mean CPU | Peak CPU | Where | Why |
+|---|---|---|---|---|
+| `cone_detection_node` (YOLO, TensorRT) | 57-63% | 176% | Jetson 1 | Camera in; GPU heavy. Keeps GR3D on the sensing computer. |
+| `lidar_perception_node` (GPU) | 4-6% | not in the peaks list | Jetson 1 | Raw cloud stays local. |
+| `slam_node` | 53-72% | 138% | Jetson 2 | CPU bound; needs cones and odometry only. |
+| `path_planner_node` | 24-90% | 286% | Jetson 2 | Needs cones and pose. |
+| `pure_pursuit_node` | 25-27% | 166% | Jetson 2 | Needs path and pose. |
+| `finish_detector` | 23% | 110% | Jetson 2 | Needs pose and cones. |
+| `supervisor_node` | not in the means | 138% | Jetson 2 | Needs GPS, odometry, control; LiDAR watchdog from the cone list. |
+
+The split gives Jetson 1 the sensor drivers, LiDAR perception, YOLO and the boundary extractor, and Jetson 2 the EKF, SLAM, planner, control, finish detector, lap validator and supervisor. The EKF runs on Jetson 2 with the Xsens data it needs from Jetson 1 (about 100 Hz IMU and 5 Hz GPS, both small). The supervisor takes its LiDAR watchdog from `/perception/cones_uncolored` on Jetson 2, so no raw cloud crosses the network. The split uses `slam:=gtsam`. `toolbox` needs the raw scan on the same computer, which would move the cloud across the network.
+
+### Cross-host topics (car, `part:=sensing` to `part:=estimation`)
+
+| Topic | Type | Rate and size | Direction |
+|---|---|---|---|
+| `/perception/cones_uncolored` | `sensor_msgs/PointCloud2` (cone centroids) | 10 Hz, small | 1 to 2 (SLAM, planner, supervisor watchdog) |
+| `/image/cones` | `mfe_msgs/Cone` | camera rate, one message per detection | 1 to 2 (camera colour, when used) |
+| `/imu`, `/gps` | `sensor_msgs/Imu`, `NavSatFix` | about 100 Hz and 5 Hz | 1 to 2 (EKF, supervisor) |
+| `/ekf/output` | `nav_msgs/Odometry` | 100 Hz, small | 2 to 1 (lidar motion correction), 2 to 2 (planner, pure pursuit, finish detector) |
+| `/slam/odom`, `/slam/cones` | `nav_msgs/Odometry`, `mfe_msgs/Track` | 5 Hz and pose rate | 2 to 2; or 2 to 1 for camera colour |
+| `/planning/cones`, `/planning/centerline` | `mfe_msgs/Track`, `nav_msgs/Path` | small | 2 to 2 |
+| `/control/command` | `fs_msgs/ControlCommand` | 20 to 50 Hz | 2 to CAN (not implemented) |
+| TF (`base_footprint` to sensors, `odom` to `base_footprint`) | TF | static, 100 Hz | 1 to 2 (the planner looks up the sensor frames) |
+
+Not on the network: `/lidar/points_raw` and `/camera/image_raw`, which stay on Jetson 1.
+
+Note the latency: lidar motion correction reads `/ekf/output` from Jetson 2, so each scan uses odometry one wired hop old. The motion-correction work should measure that.
+
+### Car network and time
+
+The car uses a direct wired network, `192.168.10.0/24`, with a gigabit switch. Static addresses: Jetson 1 `.1`, Jetson 2 `.2`, Velodyne VLP-16 `.201` (it sends UDP 2368 to `.1`, set in the sensor's configuration), a desktop `.50`. Tailscale stays for SSH and monitoring only. ROS traffic uses `ros2/src/mfe_bringup/config/cyclone_car_wired.xml`, which lists only the two wired addresses and disables multicast.
+
+Clock: Jetson 2 serves time to Jetson 1 with chrony (`allow 192.168.10.0/24`, `local stratum 10` when it has no upstream source). Jetson 1 uses it as its only server. `run_car.sh` requires an offset under 1 ms on both hosts (`chronyc tracking`, System time). A stamp mismatch between the two computers makes the EKF and the supervisor disagree about ages, so keep the offset under 1 ms.
+
+`run_car.sh` preflight: wired link up, peer ping average under 2 ms, clock offset under 1 ms on both hosts, same git commit on both, the busy lock `~/jetson_busy.lock` free on both hosts, the driver packages present, and LiDAR UDP 2368 streaming from `192.168.10.201` (unless `--replay`). Distributed runs need the wired link and start from Jetson 1; without the link, pass `--single-host` for a one-Jetson test.

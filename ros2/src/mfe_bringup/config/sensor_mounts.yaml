@@ -1,4 +1,4 @@
-# Sensor mounts for hardware:=true, read by bringup.launch.py.
+# Sensor mounts for platform:=car, read by bringup.launch.py.
 #
 # Each frame is the pose of a sensor frame in base_footprint: x forward, y left, z up,
 # roll/pitch/yaw in rad, applied in that order.
@@ -9,7 +9,7 @@
 # (-0.15, 0, 0.79) and the D435i at (-0.08, 0, 0.76), so the sim sources disagree.
 #
 # camera_frame is the frame the cone detector labels its output with (its camera_frame
-# parameter under hardware:=true). It must be one of the frames below.
+# parameter under platform:=car). It must be one of the frames below.
 camera_frame: camera_base
 
 frames:

@@ -75,6 +75,26 @@ done
 
 Some lint tests currently fail.
 
+## Quick start
+
+Simulation (desktop, sim container):
+
+```bash
+scripts/run_sim.sh --mission autocross --laps 1 --sensors lidar,camera,imu_gps,can
+scripts/run_sim.sh --help
+```
+
+Car (run on Jetson 1, mfe-driverless-1, with the wired car link up; the stack is split across both Jetsons):
+
+```bash
+scripts/run_car.sh --mission autocross --laps 1 --sensors lidar,camera,imu_gps,can
+scripts/run_car.sh --dry-run --single-host   # print the preflight and the commands only
+scripts/run_car.sh --single-host --replay ~/mfe_replay_bags/<bag>   # one Jetson, bag instead of drivers
+scripts/run_car.sh --help
+```
+
+`platform` (`sim` or `car`) and `sensors` (a comma list of `lidar,camera,imu_gps,can`) are the two inputs that describe the setup. See [docs/interfaces.md](docs/interfaces.md#platform-and-sensors) for what each sensor switches on and off, and for the two-Jetson split and the car network.
+
 ## Launch
 
 The main entry point is `mfe_bringup`'s `bringup.launch.py`:
@@ -94,6 +114,9 @@ Main arguments (defaults in brackets):
 | `skidpad_mode` | `cone_based` or `hardcoded` (skidpad only) [`cone_based`] |
 | `vision_model_path` | YOLO weights file; empty skips the vision detector [empty] |
 | `pose_topic` | Odometry topic used for vehicle pose [`/ekf/output`] |
+| `platform` | `sim` or `car`; `legacy` (the default) keeps the old behaviour for existing commands [`legacy`] |
+| `sensors` | Comma list of `lidar,camera,imu_gps,can`; absent sensors are not started [all] |
+| `part` | Car split: `all`, `sensing` (Jetson 1) or `estimation` (Jetson 2) [`all`] |
 | `use_perception` / `run_perception` | Launch the perception nodes [`true`] |
 | `run_compute` | Launch planning and control nodes [`true`] |
 | `use_slam` / `use_ekf` | Launch SLAM Toolbox and the EKF [`true`] |
@@ -104,7 +127,7 @@ Main arguments (defaults in brackets):
 
 Run the same launch file with `--show-args` to see every argument.
 
-Multi-machine setups use `perception.launch.py` on the perception computer and
+The car runs on two computers. `scripts/run_car.sh` starts both halves (see above), and `car.launch.py` starts one half. Other multi-machine setups use `perception.launch.py` on the perception computer and
 `compute.launch.py` on the compute computer. `fleet.launch.py` starts perception locally and
 starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 [docs/jetson_setup.md](docs/jetson_setup.md).
