@@ -109,7 +109,6 @@ def main():
     for team_dir in sorted(src.iterdir()):
         if not team_dir.is_dir():
             continue
-        team = team_dir.name
         img_dir = team_dir / 'img'
         ann_dir = team_dir / 'ann'
         if not img_dir.exists() or not ann_dir.exists():
