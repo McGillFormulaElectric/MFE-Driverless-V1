@@ -37,11 +37,10 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from scipy.spatial.transform import Rotation
 
-_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
+from mfe_common.qos import RELIABLE_QOS
 
 # --- MTi-670G datasheet-derived noise sigmas ---------------------------------------------
 _CEP_POSITION_M = 1.0
@@ -110,8 +109,8 @@ class XsensNoiseNode(Node):
         }
         self._last_t = None
 
-        self._pub = self.create_publisher(Odometry, output_topic, _QOS)
-        self.create_subscription(Odometry, input_topic, self._odom_cb, _QOS)
+        self._pub = self.create_publisher(Odometry, output_topic, RELIABLE_QOS)
+        self.create_subscription(Odometry, input_topic, self._odom_cb, RELIABLE_QOS)
 
         self.get_logger().info(
             f'Xsens MTi-670G noise model: {input_topic} -> {output_topic} '

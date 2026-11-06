@@ -15,6 +15,7 @@ from sensor_msgs.msg import Image, PointCloud2
 from nav_msgs.msg import Odometry
 
 from eufs_msgs.msg import ConeArrayWithCovariance
+from mfe_common.qos import RELIABLE_QOS
 from mfe_msgs.msg import Cone, Track
 from fs_msgs.msg import ControlCommand
 
@@ -30,12 +31,6 @@ except ImportError:
 # EUFS sim publishes with BEST_EFFORT reliability
 _QOS_EUFS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=10,
-)
-
-_QOS_MFE = QoSProfile(
-    reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10,
 )
@@ -137,45 +132,45 @@ class EufsSimBridge(Node):
         self.create_subscription(
             PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
         self._lidar_pub = self.create_publisher(
-            PointCloud2, '/lidar/points_raw', _QOS_MFE)
+            PointCloud2, '/lidar/points_raw', RELIABLE_QOS)
 
         # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
         # (only one of the two ever publishes).
         for _cam_topic in ('/d435i/color/image_raw', '/zed/left/image_rect_color'):
             self.create_subscription(Image, _cam_topic, self._camera_cb, _QOS_EUFS)
         self._camera_pub = self.create_publisher(
-            Image, '/camera/image_raw', _QOS_MFE)
+            Image, '/camera/image_raw', RELIABLE_QOS)
 
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/cones', self._gt_cones_cb, _QOS_EUFS)
         self._gt_colored_pub = self.create_publisher(
-            Track, '/ground_truth/cones_colored', _QOS_MFE)
+            Track, '/ground_truth/cones_colored', RELIABLE_QOS)
 
         # Colour fallback for boundary_extractor when the camera is not running.
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
         self._gt_track_colored_pub = self.create_publisher(
-            Track, '/ground_truth/track_colored', _QOS_MFE)
+            Track, '/ground_truth/track_colored', RELIABLE_QOS)
 
         # GT bypass: forward all track cones to /planning/cones. World frame = TF map frame, no transform needed.
         if self._use_sim_cones_directly:
             self.create_subscription(
                 ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
-                Track, '/planning/cones', _QOS_MFE)
+                Track, '/planning/cones', RELIABLE_QOS)
 
         # Not /ekf/output: the EKF node (mfe_state_estimation) owns that topic.
         from eufs_msgs.msg import CarState
         self.create_subscription(
             CarState, '/ground_truth/state', self._car_state_cb, _QOS_EUFS)
         self._odom_pub = self.create_publisher(
-            Odometry, '/ground_truth/state_odom', _QOS_MFE)
+            Odometry, '/ground_truth/state_odom', RELIABLE_QOS)
 
         self.create_subscription(
-            ControlCommand, '/control/command', self._control_cb, _QOS_MFE)
+            ControlCommand, '/control/command', self._control_cb, RELIABLE_QOS)
         if _ACKERMANN_AVAILABLE:
             self._cmd_pub = self.create_publisher(
-                AckermannDriveStamped, '/cmd', _QOS_MFE)
+                AckermannDriveStamped, '/cmd', RELIABLE_QOS)
         else:
             self._cmd_pub = None
             self.get_logger().warn(

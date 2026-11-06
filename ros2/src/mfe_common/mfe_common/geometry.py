@@ -1,12 +1,16 @@
-"""Pure geometry helpers shared by the planner, control and validation nodes.
+"""Pure geometry helpers shared by the planner, control, perception and validation nodes.
 
 Each function reproduces, bit for bit, the expression of the copy it replaces. Where two copies differ
 (wrap by modulo or by atan2, arc length with or without the length guard) the copies are kept as separate
-named functions so no result changes.
+named functions so no result changes. dist_to_polyline is the planner's form for a single point; the
+validation node's per-point loop now calls it, which moves its results by at most a few ULPs.
 """
 import math
 
 import numpy as np
+
+# Mean Earth radius (m) for the local metre conversions of the EKF and the GPS supervisor check.
+EARTH_RADIUS_M = 6_371_000.0
 
 
 def yaw_from_quaternion(q):
@@ -47,3 +51,20 @@ def pointcloud2_to_xy_array(msg):
     from sensor_msgs_py import point_cloud2   # ROS runtime helper, imported only when a cloud is read
     return np.array([[a[0], a[1]] for a in point_cloud2.read_points(
         msg, field_names=('x', 'y', 'z'), skip_nans=True)]).reshape(-1, 2)
+
+
+def quat_to_rot3(qx, qy, qz, qw):
+    """3x3 rotation matrix of the unit quaternion (qx, qy, qz, qw)."""
+    return np.array([
+        [1-2*(qy*qy+qz*qz), 2*(qx*qy-qw*qz),   2*(qx*qz+qw*qy)],
+        [2*(qx*qy+qw*qz),   1-2*(qx*qx+qz*qz), 2*(qy*qz-qw*qx)],
+        [2*(qx*qz-qw*qy),   2*(qy*qz+qw*qx),   1-2*(qx*qx+qy*qy)],
+    ], dtype=np.float64)
+
+
+def dist_to_polyline(pt, xy):
+    """Distance from pt to the polyline xy (N x 2 vertices), clamped to each segment."""
+    a, ab = xy[:-1], np.diff(xy, axis=0)
+    seg_len2 = np.maximum(np.sum(ab * ab, axis=1), 1e-12)
+    t = np.clip(np.sum((pt - a) * ab, axis=1) / seg_len2, 0.0, 1.0)
+    return float(np.min(np.linalg.norm(pt - (a + t[:, None] * ab), axis=1)))

@@ -18,6 +18,7 @@ import time
 import numpy as np
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from mfe_common.geometry import quat_to_rot3
 from mfe_msgs.msg import Track
 from rclpy.node import Node
 import tf2_ros
@@ -25,14 +26,6 @@ from tf2_ros import TransformException
 
 MATCH_RADIUS  = 1.5   # metres — max dist to count a cone as detected
 TARGET_FRAME  = 'map'  # frame used by boundary_extractor for /planning/cones
-
-
-def _quat_to_rot3(qx, qy, qz, qw) -> np.ndarray:
-    return np.array([
-        [1-2*(qy*qy+qz*qz), 2*(qx*qy-qw*qz),   2*(qx*qz+qw*qy)],
-        [2*(qx*qy+qw*qz),   1-2*(qx*qx+qz*qz), 2*(qy*qz-qw*qx)],
-        [2*(qx*qz-qw*qy),   2*(qy*qz+qw*qx),   1-2*(qx*qx+qy*qy)],
-    ], dtype=np.float64)
 
 
 class PerceptionEvaluator(Node):
@@ -92,7 +85,7 @@ class PerceptionEvaluator(Node):
             return cones
         try:
             tf = self._tf.lookup_transform(TARGET_FRAME, src, rclpy.time.Time())
-            R = _quat_to_rot3(
+            R = quat_to_rot3(
                 tf.transform.rotation.x, tf.transform.rotation.y,
                 tf.transform.rotation.z, tf.transform.rotation.w)
             t = np.array([tf.transform.translation.x,

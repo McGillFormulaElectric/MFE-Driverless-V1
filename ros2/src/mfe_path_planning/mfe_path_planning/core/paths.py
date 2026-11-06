@@ -112,13 +112,6 @@ def path_point_at(xy: np.ndarray, s: float) -> np.ndarray:
     return np.array([np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])])
 
 
-def dist_to_polyline(pt: np.ndarray, xy: np.ndarray) -> float:
-    """Distance from pt to the polyline xy."""
-    a, ab = xy[:-1], np.diff(xy, axis=0)
-    t = np.clip(np.sum((pt - a) * ab, axis=1) / np.maximum(np.sum(ab * ab, axis=1), 1e-12), 0.0, 1.0)
-    return float(np.min(np.linalg.norm(pt - (a + t[:, None] * ab), axis=1)))
-
-
 def remaining_ahead(xy, pos) -> float:
     """Arc length (m) from the point of xy nearest to pos (projected onto its segments) to the end of xy."""
     xy = np.asarray(xy, dtype=float)
