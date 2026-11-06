@@ -1,6 +1,7 @@
 """Live cone-landmark SLAM (optimiser behind the `backend` parameter, see slam_backend.py).
 
-In : /sim/xsens/state_odom (yaw and forward/lateral speed are integrated; its absolute position is not used),
+In : odom_topic (default /sim/xsens/state_odom; yaw and forward/lateral speed are integrated,
+     its absolute position is not used),
      /perception/cones_uncolored (LiDAR detections, sensor frame).
 Out: /slam/odom (start-relative frame), /validation/cones (mfe_msgs/Track of confirmed landmarks).
 Colours: color_mode='gt' comes from /ground_truth/track_colored (validation only; positions never use ground truth);
@@ -43,7 +44,9 @@ PARAMS = dict(track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=
 
               cam_x=0.12, cam_y=0.0, cam_z=0.76, cone_z=0.16, pix_du=0.0, pix_dv=0.0, match_px=40.0,
               color_min_range=2.0, color_max_range=18.0, min_color_votes=2, color_vote_share=0.6, color_fallback='geometric',
-              orange_cones_topic=PLANNING_ORANGE_CONES)
+              orange_cones_topic=PLANNING_ORANGE_CONES, odom_topic=SIM_XSENS_STATE_ODOM,
+              ground_truth_odom_topic=GROUND_TRUTH_STATE_ODOM,
+              ground_truth_track_topic=GROUND_TRUTH_TRACK_COLORED)
 
 
 class SlamNode(Node):
@@ -84,11 +87,11 @@ class SlamNode(Node):
         self.fusion = CamFusion(p('cam_hfov_deg'), p('cam_width'), p('cam_height'), (p('cam_x'), p('cam_y'), p('cam_z')),
                                 p('cam_pitch_deg'), p('cone_z'), p('pix_du'), p('pix_dv'), p('match_px'),
                                 p('color_min_range'), p('color_max_range'))
-        self.create_subscription(Odometry, SIM_XSENS_STATE_ODOM, self.on_odom, RELIABLE_QOS)
-        self.create_subscription(Odometry, GROUND_TRUTH_STATE_ODOM, self.on_gt, RELIABLE_QOS)
+        self.create_subscription(Odometry, p('odom_topic'), self.on_odom, RELIABLE_QOS)
+        self.create_subscription(Odometry, p('ground_truth_odom_topic'), self.on_gt, RELIABLE_QOS)
         self.create_subscription(PointCloud2, PERCEPTION_CONES_UNCOLORED, self.on_cones, RELIABLE_QOS)
         if self.color_mode == 'gt':
-            self.create_subscription(Track, GROUND_TRUTH_TRACK_COLORED, self.on_gt_track, 1)
+            self.create_subscription(Track, p('ground_truth_track_topic'), self.on_gt_track, 1)
         if self.color_mode in ('yolo', 'orange_only', 'yolo_lidar'):
             self.create_subscription(Cone, p('yolo_topic'), self.on_yolo, RELIABLE_QOS)
         self.pub_odom = self.create_publisher(Odometry, SLAM_ODOM, RELIABLE_QOS)
