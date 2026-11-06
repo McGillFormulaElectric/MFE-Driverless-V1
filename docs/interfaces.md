@@ -192,3 +192,43 @@ Publisher and subscriber names are node names. Parameter-driven names are shown 
 | `base_footprint` to `velodyne`, `base_footprint` to `zed_camera_center` | `mfe_eufs_sim` launch (sim) | `boundary_extractor`, `fusion_evaluator` |
 | `map` to `odom` | `slam_toolbox` (`slam:=toolbox`) or EUFS ground truth (sim with `use_slam:=false`) | `boundary_extractor`, `evaluator_node` |
 | `map` to `odom` | none under `slam:=gtsam` | none |
+
+## TF tree
+
+`map`, `odom` and `base_footprint` follow REP 105. The stack looks up `map` from the LiDAR frame
+(`velodyne`) and from the camera frame, and `base_footprint` from the pose.
+
+### Sim (`hardware:=false`, default)
+
+| Transform | Published by |
+|---|---|
+| `base_footprint` to `velodyne` (0, 0, 0.3) | `mfe_eufs_sim.launch.py` static TF |
+| `base_footprint` to `zed_camera_center` (0.3, 0, 0.5) | `mfe_eufs_sim.launch.py` static TF |
+| `map` to `odom` | EUFS ground truth (`use_slam:=false`), or `slam_toolbox` (`slam:=toolbox`) |
+| `odom` to `base_footprint` | EUFS ground truth |
+
+The cone detector labels its cones with `camera_frame` `camera_base` (its default). Sim publishes
+`zed_camera_center`, not `camera_base`, so those cones have no TF in sim.
+
+### Hardware (`hardware:=true`)
+
+Set on the perception machine (`perception.launch.py hardware:=true` or
+`bringup.launch.py hardware:=true`). Nothing else in the repo publishes these transforms.
+
+| Transform | Published by | Notes |
+|---|---|---|
+| `base_footprint` to `velodyne` | static TF, `bringup.launch.py` | Mounts from `mfe_bringup/config/sensor_mounts.yaml`. Sim values until measured. |
+| `base_footprint` to `camera_base` | static TF, `bringup.launch.py` | Same file. `cone_detection_node` `camera_frame` is set to `camera_base`. |
+| `map` to `odom` (identity) | static TF, `bringup.launch.py` | Only when `slam_toolbox` is not publishing it (`slam:=gtsam`, `slam:=none`, or `use_slam:=false`). |
+| `map` to `odom` | `slam_toolbox` | `slam:=toolbox` with `use_slam:=true`. Replaces the identity transform. |
+| `odom` to `base_footprint` | `ekf_node` (`publish_tf`) | EKF pose, which is GPS-origin ENU. Needs `use_ekf:=true`. |
+
+The EKF pose is in the GPS-origin ENU frame, which `ekf_node` labels `map` in `/ekf/output`. The
+TF uses `odom` as its parent instead, so `map` stays free for the SLAM correction (`slam_toolbox`)
+on top of `odom`. This departs from REP 105: the EKF is GPS-fused, so `odom` can jump on a GPS
+update and is not a locally smooth odometry frame.
+
+Single-publisher rule: `map` to `odom` is published by `slam_toolbox` or by the identity static
+TF, never both. Under `hardware:=true` the identity TF is skipped whenever `slam_toolbox`
+publishes. Sensor and EKF transforms are in the perception group, so `compute.launch.py` (which
+runs without perception) publishes no transforms.
