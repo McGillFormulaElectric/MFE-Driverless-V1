@@ -87,7 +87,7 @@ class RandomWalk:
 class RateGate:
     """Decimates a stream to rate_hz: due() is True once per period, at the first sample after it.
 
-    Ground truth arrives at its own rate (about 189 Hz in the bags), so the gate picks the samples
+    Ground truth arrives at its own rate (about 200 Hz in the bags), so the gate picks the samples
     that fall due. A small tolerance absorbs timing jitter, and a stall skips periods rather than
     bursting.
     """
