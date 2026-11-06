@@ -77,23 +77,77 @@ Some lint tests currently fail.
 
 ## Quick start
 
-Simulation (desktop, sim container):
+The stack has two entry points, one per platform. Both take the same two inputs:
+`platform` (`sim` or `car`, set by the script) and `sensors`, a comma list of
+`lidar,camera,imu_gps,can` (default: all four). In the sim every listed sensor is emulated the way
+the car's sensor behaves, so a sim run and a car run with the same sensors use the same stack
+configuration. See [docs/interfaces.md](docs/interfaces.md#platform-and-sensors) for what each
+sensor switches on and off.
+
+### Simulation (desktop with an NVIDIA GPU)
+
+One-time setup:
 
 ```bash
-scripts/run_sim.sh --mission autocross --laps 1 --sensors lidar,camera,imu_gps,can
+mkdir -p ~/Develop && cd ~/Develop
+git clone --recurse-submodules https://github.com/McGillFormulaElectric/MFE-Driverless-V1.git
+cd MFE-Driverless-V1
+bash scripts/docker_build.sh        # builds the mfe-driverless-sim image
+```
+
+Start the sim container. `docker_run.sh` installs Docker and the NVIDIA container toolkit if they
+are missing and clones the EUFS simulator into `~/Develop/MFE26-eufs-sim`. The first start builds
+the EUFS workspace and the stack inside the container, which takes a few minutes.
+
+```bash
+bash scripts/docker_run.sh shell    # interactive shell in the container
+```
+
+Then, inside the container, start a run:
+
+```bash
+cd /root/Develop/MFE-Driverless-V1
+scripts/run_sim.sh --mission autocross --laps 1
+scripts/run_sim.sh --track small_track --laps 5 --headless
+scripts/run_sim.sh --mission accel --sensors lidar,imu_gps,can   # no camera
 scripts/run_sim.sh --help
 ```
 
-Car (run on Jetson 1, mfe-driverless-1, with the wired car link up; the stack is split across both Jetsons):
+`run_sim.sh` opens a tmux session named `mfe` (Gazebo, sim bridge and sensor emulators, the stack,
+Foxglove). Stop it with `tmux kill-session -t mfe`.
+
+### Car (the two Jetsons)
+
+The car stack always runs on the Jetsons. Jetson 1 (`mfe-driverless-1`) has the sensors attached
+and runs the sensing half; Jetson 2 (`mfe-driverless-2`) runs SLAM, the EKF, planning, control and
+the supervisor. The two are connected through the car's wired switch (`192.168.10.0/24`).
+
+One-time setup on each Jetson (or from your PC: `ssh mfe@<jetson> "bash -s" < scripts/setup_jetson.sh`):
 
 ```bash
-scripts/run_car.sh --mission autocross --laps 1 --sensors lidar,camera,imu_gps,can
-scripts/run_car.sh --dry-run --single-host   # print the preflight and the commands only
-scripts/run_car.sh --single-host --replay ~/mfe_replay_bags/<bag>   # one Jetson, bag instead of drivers
+bash scripts/setup_jetson.sh
+```
+
+See [docs/jetson_setup.md](docs/jetson_setup.md) for the full Jetson setup and
+[docs/jetson_access.md](docs/jetson_access.md) for Tailscale and SSH access.
+
+Then, on Jetson 1:
+
+```bash
+scripts/run_car.sh --dry-run                       # preflight checks and the commands, starts nothing
+scripts/run_car.sh --mission autocross --laps 1    # both Jetsons, over the wired link
 scripts/run_car.sh --help
 ```
 
-`platform` (`sim` or `car`) and `sensors` (a comma list of `lidar,camera,imu_gps,can`) are the two inputs that describe the setup. See [docs/interfaces.md](docs/interfaces.md#platform-and-sensors) for what each sensor switches on and off, and for the two-Jetson split and the car network.
+Before it starts, `run_car.sh` checks the wired link, the ping time and clock offset between the
+Jetsons, that both run the same commit, that each listed sensor's driver is installed, that the
+LiDAR is streaming, and that the CI is not using the Jetsons.
+
+For bench tests on one Jetson without the sensors, replay a recorded bag instead:
+
+```bash
+scripts/run_car.sh --single-host --replay ~/mfe_replay_bags/<bag>
+```
 
 ## Launch
 
@@ -132,7 +186,8 @@ The car runs on two computers. `scripts/run_car.sh` starts both halves (see abov
 starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 [docs/jetson_setup.md](docs/jetson_setup.md).
 
-To run the EUFS simulator, use `scripts/launch_sim.sh`. It needs the EUFS workspace; see
+`scripts/run_sim.sh` (see Quick start) is the way to run the simulator. It uses
+`scripts/launch_sim.sh`, which also takes positional arguments for older scripts; see
 [docs/simulation_guide.md](docs/simulation_guide.md).
 
 ## Configuration
