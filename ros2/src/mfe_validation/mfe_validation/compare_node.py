@@ -7,7 +7,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
-from mfe_common.geometry import yaw_from_quaternion
+from mfe_common.geometry import dist_to_polyline, yaw_from_quaternion
 from mfe_common.qos import RELIABLE_QOS
 from mfe_common.topics import (
     GROUND_TRUTH_STATE_ODOM,
@@ -21,15 +21,6 @@ def to_car(path_xy, pose):
     x, y, th = pose
     d = path_xy - np.array([x, y]); c, s = math.cos(-th), math.sin(-th)
     return np.c_[c * d[:, 0] - s * d[:, 1], s * d[:, 0] + c * d[:, 1]]
-
-
-def dist_to_polyline(pts, line):
-    out = []
-    for p in pts:
-        a, b = line[:-1], line[1:]; ab = b - a
-        t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-9), 0, 1)
-        out.append(np.min(np.hypot(*(a + ab * t[:, None] - p).T)))
-    return np.array(out)
 
 
 class Compare(Node):
@@ -61,7 +52,7 @@ class Compare(Node):
         vc = vc[(vc[:, 0] > 0) & (vc[:, 0] < self.h)]; rc = rc[(rc[:, 0] > -2) & (rc[:, 0] < self.h + 3)]
         if len(vc) < 2 or len(rc) < 2:
             self.n_miss += 1; return
-        self.dev.append(dist_to_polyline(vc, rc))
+        self.dev.append(np.array([dist_to_polyline(p, rc) for p in vc]))
 
     def report(self):
         if not self.dev:

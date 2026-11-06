@@ -5,8 +5,8 @@ jumps (pure).
 """
 import math
 
-from mfe_common.geometry import arc_length_guarded, wrap_angle
-from mfe_path_planning.core.paths import dist_to_polyline, path_point_at, remaining_ahead
+from mfe_common.geometry import arc_length_guarded, dist_to_polyline, wrap_angle
+from mfe_path_planning.core.paths import path_point_at, remaining_ahead
 
 JUMP_HEAD_M = 5.0          # heading is taken over the first 5 m of the path (as the diag 'jumps' metric)
 JUMP_LAT_M = (5.0, 10.0)   # lateral offsets checked at these arc lengths ahead (m)
