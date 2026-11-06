@@ -39,20 +39,16 @@ def _install_ros_mocks():
     class _Node:
         def __init__(self, *a, **kw): pass
         def declare_parameter(self, *a, **kw): pass
-
         def get_parameter(self, name):
             return type('P', (), {'value': None})()
-
         def create_publisher(self, *a, **kw): return None
         def create_subscription(self, *a, **kw): return None
         def create_timer(self, *a, **kw): return None
-
         def get_logger(self): return type('L', (), {
             'info': lambda s, *a, **kw: None,
             'warn': lambda s, *a, **kw: None,
             'error': lambda s, *a, **kw: None,
         })()
-
         def get_clock(self): return type('C', (), {
             'now': lambda s: type('T', (), {'to_msg': lambda s: None})()
         })()
@@ -66,36 +62,27 @@ def _install_ros_mocks():
 
     # Cone / Track stubs
     class _Cone:
-        BLUE = 0
-        YELLOW = 1
-        ORANGE_BIG = 2
-        ORANGE_SMALL = 3
-        UNKNOWN = 4
-
+        BLUE = 0; YELLOW = 1; ORANGE_BIG = 2; ORANGE_SMALL = 3; UNKNOWN = 4
         def __init__(self):
             self.color = _Cone.UNKNOWN
             self.location = type('P', (), {'x': 0.0, 'y': 0.0, 'z': 0.0})()
             self.header = type('H', (), {
                 'stamp': None, 'frame_id': 'map'
             })()
-
     class _Track:
         def __init__(self): self.track = []
-    sys.modules['mfe_msgs.msg'].Cone = _Cone
+    sys.modules['mfe_msgs.msg'].Cone  = _Cone
     sys.modules['mfe_msgs.msg'].Track = _Track
 
     # std_msgs stubs
     class _F64MA:
         def __init__(self): self.data = []
-
     class _Header:
-        def __init__(self):
-            self.stamp = None
-            self.frame_id = ''
+        def __init__(self): self.stamp = None; self.frame_id = ''
     sys.modules['std_msgs.msg'].Float64MultiArray = _F64MA
-    sys.modules['std_msgs.msg'].Bool = type('Bool',   (), {'data': False})
+    sys.modules['std_msgs.msg'].Bool   = type('Bool',   (), {'data': False})
     sys.modules['std_msgs.msg'].String = type('String', (), {'data': ''})
-    sys.modules['std_msgs.msg'].Int32 = type('Int32',  (), {'data': 0})
+    sys.modules['std_msgs.msg'].Int32  = type('Int32',  (), {'data': 0})
     sys.modules['std_msgs.msg'].Header = _Header
 
     # sensor_msgs stubs
@@ -103,24 +90,21 @@ def _install_ros_mocks():
         'fields': [], 'data': b'', 'width': 0, 'height': 0, 'point_step': 0
     })
     sys.modules['sensor_msgs.msg'].PointField = type('PointField', (), {})
-    sys.modules['sensor_msgs.msg'].NavSatFix = type('NavSatFix',  (), {
+    sys.modules['sensor_msgs.msg'].NavSatFix   = type('NavSatFix',  (), {
         'COVARIANCE_TYPE_UNKNOWN': 0, 'position_covariance': [0]*9,
         'position_covariance_type': 0
     })
 
     # tf2_ros stubs — TransformException and Buffer/TransformListener
-    class _TFException(Exception):
-        pass
-
+    class _TFException(Exception): pass
     class _Buffer:
         def __init__(self, *a, **k): pass
         def lookup_transform(self, *a, **k): raise _TFException("stub")
-
     class _TFListener:
         def __init__(self, *a, **k): pass
-    sys.modules['tf2_ros'].TransformException = _TFException
-    sys.modules['tf2_ros'].Buffer = _Buffer
-    sys.modules['tf2_ros'].TransformListener = _TFListener
+    sys.modules['tf2_ros'].TransformException  = _TFException
+    sys.modules['tf2_ros'].Buffer              = _Buffer
+    sys.modules['tf2_ros'].TransformListener   = _TFListener
 
     # scipy stubs (Hungarian) — only stub if scipy isn't actually installed
     try:
@@ -128,7 +112,6 @@ def _install_ros_mocks():
     except ImportError:
         import numpy as np
         _opt = types.ModuleType('scipy.optimize')
-
         def _lsa(cost):
             cost = np.array(cost)
             if cost.size == 0:

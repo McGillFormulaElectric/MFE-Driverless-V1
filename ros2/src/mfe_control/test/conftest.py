@@ -30,10 +30,9 @@ def _install_ros_mocks():
             sys.modules[mod] = types.ModuleType(mod)
 
     class _QoS:
-        RELIABLE = BEST_EFFORT = KEEP_LAST = TRANSIENT_LOCAL = 1
+        RELIABLE = BEST_EFFORT = KEEP_LAST = 1
         def __init__(self, **kw): pass
-    # DurabilityPolicy is needed by mfe_common.qos (imported by the nodes under test)
-    for attr in ['QoSProfile', 'ReliabilityPolicy', 'HistoryPolicy', 'DurabilityPolicy']:
+    for attr in ['QoSProfile', 'ReliabilityPolicy', 'HistoryPolicy']:
         setattr(sys.modules['rclpy.qos'], attr, _QoS)
 
     class _Node:
@@ -54,6 +53,7 @@ def _install_ros_mocks():
                 'max_lateral_accel': 8.0, 'max_deceleration': 10.0,
                 'lookahead_waypoints': 40,
                 'car_half_length': 1.5, 'car_half_width': 0.8,
+                'cone_hit_radius_m': 0.5,
                 'lidar_timeout_ms': 200, 'gps_jump_threshold_m': 2.0,
                 'gps_cov_threshold': 25.0, 'control_latency_threshold_ms': 100,
             }

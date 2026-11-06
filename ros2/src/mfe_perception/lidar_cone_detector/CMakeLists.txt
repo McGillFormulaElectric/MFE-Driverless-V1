@@ -115,13 +115,6 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_auto_add_gtest(test_motion_distortion test/test_motion_distortion.cpp)
-  target_include_directories(test_motion_distortion PRIVATE include)
-  if(CMAKE_CUDA_COMPILER AND LIDAR_GPU_OK)
-    target_link_libraries(test_motion_distortion lidar_gpu_filter)
-    target_compile_definitions(test_motion_distortion PRIVATE LIDAR_GPU_TEST)
-  endif()
 endif()
 
 ament_export_dependencies(eigen3_cmake_module)

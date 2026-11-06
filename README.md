@@ -197,28 +197,4 @@ starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 | `ros2/src/mfe_mapping/config/` | `slam_toolbox_params.yaml` |
 | `ros2/src/mfe_sensors/config/` | Sensor configs: `xsens_mti.yaml` |
 
-## Lint hooks
-
-Lint checks run on staged files through pre-commit (ruff for Python, clang-format for C++ and
-CUDA). Settings are in `ruff.toml` (line length 120) and `.pre-commit-config.yaml`.
-
-```bash
-pip3 install pre-commit
-pre-commit install
-```
-
-## Versioning
-
-The repository has one semantic version, set in every `package.xml` and `setup.py` under
-`ros2/src`. Set it with:
-
-```bash
-scripts/bump_version.sh X.Y.Z
-```
-
-The script does not commit or tag. Release steps:
-
-- When a release is merged to `main`, bump the version and tag the merge commit `vX.Y.Z`.
-- Builds that ran on the car are tagged `car-YYYY-MM-DD` so they can be traced back to the code.
-
 Python dependencies are pinned in `requirements.txt`. Docker images are defined in `Docker/`.

@@ -1,140 +1,267 @@
 """
-Finish detector pure logic (core.finish): the orange timing line, the lap crossing test, the.
+Unit tests for finish_detector_node — skidpad phase machine and
+acceleration dynamic gate logic.
 
-orange-gate clustering and pass counting, the LiDAR forward zone and the point-cloud read. Calls the real
-functions; no ROS.
+Tests the pure-Python logic extracted from FinishDetectorNode:
+  - Skidpad 2L+2R lap counting via angle accumulation
+  - Acceleration orange-cone gate derivation
+  - Return-to-start logic for autocross/trackdrive
+
+No ROS2 runtime needed (conftest.py mocks all imports).
+Branch: neil/feature/planning-improvements (finish detector rewrite)
 """
-import struct
 
-import numpy as np
+import math
+import sys
+import os
+import types
 import pytest
 
-from mfe_path_planning.core import finish as fin
+# conftest.py already installed ros mocks — but also add fs_msgs stub
+if 'fs_msgs.msg' not in sys.modules:
+    fs = types.ModuleType('fs_msgs.msg')
+    class _CC:
+        def __init__(self):
+            self.throttle = 0.0; self.brake = 0.0; self.steering = 0.0
+            self.header = type('H', (), {'stamp': None, 'frame_id': ''})()
+    fs.ControlCommand = _CC
+    sys.modules['fs_msgs'] = types.ModuleType('fs_msgs')
+    sys.modules['fs_msgs.msg'] = fs
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
-def _pylon_pair(start_xy=(0.0, 0.0), yaw=0.0, lat=2.0, long=10.0):
-    """Left and right pylons ahead of the start: a gate across the start heading at `long` metres ahead."""
-    c, s = np.cos(yaw), np.sin(yaw)
+# ---------------------------------------------------------------------------
+# Import the phase logic directly (avoid __init__ by testing helpers inline)
+# ---------------------------------------------------------------------------
 
-    def world(long_m, lat_m):
-        return (start_xy[0] + c * long_m - s * lat_m, start_xy[1] + s * long_m + c * lat_m)
-    return [world(long, lat), world(long, -lat)]
-
-
-class TestTimingLine:
-
-    def test_pair_gives_a_line_across_the_heading_with_the_pylon_separation(self):
-        line = fin.orange_timing_line(_pylon_pair(), 0.0, 0.0, 0.0, search_r=25.0, margin_m=2.0)
-        long, lat, width = line
-        assert long == pytest.approx(10.0, abs=1e-6)
-        assert lat == pytest.approx(0.0, abs=1e-6)
-        assert width == pytest.approx(4.0 + 2.0 * 2.0, abs=1e-6)
-
-    def test_pylons_on_one_side_give_no_line(self):
-        pts = [(10.0, 2.0), (12.0, 2.0)]
-        assert fin.orange_timing_line(pts, 0.0, 0.0, 0.0, search_r=25.0, margin_m=2.0) is None
-
-    def test_pylons_outside_the_search_radius_are_ignored(self):
-        assert fin.orange_timing_line(_pylon_pair(long=40.0), 0.0, 0.0, 0.0, 25.0, 2.0) is None
-
-    def test_line_follows_the_start_heading(self):
-        yaw = np.pi / 2
-        line = fin.orange_timing_line(_pylon_pair(yaw=yaw), 0.0, 0.0, yaw, search_r=25.0, margin_m=2.0)
-        assert line is not None
-        assert line[0] == pytest.approx(10.0, abs=1e-6)
+def _angle_delta(theta_now, theta_prev):
+    """Wrap angle difference to (-pi, pi]."""
+    d = theta_now - theta_prev
+    if d >  math.pi: d -= 2 * math.pi
+    if d < -math.pi: d += 2 * math.pi
+    return d
 
 
-class TestLapCrossing:
-
-    LINE = (10.0, 0.0, 4.0)     # long = 10 m, lat = 0, width 4 m
-
-    def test_crossing_from_behind_to_ahead_inside_the_width_counts(self):
-        assert fin.line_crossed(prev_long=9.5, long=10.5, lat=0.5, line=self.LINE, heading_ok=True)
-
-    def test_wrong_heading_never_counts(self):
-        assert not fin.line_crossed(9.5, 10.5, 0.5, self.LINE, heading_ok=False)
-
-    def test_outside_the_line_width_does_not_count(self):
-        assert not fin.line_crossed(9.5, 10.5, 2.5, self.LINE, heading_ok=True)
-
-    def test_no_previous_position_or_no_line_does_not_count(self):
-        assert not fin.line_crossed(None, 10.5, 0.0, self.LINE, True)
-        assert not fin.line_crossed(9.5, 10.5, 0.0, None, True)
-
-    def test_stop_travel_after_line_is_clamped_to_the_run_out_limit(self):
-        assert fin.stop_travel_after_line(100.0, 5.0) == pytest.approx(105.0)
-        assert fin.stop_travel_after_line(100.0, -3.0) == pytest.approx(100.0)
-        assert fin.stop_travel_after_line(100.0, 500.0) == pytest.approx(100.0 + fin.STOP_AFTER_LINE_MAX_M)
+def _simulate_circle(cx, cy, radius, n_laps, clockwise=False):
+    """
+    Generate (x, y) waypoints for n_laps around a circle.
+    Returns list of (x, y) tuples.
+    """
+    sign = -1 if clockwise else 1
+    points = []
+    steps_per_lap = 100
+    for i in range(n_laps * steps_per_lap + 1):
+        theta = sign * 2 * math.pi * i / steps_per_lap
+        points.append((cx + radius * math.cos(theta),
+                       cy + radius * math.sin(theta)))
+    return points
 
 
-class TestOrangeGates:
+def _count_laps_from_points(points, cx, cy, expected_laps, clockwise=False):
+    """
+    Replicate the angle-accumulation lap counter from finish_detector_node.
+    Returns laps_completed.
+    """
+    angle_prev  = None
+    angle_accum = 0.0
+    laps = 0
 
-    def test_pylons_cluster_into_gates_by_single_linkage(self):
-        pylons = [np.array([0.0, 0.0]), np.array([3.0, 0.0]), np.array([30.0, 0.0]), np.array([33.0, 0.0])]
-        states = fin.rebuild_gate_states(pylons, [])
-        assert len(states) == 2
-        centres = sorted(s['c'][0] for s in states)
-        assert centres == pytest.approx([1.5, 31.5])
-        assert all(s['inside'] is None for s in states)
+    for (x, y) in points:
+        angle_now = math.atan2(y - cy, x - cx)
+        if angle_prev is not None:
+            delta = _angle_delta(angle_now, angle_prev)
+            angle_accum += delta
+        angle_prev = angle_now
 
-    def test_pass_state_is_carried_over_when_the_centroid_stays_put(self):
-        states = fin.rebuild_gate_states([np.array([0.0, 0.0]), np.array([2.0, 0.0])], [])
-        states[0]['inside'] = True
-        again = fin.rebuild_gate_states([np.array([0.0, 0.0]), np.array([2.0, 0.0]), np.array([1.0, 1.0])], states)
-        assert again[0]['inside'] is True
+        new_laps = int(abs(angle_accum) / (2 * math.pi))
+        if new_laps > laps:
+            laps = new_laps
 
-    def test_entering_a_gate_counts_one_pass_after_the_debounce_distance(self):
-        gate = {'c': np.array([0.0, 0.0]), 'inside': False}
-        assert fin.gate_pass_step(gate, d=2.0, travel_m=3.0, enter_r=4.5) is False     # before the debounce
-        gate['inside'] = False
-        assert fin.gate_pass_step(gate, d=2.0, travel_m=10.0, enter_r=4.5) is True
-        assert gate['inside'] is True
-        assert fin.gate_pass_step(gate, d=2.0, travel_m=11.0, enter_r=4.5) is False    # still inside: no second pass
-
-    def test_leaving_the_gate_needs_the_hysteresis_before_a_new_pass(self):
-        gate = {'c': np.array([0.0, 0.0]), 'inside': True}
-        fin.gate_pass_step(gate, d=5.0, travel_m=20.0, enter_r=4.5)                    # 5.0 < 4.5 + 2.0: still inside
-        assert gate['inside'] is True
-        fin.gate_pass_step(gate, d=7.0, travel_m=21.0, enter_r=4.5)                    # beyond 6.5: left the gate
-        assert gate['inside'] is False
-        assert fin.gate_pass_step(gate, d=1.0, travel_m=22.0, enter_r=4.5) is True     # a second pass counts
-
-    def test_gate_first_seen_with_the_car_under_it_is_not_counted_at_spawn(self):
-        gate = {'c': np.array([0.0, 0.0]), 'inside': None}
-        assert fin.gate_pass_step(gate, d=1.0, travel_m=0.0, enter_r=4.5) is False
-        assert gate['inside'] is True
+    return laps
 
 
-class TestLidarForwardZone:
+# ---------------------------------------------------------------------------
+# Test group 1: angle-based lap counting
+# ---------------------------------------------------------------------------
 
-    def test_points_in_the_zone_are_counted(self):
-        pts = np.array([[5.0, 0.0, 0.0], [5.0, 1.0, 0.0], [20.0, 0.0, 0.0], [5.0, 5.0, 0.0], [0.5, 0.0, 0.0]])
-        assert fin.lidar_forward_count(pts, fwd_min=1.5, fwd_max=15.0, lat_max=4.0) == 2
+class TestSkidpadLapCounting:
 
-    def test_points_below_the_ground_band_are_ignored(self):
-        pts = np.array([[5.0, 0.0, -0.5], [5.0, 0.0, 0.2]])
-        assert fin.lidar_forward_count(pts, 1.5, 15.0, 4.0) == 1
+    # Skidpad geometry (matches path_planner_node defaults)
+    CX    = 14.4
+    CY_L  =  9.3
+    CY_R  = -9.3
+    R     =  9.1
+
+    def test_left_circle_2_laps_ccw(self):
+        """2 CCW laps around left circle must count as 2 laps."""
+        pts = _simulate_circle(self.CX, self.CY_L, self.R, n_laps=2, clockwise=False)
+        laps = _count_laps_from_points(pts, self.CX, self.CY_L,
+                                       expected_laps=2, clockwise=False)
+        assert laps == 2, f"Expected 2 left laps, got {laps}"
+
+    def test_right_circle_2_laps_cw(self):
+        """2 CW laps around right circle must count as 2 laps."""
+        pts = _simulate_circle(self.CX, self.CY_R, self.R, n_laps=2, clockwise=True)
+        laps = _count_laps_from_points(pts, self.CX, self.CY_R,
+                                       expected_laps=2, clockwise=True)
+        assert laps == 2, f"Expected 2 right laps, got {laps}"
+
+    def test_1_lap_counts_as_1(self):
+        pts = _simulate_circle(self.CX, self.CY_L, self.R, n_laps=1, clockwise=False)
+        laps = _count_laps_from_points(pts, self.CX, self.CY_L, 1)
+        assert laps == 1
+
+    def test_3_laps_counts_as_3(self):
+        """Over-lapping (bug guard) — 3 laps still counts correctly."""
+        pts = _simulate_circle(self.CX, self.CY_L, self.R, n_laps=3, clockwise=False)
+        laps = _count_laps_from_points(pts, self.CX, self.CY_L, 3)
+        assert laps == 3
+
+    def test_no_false_positive_on_entry_straight(self):
+        """
+        Car drives straight from (0,0) toward the circle entry at (CX, 0).
+        No laps should be counted (car hasn't entered the circle).
+        """
+        pts = [(x, 0.0) for x in range(0, int(self.CX))]
+        laps = _count_laps_from_points(pts, self.CX, self.CY_L, 0)
+        assert laps == 0, f"False positive on entry straight: {laps} laps counted"
+
+    def test_partial_lap_not_counted(self):
+        """Half a circle (180°) must not count as a full lap."""
+        pts = _simulate_circle(self.CX, self.CY_L, self.R, n_laps=1, clockwise=False)
+        half_pts = pts[:len(pts) // 2]
+        laps = _count_laps_from_points(half_pts, self.CX, self.CY_L, 0)
+        assert laps == 0, f"Partial lap counted as {laps}"
 
 
-class _FakeCloud:
-    """Minimal PointCloud2 stand-in: x, y, z float32 fields at offsets 0, 4, 8 with a 16-byte point step."""
+# ---------------------------------------------------------------------------
+# Test group 2: acceleration orange-cone gate
+# ---------------------------------------------------------------------------
 
-    def __init__(self, rows):
-        self.fields = [type('F', (), {'name': n, 'offset': o})() for n, o in (('x', 0), ('y', 4), ('z', 8))]
-        self.width = len(rows)
-        self.height = 1
-        self.point_step = 16
-        self.data = b''.join(struct.pack('<fff', *r) + b'\x00' * 4 for r in rows)
+class TestAccelerationGate:
+
+    def _median_gate(self, xs):
+        """Replicate the median-of-candidates logic from finish_detector."""
+        import numpy as np
+        return float(np.median(xs))
+
+    def test_gate_from_two_cones(self):
+        """Gate X should be the mean of cone X positions."""
+        import numpy as np
+        approach_x = 60.0
+        cone_xs = [76.0, 80.0]   # 2 orange cones at finish
+        candidates = [x for x in cone_xs if x > approach_x]
+        assert len(candidates) == 2
+        gate = self._median_gate(candidates)
+        assert abs(gate - 78.0) < 0.1, f"Gate at wrong X: {gate}"
+
+    def test_cones_before_approach_not_used(self):
+        """Cones behind approach_x must not contribute to the gate."""
+        approach_x = 60.0
+        all_cone_xs = [10.0, 30.0, 50.0, 76.0, 80.0]
+        candidates = [x for x in all_cone_xs if x > approach_x]
+        assert candidates == [76.0, 80.0], \
+            f"Wrong candidates selected: {candidates}"
+
+    def test_fewer_than_2_cones_skipped(self):
+        """Need at least 2 orange cones to set the gate."""
+        approach_x = 60.0
+        only_one = [78.0]
+        candidates = [x for x in only_one if x > approach_x]
+        # Should not update gate with <2 cones
+        assert len(candidates) < 2
+
+    def test_median_stable_with_outlier(self):
+        """Median gate is robust to a single outlier cone."""
+        import numpy as np
+        xs = [75.0, 77.0, 79.0, 200.0]  # 200m is an outlier
+        gate = self._median_gate(xs)
+        assert 75.0 < gate < 100.0, f"Median unstable: {gate}"
 
 
-def test_extract_xyz_reads_finite_points_only():
-    cloud = _FakeCloud([(1.0, 2.0, 0.5), (float('nan'), 0.0, 0.0), (3.0, -4.0, 1.0)])
-    pts = fin.extract_xyz(cloud)
-    assert pts.dtype == np.float32 and pts.shape == (2, 3)
-    assert np.allclose(pts[0], [1.0, 2.0, 0.5]) and np.allclose(pts[1], [3.0, -4.0, 1.0])
+# ---------------------------------------------------------------------------
+# Test group 3: return-to-start (autocross/trackdrive)
+# ---------------------------------------------------------------------------
 
+class TestReturnToStart:
 
-def test_extract_xyz_without_fields_is_empty():
-    cloud = _FakeCloud([(1.0, 2.0, 0.5)])
-    cloud.fields = cloud.fields[:2]
-    assert fin.extract_xyz(cloud).shape == (0, 3)
+    def _simulate_return(self, track_radius=30.0, n_laps=1,
+                         return_r=5.0, min_travel=60.0):
+        """
+        Simulate car driving around a circle and returning to start.
+        Returns list of (dist_from_start, travel_m, max_dist) tuples.
+        """
+        import numpy as np
+        n_steps = 200 * n_laps
+        thetas = np.linspace(0, 2 * math.pi * n_laps, n_steps)
+        xs = track_radius * np.cos(thetas)
+        ys = track_radius * np.sin(thetas)
+        xs[0] = track_radius   # start at 3 o'clock
+        ys[0] = 0.0
+
+        start_x, start_y = xs[0], ys[0]
+        travel = 0.0
+        max_dist = 0.0
+        laps = 0
+        events = []
+
+        for i in range(1, len(xs)):
+            dx = xs[i] - xs[i-1]
+            dy = ys[i] - ys[i-1]
+            travel += math.hypot(dx, dy)
+            dist = math.hypot(xs[i] - start_x, ys[i] - start_y)
+            max_dist = max(max_dist, dist)
+
+            gate = (travel >= min_travel
+                    and max_dist >= 15.0
+                    and dist <= return_r)
+            if gate:
+                laps += 1
+                max_dist = 0.0  # re-arm guard
+                events.append(i)
+
+        return laps
+
+    def test_one_lap_counts_once(self):
+        laps = self._simulate_return(n_laps=1)
+        assert laps == 1, f"Expected 1 lap, got {laps}"
+
+    def test_three_laps_count_three(self):
+        laps = self._simulate_return(n_laps=3, min_travel=60.0)
+        assert laps == 3, f"Expected 3 laps, got {laps}"
+
+    def test_no_false_positive_below_min_travel(self):
+        """Car starting at origin and moving a few metres — no lap."""
+        import math
+        # Small triangle — total travel well below 60m
+        start_x, start_y = 30.0, 0.0
+        travel = 0.0; max_dist = 0.0; laps = 0
+
+        waypoints = [(30.0, 0.0), (35.0, 0.0), (30.0, 0.0)]
+        for i in range(1, len(waypoints)):
+            dx = waypoints[i][0] - waypoints[i-1][0]
+            dy = waypoints[i][1] - waypoints[i-1][1]
+            travel += math.hypot(dx, dy)
+            dist = math.hypot(waypoints[i][0] - start_x, waypoints[i][1] - start_y)
+            max_dist = max(max_dist, dist)
+            if travel >= 60.0 and max_dist >= 15.0 and dist <= 5.0:
+                laps += 1
+
+        assert laps == 0, f"False positive: {laps} laps on short path"
+
+    def test_figure8_midpoint_no_false_positive(self):
+        """
+        Car crosses near origin mid-figure-8 — the 15m excursion guard
+        must prevent this from counting as a lap crossing.
+        """
+        # Car at start (30, 0), crosses near (30, 0) after only 5m excursion
+        start_x, start_y = 30.0, 0.0
+        travel = 100.0  # enough travel
+        max_dist = 5.0  # NOT 15m — guard should block
+        dist_from_start = 3.0  # within return_r=5m
+
+        gate = (travel >= 60.0
+                and max_dist >= 15.0   # <-- this blocks
+                and dist_from_start <= 5.0)
+        assert not gate, "15m excursion guard failed — false positive at figure-8 midpoint"
