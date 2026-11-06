@@ -37,6 +37,7 @@ _QOS_EUFS = QoSProfile(
     depth=10,
 )
 
+
 def _cone_array_to_track(msg: ConeArrayWithCovariance, frame_id: str) -> Track:
     """Flatten the per-colour EUFS cone arrays into one mfe Track."""
     track = Track()
