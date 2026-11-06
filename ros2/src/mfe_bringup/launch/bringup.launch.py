@@ -160,6 +160,15 @@ def generate_launch_description():
         ),
     )
 
+    sim_cones_direct_arg = DeclareLaunchArgument(
+        'sim_cones_direct',
+        default_value='false',
+        description=(
+            'Set true when mfe_eufs_sim runs with use_sim_cones_directly:=true, so bridge_node owns '
+            '/planning/cones. Together with use_perception:=true the launch fails.'
+        ),
+    )
+
     endless_arg = DeclareLaunchArgument(
         'endless',
         default_value='false',
@@ -439,6 +448,12 @@ def generate_launch_description():
         # slam:=gtsam publishes the cone map on /planning/cones; two publishers would conflict.
         if context.launch_configurations.get('slam', 'toolbox') == 'gtsam':
             return []
+        if context.launch_configurations.get('sim_cones_direct', 'false').lower() == 'true':
+            if context.launch_configurations.get('use_perception', 'true').lower() == 'true':
+                raise RuntimeError(
+                    'sim_cones_direct:=true and use_perception:=true both publish /planning/cones '
+                    '(bridge_node and boundary_extractor). Pass use_perception:=false.')
+            return []
         return [Node(
             package='mfe_path_planning',
             executable='boundary_extractor',
@@ -709,6 +724,7 @@ def generate_launch_description():
         vision_model_arg,
         pose_topic_arg,
         use_perception_arg,
+        sim_cones_direct_arg,
         endless_arg,
         num_laps_arg,
         orange_topic_arg,

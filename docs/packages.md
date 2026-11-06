@@ -18,6 +18,7 @@ Every package in `ros2/src/`. For node-level detail see [nodes.md](nodes.md).
 | `vision_model_path` | `~/mfe_models/yolo/yolov8s/weights/best.pt` | Path to YOLO weights; empty = skip |
 | `pose_topic` | `/ekf/output` | Odometry source; use `/sim/xsens/state_odom` in sim (not raw ground truth) |
 | `use_perception` | `true` | Set `false` in no_perception sim mode |
+| `sim_cones_direct` | `false` | Set `true` with `use_sim_cones_directly:=true` on mfe_eufs_sim; errors if `use_perception:=true` |
 | `endless` | `false` | Set `true` to disable finish detector |
 | `num_laps` | `1` | Stop after this many lap crossings |
 
