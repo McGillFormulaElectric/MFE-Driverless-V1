@@ -51,6 +51,7 @@ public:
         this->declare_parameter("cone_z_max", -0.50f);
         // Ignored when built without CUDA.
         this->declare_parameter("use_gpu", true);
+        this->declare_parameter("odom_topic", "/ekf/output");
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -89,7 +90,7 @@ public:
             std::bind(&LidarPerceptionNode::cloud_callback, this, std::placeholders::_1));
 
         sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/ekf/output", rclcpp::SensorDataQoS(),
+            this->get_parameter("odom_topic").as_string(), rclcpp::SensorDataQoS(),
             std::bind(&LidarPerceptionNode::odom_callback, this, std::placeholders::_1));
 
         pub_centroids_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
