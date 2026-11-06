@@ -14,7 +14,7 @@ Implements Chalmers-style failsafes for the autonomous Formula Student car:
     Status is broadcast on /as/supervisor/status.
 
   Control latency watchdog:
-    The pure_pursuit_node publishes /control/command at 20 Hz.  If the inter-arrival
+    The pure_pursuit_node publishes /control/command at 50 Hz.  If the inter-arrival
     gap between consecutive commands exceeds control_latency_threshold_ms, the car is
     assumed to have experienced a compute overrun; the supervisor publishes a reduced-
     throttle command on /mfe/emergency_brake to trigger the safety response in the ACU.
@@ -44,7 +44,6 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 import numpy as np
 
@@ -52,6 +51,18 @@ from std_msgs.msg import Bool, String
 from sensor_msgs.msg import PointCloud2, NavSatFix
 from nav_msgs.msg import Odometry
 from mfe_msgs.msg import Track
+from mfe_common.geometry import yaw_from_quaternion
+from mfe_control.supervisor_logic import haversine_m, obb_hits
+from mfe_common.qos import RELIABLE_QOS, SENSOR_QOS
+from mfe_common.topics import (
+    AS_SUPERVISOR_STATUS,
+    CONTROL_COMMAND,
+    EKF_OUTPUT,
+    GPS,
+    LIDAR_POINTS_RAW,
+    MFE_EMERGENCY_BRAKE,
+    PLANNING_CONES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,16 +74,6 @@ try:
     _HAS_FS_MSGS = True
 except ImportError:
     _HAS_FS_MSGS = False
-
-
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Return approximate great-circle distance in metres between two WGS-84 points."""
-    R = 6_371_000.0  # Earth radius in metres
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 class SupervisorNode(Node):
@@ -93,15 +94,14 @@ class SupervisorNode(Node):
         self.declare_parameter('gps_jump_threshold_m',         2.0)
         self.declare_parameter('gps_cov_threshold',           25.0)
         self.declare_parameter('control_latency_threshold_ms', 100)
-        self.declare_parameter('cone_hit_radius_m',            0.5)   # kept for backwards compat
         self.declare_parameter('car_half_length',              1.5)   # half of ~3m wheelbase+bumpers
         self.declare_parameter('car_half_width',               0.8)   # half of ~1.6m track width
+        self.declare_parameter('odom_topic', EKF_OUTPUT)
 
         self._lidar_timeout_s    = self.get_parameter('lidar_timeout_ms').value / 1000.0
         self._gps_jump_thr_m    = float(self.get_parameter('gps_jump_threshold_m').value)
         self._gps_cov_thr       = float(self.get_parameter('gps_cov_threshold').value)
         self._ctrl_lat_thr_s    = self.get_parameter('control_latency_threshold_ms').value / 1000.0
-        self._cone_hit_r        = float(self.get_parameter('cone_hit_radius_m').value)
         self._car_half_length   = float(self.get_parameter('car_half_length').value)
         self._car_half_width    = float(self.get_parameter('car_half_width').value)
 
@@ -129,42 +129,34 @@ class SupervisorNode(Node):
         # ---------------------------------------------------------------
         # QoS profiles
         # ---------------------------------------------------------------
-        sensor_qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-        )
-        reliable_qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-        )
+        sensor_qos = SENSOR_QOS
+        reliable_qos = RELIABLE_QOS
 
         # ---------------------------------------------------------------
         # Subscriptions
         # ---------------------------------------------------------------
         # LiDAR pointcloud — topic confirmed in lidar_pipeline.launch.py
         self.create_subscription(
-            PointCloud2, '/lidar/points_raw',
+            PointCloud2, LIDAR_POINTS_RAW,
             self._lidar_callback, sensor_qos,
         )
 
         # GPS fix — topic confirmed in xsens_mti.launch.py and ekf_params.yaml
         self.create_subscription(
-            NavSatFix, '/gps',
+            NavSatFix, GPS,
             self._gps_callback, sensor_qos,
         )
 
         # Cone map + odometry for proximity detection
         self.create_subscription(
-            Track, '/planning/cones', self._cones_callback, reliable_qos)
+            Track, PLANNING_CONES, self._cones_callback, reliable_qos)
         self.create_subscription(
-            Odometry, '/ekf/output', self._odom_callback, reliable_qos)
+            Odometry, self.get_parameter('odom_topic').value, self._odom_callback, reliable_qos)
 
         # Control command heartbeat — topic confirmed in pure_pursuit_node.py
         if _HAS_FS_MSGS:
             self.create_subscription(
-                ControlCommand, '/control/command',
+                ControlCommand, CONTROL_COMMAND,
                 self._control_callback, reliable_qos,
             )
         else:
@@ -176,8 +168,8 @@ class SupervisorNode(Node):
         # ---------------------------------------------------------------
         # Publishers
         # ---------------------------------------------------------------
-        self._status_pub = self.create_publisher(String, '/as/supervisor/status', reliable_qos)
-        self._brake_pub  = self.create_publisher(Bool,   '/mfe/emergency_brake',  reliable_qos)
+        self._status_pub = self.create_publisher(String, AS_SUPERVISOR_STATUS, reliable_qos)
+        self._brake_pub  = self.create_publisher(Bool,   MFE_EMERGENCY_BRAKE,  reliable_qos)
 
         # ---------------------------------------------------------------
         # 10 Hz watchdog + status timer
@@ -200,10 +192,7 @@ class SupervisorNode(Node):
         self._car_x = msg.pose.pose.position.x
         self._car_y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
-        self._car_yaw = math.atan2(
-            2.0 * (q.w * q.z + q.x * q.y),
-            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-        )
+        self._car_yaw = yaw_from_quaternion(q)
 
     def _cones_callback(self, msg: Track) -> None:
         """Cache latest fused cone positions as Nx2 numpy array for proximity checks."""
@@ -236,7 +225,7 @@ class SupervisorNode(Node):
         # Position jump check
         jump_bad = False
         if self._last_gps_lat is not None and self._last_gps_lon is not None:
-            dist = _haversine_m(
+            dist = haversine_m(
                 self._last_gps_lat, self._last_gps_lon,
                 msg.latitude, msg.longitude,
             )
@@ -314,16 +303,8 @@ class SupervisorNode(Node):
         # Hit condition: |local_x| < car_half_length  AND  |local_y| < car_half_width
         self._cone_hit = False
         if self._cone_xy.shape[0] > 0:
-            dx = self._cone_xy[:, 0] - self._car_x   # shape (N,)
-            dy = self._cone_xy[:, 1] - self._car_y
-            cos_y = math.cos(self._car_yaw)
-            sin_y = math.sin(self._car_yaw)
-            local_x =  dx * cos_y + dy * sin_y       # forward axis, shape (N,)
-            local_y = -dx * sin_y + dy * cos_y       # left axis,    shape (N,)
-            inside = (
-                (np.abs(local_x) < self._car_half_length)
-                & (np.abs(local_y) < self._car_half_width)
-            )
+            inside, local_x, local_y = obb_hits(self._cone_xy, self._car_x, self._car_y, self._car_yaw,
+                                                self._car_half_length, self._car_half_width)
             if inside.any():
                 self._cone_hit = True
                 hit_idx = int(np.argmax(inside))

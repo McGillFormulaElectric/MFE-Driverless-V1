@@ -45,11 +45,19 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
 from fs_msgs.msg import ControlCommand
 from std_msgs.msg import Bool, Header
+from mfe_common.geometry import wrap_angle_atan2, yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS, SENSOR_QOS
+from mfe_common.topics import (
+    CONTROL_COMMAND,
+    CONTROL_COMMAND_MPC,
+    EKF_OUTPUT,
+    PLANNING_CENTERLINE,
+    PLANNING_MISSION_FINISHED,
+)
 
 # ---------------------------------------------------------------------------
 # Optional OSQP + sparse
@@ -143,25 +151,25 @@ class MPCLateralNode(Node):
         # ------------------------------------------------------------------
         # QoS profiles
         # ------------------------------------------------------------------
-        reliable_qos    = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        best_effort_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        reliable_qos    = RELIABLE_QOS
+        best_effort_qos = SENSOR_QOS
 
         # ------------------------------------------------------------------
         # Subscribers
         # ------------------------------------------------------------------
-        self.create_subscription(Path,           '/planning/centerline',
+        self.create_subscription(Path,           PLANNING_CENTERLINE,
                                  self._path_cb,     best_effort_qos)
-        self.create_subscription(Odometry,        '/ekf/output',
+        self.create_subscription(Odometry,        EKF_OUTPUT,
                                  self._odom_cb,     best_effort_qos)
-        self.create_subscription(Bool,            '/planning/mission_finished',
+        self.create_subscription(Bool,            PLANNING_MISSION_FINISHED,
                                  self._finished_cb, reliable_qos)
-        self.create_subscription(ControlCommand,  '/control/command',
+        self.create_subscription(ControlCommand,  CONTROL_COMMAND,
                                  self._pp_cmd_cb,   reliable_qos)
 
         # ------------------------------------------------------------------
         # Publisher
         # ------------------------------------------------------------------
-        self._cmd_pub = self.create_publisher(ControlCommand, '/control/command_mpc', reliable_qos)
+        self._cmd_pub = self.create_publisher(ControlCommand, CONTROL_COMMAND_MPC, reliable_qos)
 
         # ------------------------------------------------------------------
         # Control timer: 20 Hz
@@ -190,7 +198,7 @@ class MPCLateralNode(Node):
     def _odom_cb(self, msg: Odometry):
         self._car_x   = msg.pose.pose.position.x
         self._car_y   = msg.pose.pose.position.y
-        self._car_yaw = self._quat_to_yaw(msg.pose.pose.orientation)
+        self._car_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
         vx = msg.twist.twist.linear.x
         vy = msg.twist.twist.linear.y
         self._car_speed = math.hypot(vx, vy)
@@ -321,7 +329,7 @@ class MPCLateralNode(Node):
         # ------------------------------------------------------------------
         e_yaw = car_yaw - tangent_yaw
         # Wrap to (−π, π]
-        e_yaw = math.atan2(math.sin(e_yaw), math.cos(e_yaw))
+        e_yaw = wrap_angle_atan2(e_yaw)
 
         return e_y, e_yaw
 
@@ -604,13 +612,6 @@ class MPCLateralNode(Node):
     # ======================================================================
     # Utilities
     # ======================================================================
-
-    @staticmethod
-    def _quat_to_yaw(q) -> float:
-        """Convert a ROS quaternion message to yaw (radians)."""
-        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        return math.atan2(siny_cosp, cosy_cosp)
 
 
 # ===========================================================================

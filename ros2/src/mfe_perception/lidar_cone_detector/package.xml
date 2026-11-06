@@ -2,8 +2,8 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lidar_cone_detector</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <version>1.1.0</version>
+  <description>LiDAR preprocessing, ground removal and cone clustering (C++, optional CUDA filters).</description>
   <maintainer email="albert@todo.todo">albert</maintainer>
   <license>GPL-3.0-only</license>
 
@@ -28,7 +28,6 @@
   <depend>pointcloud_to_laserscan</depend>
 
   <depend>rclpy</depend>
-  <depend>python3-sklearn</depend>
 
   <exec_depend>libpcl-common</exec_depend>
   <exec_depend>libpcl-features</exec_depend>

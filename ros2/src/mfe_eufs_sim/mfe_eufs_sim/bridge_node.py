@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
 """
 EUFS sim <-> MFE driverless bridge: remaps sensor and ground-truth topics, and converts
-/control/command to /cmd via the drivetrain model (EUFS must run with commandMode:=acceleration).
+/control/command to /cmd via the drivetrain model. /cmd carries drive.acceleration and
+steering_angle (drive.speed is not set); the bridge is written for EUFS
+commandMode:=acceleration.
 Never publishes /ekf/output, which belongs to the EKF node.
+With wheel_speed_topic set it also plays the CAN role for the wheel speed: the forward speed from
+the ground-truth odometry, with encoder noise (sensor_emulation.WheelSpeedEmulator), on that topic.
 """
 
 import math
-import struct
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from sensor_msgs.msg import Image, PointCloud2, PointField
+from sensor_msgs.msg import Image, PointCloud2
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Header
 
 from eufs_msgs.msg import ConeArrayWithCovariance
+from mfe_common.qos import RELIABLE_QOS
 from mfe_msgs.msg import Cone, Track
 from fs_msgs.msg import ControlCommand
 
 from mfe_eufs_sim.drivetrain_model import AMKDrivetrainModel
+from mfe_eufs_sim.sensor_emulation import WHEEL_SPEED_RATE_HZ, WheelSpeedEmulator
 
 try:
-    from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
+    from ackermann_msgs.msg import AckermannDriveStamped
     _ACKERMANN_AVAILABLE = True
 except ImportError:
     _ACKERMANN_AVAILABLE = False
@@ -32,12 +37,6 @@ except ImportError:
 # EUFS sim publishes with BEST_EFFORT reliability
 _QOS_EUFS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=10,
-)
-
-_QOS_MFE = QoSProfile(
-    reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10,
 )
@@ -72,39 +71,6 @@ def _cone_array_to_track(msg: ConeArrayWithCovariance, frame_id: str) -> Track:
     return track
 
 
-def _cone_array_to_pointcloud2(msg: ConeArrayWithCovariance) -> PointCloud2:
-    """Flatten all cones into an x, y, z float32 PointCloud2."""
-    all_cones = (
-        list(msg.blue_cones)
-        + list(msg.yellow_cones)
-        + list(msg.orange_cones)
-        + list(msg.big_orange_cones)
-        + list(msg.unknown_color_cones)
-    )
-
-    fields = [
-        PointField(name='x', offset=0,  datatype=PointField.FLOAT32, count=1),
-        PointField(name='y', offset=4,  datatype=PointField.FLOAT32, count=1),
-        PointField(name='z', offset=8,  datatype=PointField.FLOAT32, count=1),
-    ]
-    point_step = 12  # 3 × float32
-    data = bytearray()
-    for cw in all_cones:
-        data += struct.pack('<fff', float(cw.point.x), float(cw.point.y), float(cw.point.z))
-
-    cloud = PointCloud2()
-    cloud.header = msg.header
-    cloud.height = 1
-    cloud.width = len(all_cones)
-    cloud.fields = fields
-    cloud.is_bigendian = False
-    cloud.point_step = point_step
-    cloud.row_step = point_step * len(all_cones)
-    cloud.is_dense = True
-    cloud.data = bytes(data)
-    return cloud
-
-
 def _car_state_to_odometry(msg) -> Odometry:
     """Convert eufs CarState to nav_msgs/Odometry (pose and twist)."""
     odom = Odometry()
@@ -129,7 +95,7 @@ def _car_state_to_odometry(msg) -> Odometry:
 
 class EufsSimBridge(Node):
 
-    MAX_STEERING_ANGLE_RAD = math.radians(25.0)
+    MAX_STEERING_ANGLE_RAD = math.radians(28.0)
     MAX_SPEED_MS = 10.0   # m/s
 
     def __init__(self):
@@ -137,9 +103,11 @@ class EufsSimBridge(Node):
 
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
-        self.declare_parameter('max_steering_deg', 25.0)
+        self.declare_parameter('max_steering_deg', 28.0)
         self.declare_parameter('max_speed_ms', 10.0)
         self.declare_parameter('use_sim_cones_directly', True)
+        self.declare_parameter('lidar_output_topic', '/lidar/points_raw')
+        self.declare_parameter('wheel_speed_topic', '')  # empty: no CAN wheel speed
 
         # Vehicle numbers are placeholders; see drivetrain_model.py.
         self.declare_parameter('gear_ratio', 14.0)
@@ -169,48 +137,61 @@ class EufsSimBridge(Node):
         self._current_speed_ms = 0.0
         self._last_control_time = None
 
-        self.create_subscription(
-            PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
-        self._lidar_pub = self.create_publisher(
-            PointCloud2, '/lidar/points_raw', _QOS_MFE)
+        # An empty lidar_output_topic means no LiDAR sensor: nothing is subscribed or published.
+        lidar_output_topic = self.get_parameter('lidar_output_topic').value
+        self._lidar_pub = None
+        if lidar_output_topic:
+            self.create_subscription(
+                PointCloud2, '/velodyne_points', self._lidar_cb, _QOS_EUFS)
+            self._lidar_pub = self.create_publisher(
+                PointCloud2, lidar_output_topic, RELIABLE_QOS)
 
         # Sim car carries a D435i (/d435i/color/image_raw); the older ZED topic is kept as a fallback
         # (only one of the two ever publishes).
         for _cam_topic in ('/d435i/color/image_raw', '/zed/left/image_rect_color'):
             self.create_subscription(Image, _cam_topic, self._camera_cb, _QOS_EUFS)
         self._camera_pub = self.create_publisher(
-            Image, '/camera/image_raw', _QOS_MFE)
+            Image, '/camera/image_raw', RELIABLE_QOS)
 
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/cones', self._gt_cones_cb, _QOS_EUFS)
         self._gt_colored_pub = self.create_publisher(
-            Track, '/ground_truth/cones_colored', _QOS_MFE)
+            Track, '/ground_truth/cones_colored', RELIABLE_QOS)
 
         # Colour fallback for boundary_extractor when the camera is not running.
         self.create_subscription(
             ConeArrayWithCovariance, '/ground_truth/track', self._gt_track_cb, _QOS_EUFS)
         self._gt_track_colored_pub = self.create_publisher(
-            Track, '/ground_truth/track_colored', _QOS_MFE)
+            Track, '/ground_truth/track_colored', RELIABLE_QOS)
 
         # GT bypass: forward all track cones to /planning/cones. World frame = TF map frame, no transform needed.
         if self._use_sim_cones_directly:
             self.create_subscription(
                 ConeArrayWithCovariance, '/ground_truth/track', self._sim_cones_cb, _QOS_EUFS)
             self._planning_cones_pub = self.create_publisher(
-                Track, '/planning/cones', _QOS_MFE)
+                Track, '/planning/cones', RELIABLE_QOS)
 
         # Not /ekf/output: the EKF node (mfe_state_estimation) owns that topic.
         from eufs_msgs.msg import CarState
         self.create_subscription(
             CarState, '/ground_truth/state', self._car_state_cb, _QOS_EUFS)
         self._odom_pub = self.create_publisher(
-            Odometry, '/ground_truth/state_odom', _QOS_MFE)
+            Odometry, '/ground_truth/state_odom', RELIABLE_QOS)
+
+        self._wheel_speed = None
+        self._wheel_speed_pub = None
+        wheel_speed_topic = self.get_parameter('wheel_speed_topic').value
+        if wheel_speed_topic:
+            self._wheel_speed = WheelSpeedEmulator(
+                np.random.default_rng(), WHEEL_SPEED_RATE_HZ, self._base_frame)
+            self._wheel_speed_pub = self.create_publisher(
+                Odometry, wheel_speed_topic, RELIABLE_QOS)
 
         self.create_subscription(
-            ControlCommand, '/control/command', self._control_cb, _QOS_MFE)
+            ControlCommand, '/control/command', self._control_cb, RELIABLE_QOS)
         if _ACKERMANN_AVAILABLE:
             self._cmd_pub = self.create_publisher(
-                AckermannDriveStamped, '/cmd', _QOS_MFE)
+                AckermannDriveStamped, '/cmd', RELIABLE_QOS)
         else:
             self._cmd_pub = None
             self.get_logger().warn(
@@ -274,6 +255,11 @@ class EufsSimBridge(Node):
         """Publish ground-truth odometry and cache speed for the drivetrain model."""
         odom = _car_state_to_odometry(msg)
         self._odom_pub.publish(odom)
+        if self._wheel_speed is not None:
+            wheel_speed = self._wheel_speed.on_ground_truth(
+                msg.header.stamp, msg.twist.twist.linear.x)
+            if wheel_speed is not None:
+                self._wheel_speed_pub.publish(wheel_speed)
         # Ground-truth speed stands in for wheel-speed encoders, not the noisy Xsens odom.
         vx = msg.twist.twist.linear.x
         vy = msg.twist.twist.linear.y
@@ -283,8 +269,9 @@ class EufsSimBridge(Node):
         """
         Convert fs_msgs/ControlCommand → ackermann_msgs/AckermannDriveStamped.
 
-        Requires commandMode:=acceleration: AckermannDrive.acceleration is applied directly, bypassing
-        the plugin's velocity loop (see gazebo_ros_race_car_model.cpp).
+        Writes AckermannDrive.acceleration and steering_angle only. The bridge is written for
+        commandMode:=acceleration, where the plugin applies acceleration directly, bypassing its
+        velocity loop (see gazebo_ros_race_car_model.cpp).
         throttle in [0, 1] gives positive acceleration; brake in [0, 1] gives negative acceleration
         and overrides throttle. steering in [-1, 1] maps to steering_angle in radians.
         """

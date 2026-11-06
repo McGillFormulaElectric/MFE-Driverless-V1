@@ -6,7 +6,7 @@ package_name = 'mfe_eufs_sim'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='1.1.0',
     packages=[package_name],
     data_files=[
         # ament index resource
@@ -15,6 +15,8 @@ setup(
         (os.path.join('share', package_name), ['package.xml']),
         # launch files
         (os.path.join('share', package_name, 'launch'), glob.glob('launch/*.launch.py')),
+        # node parameter files
+        (os.path.join('share', package_name, 'config'), glob.glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -34,6 +36,7 @@ setup(
     entry_points={
         'console_scripts': [
             'bridge_node = mfe_eufs_sim.bridge_node:main',
+            'imu_gps_emulator = mfe_eufs_sim.imu_gps_emulator_node:main',
             'xsens_noise_node = mfe_eufs_sim.xsens_noise_node:main',
         ],
     },

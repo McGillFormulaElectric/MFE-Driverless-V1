@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>mfe_simulation</name>
-  <version>0.0.0</version>
+  <version>1.1.0</version>
   <description>Simulation Communication Package for Connection with IPG Simulations @ McGill Formula-E </description>
 
   <maintainer email="root@todo.todo">McGill Formula Electric</maintainer>
@@ -21,7 +21,8 @@
   <depend>tf2_ros</depend>
 
   <!-- Runtime dependencies -->
-  <exec_depend>numpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
 
   <!-- Test dependencies -->

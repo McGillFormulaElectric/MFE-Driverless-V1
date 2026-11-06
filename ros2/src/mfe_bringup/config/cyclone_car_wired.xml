@@ -1,0 +1,36 @@
+<!--
+  CycloneDDS configuration for the car's wired network (192.168.10.0/24).
+
+  Used by run_car.sh and by car.launch.py on both Jetsons. ROS traffic between the two Jetsons
+  and the sensors runs only on the direct Gigabit link; Tailscale is not a ROS peer.
+
+  Addresses (static, set on the switch-side ports of each machine):
+    mfe-driverless-1 (Jetson 1, sensors attached)  192.168.10.1
+    mfe-driverless-2 (Jetson 2, serves time)       192.168.10.2
+    Velodyne VLP-16                                192.168.10.201 (sends UDP 2368 to 192.168.10.1)
+    Desktop (monitoring)                           192.168.10.50
+
+  Unicast peers on the car network only, no multicast. Each Jetson discovers itself, so
+  listing its own address is harmless. The Ethernet interface is picked by its 192.168.10.x
+  address; if a host has more than one such interface, pin it with NetworkInterface address.
+  Use with: export CYCLONEDDS_URI=file://<repo>/ros2/src/mfe_bringup/config/cyclone_car_wired.xml
+-->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+
+    <Discovery>
+      <Peers>
+        <Peer address="192.168.10.1"/>   <!-- mfe-driverless-1 -->
+        <Peer address="192.168.10.2"/>   <!-- mfe-driverless-2 -->
+      </Peers>
+    </Discovery>
+
+    <Tracing>
+      <!-- <Verbosity>config</Verbosity> -->
+      <!-- <OutputFile>stderr</OutputFile> -->
+    </Tracing>
+  </Domain>
+</CycloneDDS>

@@ -40,14 +40,14 @@ from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
     LogInfo, RegisterEventHandler,
 )
-from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 
 
 _MFE_REPO   = 'https://github.com/McGillFormulaElectric/MFE-Driverless-V1.git'
-_MFE_DIR    = '~/Develop/MFE-Driverless-V1'
+# Checkout path on each Jetson (expanded by the remote shell). Override with MFE_REMOTE_DIR.
+_MFE_DIR    = os.environ.get('MFE_REMOTE_DIR', '~/Develop/MFE-Driverless-V1')
 _SETUP_SCRIPT = f'{_MFE_DIR}/scripts/setup_jetson.sh'
 # Marker file present only after a successful colcon build on the remote.
 _BUILD_MARKER = f'{_MFE_DIR}/ros2/install/mfe_bringup/share/mfe_bringup/launch/compute.launch.py'
@@ -61,7 +61,7 @@ _BUILD_MARKER = f'{_MFE_DIR}/ros2/install/mfe_bringup/share/mfe_bringup/launch/c
 _SSH_LAUNCH = (
     "bash -lc '"
     # ── Step 1: clone if needed ──────────────────────────────────────────
-    "mkdir -p ~/Develop && "
+    "mkdir -p $(dirname {mfe_dir}) && "
     "if [ ! -d {mfe_dir} ]; then "
     "  echo \"[fleet] Cloning MFE-Driverless-V1 on $(hostname)...\"; "
     "  git clone {repo} {mfe_dir} || exit 1; "
@@ -144,6 +144,12 @@ def generate_launch_description():
         description='Enable SLAM toolbox on perception machine.',
     )
 
+    slam_arg = DeclareLaunchArgument(
+        'slam', default_value='toolbox',
+        choices=['toolbox', 'gtsam', 'none'],
+        description='SLAM implementation, forwarded to all remote launches (see bringup).',
+    )
+
     use_ekf_arg = DeclareLaunchArgument(
         'use_ekf', default_value='true',
         description='Enable EKF on perception machine.',
@@ -170,6 +176,7 @@ def generate_launch_description():
         use_ekf     = context.launch_configurations.get('use_ekf', 'true')
         endless     = context.launch_configurations.get('endless', 'false')
         model_path  = context.launch_configurations.get('vision_model_path', '')
+        slam = context.launch_configurations.get('slam', 'toolbox')
 
         if role == 'none':
             return [LogInfo(msg='[fleet] local_role=none — no nodes launched locally')]
@@ -185,6 +192,7 @@ def generate_launch_description():
                 'mission':            mission,
                 'pose_topic':         pose_topic,
                 'use_slam':           use_slam,
+                'slam':               slam,
                 'use_ekf':            use_ekf,
                 'endless':            endless,
                 'vision_model_path':  model_path,
@@ -206,12 +214,14 @@ def generate_launch_description():
         use_ekf          = context.launch_configurations.get('use_ekf', 'true')
         endless          = context.launch_configurations.get('endless', 'false')
         model_path       = context.launch_configurations.get('vision_model_path', '')
+        slam = context.launch_configurations.get('slam', 'toolbox')
 
-        # Common args forwarded to every remote launch
+        # Common args forwarded to every remote launch (slam also selects the planner pose route)
         common = (
             f'mission:={mission} '
             f'pose_topic:={pose_topic} '
-            f'endless:={endless}'
+            f'endless:={endless} '
+            f'slam:={slam}'
         )
 
         # SSH → compute Jetson (unless compute runs locally)
@@ -255,6 +265,7 @@ def generate_launch_description():
         mission_arg,
         pose_topic_arg,
         use_slam_arg,
+        slam_arg,
         use_ekf_arg,
         endless_arg,
         vision_model_arg,

@@ -8,12 +8,14 @@
 
 set -e
 
-GAZEBO_WS=~/Develop/gazebo11
-GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
-EUFS_WS=~/Develop/MFE26-eufs-sim
+# Parent directory for the sources; each path can be overridden from the environment.
+DEVELOP_DIR=${DEVELOP_DIR:-$HOME/Develop}
+GAZEBO_WS=${GAZEBO_WS:-$DEVELOP_DIR/gazebo11}
+GAZEBO_ROS_WS=${GAZEBO_ROS_WS:-$DEVELOP_DIR/gazebo_ros_pkgs}
+EUFS_WS=${EUFS_WS:-$DEVELOP_DIR/MFE26-eufs-sim}
 
 echo "==> [1/5] Building sdformat9 from source..."
-cd ~/Develop
+cd "$DEVELOP_DIR"
 if [ ! -d sdformat9 ]; then
     git clone https://github.com/gazebosim/sdformat.git -b sdf9 sdformat9
 fi
@@ -26,7 +28,7 @@ sudo ldconfig
 echo "sdformat9 installed."
 
 echo "==> [2/5] Building Gazebo Classic 11 from source..."
-cd ~/Develop
+cd "$DEVELOP_DIR"
 if [ ! -d gazebo11 ]; then
     git clone https://github.com/gazebosim/gazebo-classic.git -b gazebo11 gazebo11
 fi
@@ -39,7 +41,7 @@ sudo ldconfig
 echo "Gazebo 11 installed."
 
 echo "==> [3/5] Building gazebo_ros_pkgs from source..."
-cd ~/Develop
+cd "$DEVELOP_DIR"
 if [ ! -d gazebo_ros_pkgs ]; then
     git clone https://github.com/ros-simulation/gazebo_ros_pkgs.git -b ros2 gazebo_ros_pkgs
 fi

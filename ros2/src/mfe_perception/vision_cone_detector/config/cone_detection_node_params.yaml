@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    depth_callback: false
+    camera_frame: "camera_base"
+    output_body_frame: false       # true: publish cones in a body-convention camera frame
+    model_path: "yolo11n.pt"       # launches set the real weights path
+    yolo_conf: 0.5
+    yolo_iou: 0.3
+    publish_debug_image: false

@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    lidar_timeout_ms: 200
+    gps_jump_threshold_m: 2.0
+    gps_cov_threshold: 25.0
+    control_latency_threshold_ms: 100
+    car_half_length: 1.5      # half of ~3m wheelbase+bumpers
+    car_half_width: 0.8       # half of ~1.6m track width

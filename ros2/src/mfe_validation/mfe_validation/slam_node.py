@@ -1,11 +1,13 @@
 """Live cone-landmark SLAM (optimiser behind the `backend` parameter, see slam_backend.py).
 
-In : /sim/xsens/state_odom (yaw and forward/lateral speed are integrated; its absolute position is not used),
+In : odom_topic (default /sim/xsens/state_odom; yaw and forward/lateral speed are integrated,
+     its absolute position is not used),
      /perception/cones_uncolored (LiDAR detections, sensor frame).
-Out: /slam/odom (start-relative frame), /validation/cones (mfe_msgs/Track of confirmed landmarks).
+Out: /slam/odom (start-relative frame), cones_topic (mfe_msgs/Track of confirmed landmarks), default /validation/cones.
 Colours: color_mode='gt' comes from /ground_truth/track_colored (validation only; positions never use ground truth);
-'geometric' is left=blue/right=yellow; 'yolo' gives each LiDAR landmark the colour the camera's YOLO detections vote for
-(see cam_fusion.py), with the 'color_fallback' for landmarks the camera has not settled.
+'geometric' is left=blue/right=yellow; any other mode leaves the cones UNKNOWN. The camera colour modes (yolo,
+orange_only, yolo_lidar) are coloured by cone_colour_fusion_node from the cone map this node publishes, so for them
+cones_topic is the uncoloured map.
 Accuracy against /ground_truth/state_odom is logged for scoring only.
 """
 import math
@@ -14,20 +16,26 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
-from sensor_msgs_py import point_cloud2 as pc2
 from mfe_msgs.msg import Track, Cone
-from mfe_validation.cam_fusion import CamFusion, PoseHistory, decide
-from mfe_validation.common import QOS, car_start, read_track, wrap, yaw_of
+from mfe_common.geometry import pointcloud2_to_xy_array, wrap_angle, yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS
+from mfe_validation.common import car_start, read_track
 from mfe_validation.slam_backend import compose, make_backend, transform_from
+from mfe_common.topics import (
+    GROUND_TRUTH_STATE_ODOM,
+    GROUND_TRUTH_TRACK_COLORED,
+    PERCEPTION_CONES_UNCOLORED,
+    SIM_XSENS_STATE_ODOM,
+    SLAM_ODOM,
+    VALIDATION_CONES,
+)
 
-PARAMS = dict(track_csv='', keyframe_m=1.5, gate=1.0, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
+PARAMS = dict(track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
               min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
-              cones_topic='/validation/cones', color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
-              use_lateral_vel=False, backend='gtsam',
-              yolo_topic='/image/cones', cam_hfov_deg=87.0, cam_width=640, cam_height=480, cam_pitch_deg=-3.0,   # fitted: YOLO boxes sit within a few px of landmarks at -3 deg (URDF says +10.15 but the sim image is ~level)
-              
-              cam_x=0.12, cam_y=0.0, cam_z=0.76, cone_z=0.16, pix_du=0.0, pix_dv=0.0, match_px=40.0,
-              color_min_range=2.0, color_max_range=18.0, min_color_votes=2, color_vote_share=0.6, color_fallback='geometric')
+              cones_topic=VALIDATION_CONES, color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
+              use_lateral_vel=False, backend='gtsam', odom_topic=SIM_XSENS_STATE_ODOM,
+              ground_truth_odom_topic=GROUND_TRUTH_STATE_ODOM,
+              ground_truth_track_topic=GROUND_TRUTH_TRACK_COLORED)
 
 
 class SlamNode(Node):
@@ -60,23 +68,13 @@ class SlamNode(Node):
         self.gt_pose = None
         self.xs_pose = None
         self.errs, self.errs_raw = [], []
-        self.poses = PoseHistory()          # SLAM pose history, for placing each camera frame where the car was when it was taken
-        self.votes = {}                     # landmark id -> colour votes [blue, yellow, orange big, orange small, unknown]
-        self.pending, self.pending_stamp = [], None
-        self.n_frames = self.n_votes = 0
-        self.min_votes, self.vote_share, self.fallback = p('min_color_votes'), p('color_vote_share'), p('color_fallback')
-        self.fusion = CamFusion(p('cam_hfov_deg'), p('cam_width'), p('cam_height'), (p('cam_x'), p('cam_y'), p('cam_z')),
-                                p('cam_pitch_deg'), p('cone_z'), p('pix_du'), p('pix_dv'), p('match_px'),
-                                p('color_min_range'), p('color_max_range'))
-        self.create_subscription(Odometry, '/sim/xsens/state_odom', self.on_odom, QOS)
-        self.create_subscription(Odometry, '/ground_truth/state_odom', self.on_gt, QOS)
-        self.create_subscription(PointCloud2, '/perception/cones_uncolored', self.on_cones, QOS)
+        self.create_subscription(Odometry, p('odom_topic'), self.on_odom, RELIABLE_QOS)
+        self.create_subscription(Odometry, p('ground_truth_odom_topic'), self.on_gt, RELIABLE_QOS)
+        self.create_subscription(PointCloud2, PERCEPTION_CONES_UNCOLORED, self.on_cones, RELIABLE_QOS)
         if self.color_mode == 'gt':
-            self.create_subscription(Track, '/ground_truth/track_colored', self.on_gt_track, 1)
-        if self.color_mode == 'yolo':
-            self.create_subscription(Cone, p('yolo_topic'), self.on_yolo, QOS)
-        self.pub_odom = self.create_publisher(Odometry, '/slam/odom', QOS)
-        self.pub_cones = self.create_publisher(Track, p('cones_topic'), QOS)
+            self.create_subscription(Track, p('ground_truth_track_topic'), self.on_gt_track, 1)
+        self.pub_odom = self.create_publisher(Odometry, SLAM_ODOM, RELIABLE_QOS)
+        self.pub_cones = self.create_publisher(Track, p('cones_topic'), RELIABLE_QOS)
         self.create_timer(1.0 / max(0.1, float(p('publish_hz'))), self.publish_cones)
         self.create_timer(10.0, self.report)
         self.get_logger().info(f'slam_node up: velocity+yaw odometry, cone landmarks, colour mode={self.color_mode}, output {p("cones_topic")}')
@@ -88,40 +86,13 @@ class SlamNode(Node):
         self.gt_cones = np.c_[c * xy[:, 0] + s * xy[:, 1], -s * xy[:, 0] + c * xy[:, 1]]
         self.gt_colors = [q.color for q in m.track]
 
-    def on_yolo(self, m):
-        """One message per detection (pixel centre + colour class), all sharing the camera frame's capture stamp."""
-        stamp = (m.header.stamp.sec, m.header.stamp.nanosec)
-        if self.pending_stamp is not None and stamp != self.pending_stamp:
-            self.flush_yolo()
-        self.pending_stamp = stamp
-        if m.header.frame_id == 'camera_pixel':
-            self.pending.append((m.location.x, m.location.y, int(m.color)))
-
-    def flush_yolo(self):
-        sec, nsec = self.pending_stamp
-        dets, self.pending = self.pending, []
-        pose = self.poses.at(sec + nsec * 1e-9)
-        if pose is None or not dets or not self.lms:
-            return
-        self.n_frames += 1
-        for j, col in self.fusion.vote(dets, {j: lm for j, lm in self.lms.items()}, pose):
-            self.votes.setdefault(j, np.zeros(5))[col] += 1.0; self.n_votes += 1
-
-    def landmark_colour(self, j, lm):
-        c = decide(self.votes[j], self.min_votes, self.vote_share) if j in self.votes else None
-        if c is not None:
-            return c
-        if self.fallback == 'geometric':
-            return Cone.BLUE if lm[1] > 0 else Cone.YELLOW
-        return Cone.UNKNOWN
-
     def on_gt(self, m):
         self.gt_pose = (m.pose.pose.position.x, m.pose.pose.position.y)
 
     def on_odom(self, m):
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
         self.xs_pose = (m.pose.pose.position.x, m.pose.pose.position.y)
-        self.samples.append((t, yaw_of(m.pose.pose.orientation), m.twist.twist.linear.x, m.twist.twist.linear.y))
+        self.samples.append((t, yaw_from_quaternion(m.pose.pose.orientation), m.twist.twist.linear.x, m.twist.twist.linear.y))
         if len(self.samples) % 5 == 0 and self.kf_t is not None:
             self.publish_pose(m.header.stamp)
 
@@ -130,7 +101,7 @@ class SlamNode(Node):
         s = self.samples
         if len(s) < 2:
             return (0.0, 0.0, 0.0)
-        a = np.array(s); dt = np.diff(a[:, 0]); th = np.array([wrap(y - a[0, 1]) for y in a[:, 1]])
+        a = np.array(s); dt = np.diff(a[:, 0]); th = np.array([wrap_angle(y - a[0, 1]) for y in a[:, 1]])
         mid = 0.5 * (th[1:] + th[:-1])
         vx = a[1:, 2]; vy = a[1:, 3] if self.use_vy else 0.0 * vx
         return (float(((vx * np.cos(mid) - vy * np.sin(mid)) * dt).sum()),
@@ -143,7 +114,6 @@ class SlamNode(Node):
         o.pose.pose.orientation.z, o.pose.pose.orientation.w = math.sin(pose[2] / 2), math.cos(pose[2] / 2)
         o.twist.twist.linear.x = self.samples[-1][2]
         self.pub_odom.publish(o)
-        self.poses.add(stamp.sec + stamp.nanosec * 1e-9, pose[0], pose[1], pose[2])
         if self.gt_pose:
             self.errs.append(math.hypot(pose[0] - self.gt_pose[0], pose[1] - self.gt_pose[1]))
             if self.xs_pose:
@@ -154,7 +124,7 @@ class SlamNode(Node):
         if not self.samples:
             return
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
-        pts = np.array([[a[0], a[1]] for a in pc2.read_points(m, field_names=('x', 'y', 'z'), skip_nans=True)]).reshape(-1, 2)
+        pts = pointcloud2_to_xy_array(m)
         first = self.kf_t is None
         if first:
             est = (0.0, 0.0, 0.0)           # SLAM frame origin = start pose (known at the line)
@@ -225,8 +195,6 @@ class SlamNode(Node):
             cone.color = Cone.UNKNOWN
             if self.color_mode == 'geometric':      # left of the start heading = blue, right = yellow
                 cone.color = Cone.BLUE if lm[1] > 0 else Cone.YELLOW
-            elif self.color_mode == 'yolo':
-                cone.color = self.landmark_colour(j, lm)
             elif self.gt_cones is not None and len(self.gt_cones):
                 d = np.hypot(*(self.gt_cones - lm).T); i = int(np.argmin(d))
                 if d[i] <= self.color_radius:
@@ -240,10 +208,6 @@ class SlamNode(Node):
         e, r = np.array(self.errs), np.array(self.errs_raw) if self.errs_raw else np.array([float('nan')])
         self.get_logger().info(f'SLAM pose err vs GT: mean {e.mean():.2f} m max {e.max():.2f} m | raw Xsens {np.nanmean(r):.2f}/{np.nanmax(r):.2f} m | '
                                f'{self.n_keys} keyframes, {len(self.lms)} landmarks ({sum(v >= self.min_obs for v in self.lm_obs.values())} published)')
-        if self.color_mode == 'yolo':
-            cols = [self.landmark_colour(j, lm) for j, lm in self.lms.items()]
-            self.get_logger().info(f'YOLO colours: {self.n_frames} camera frames, {self.n_votes} votes | landmarks '
-                                   f'blue {cols.count(0)} yellow {cols.count(1)} orange {cols.count(2) + cols.count(3)} none {cols.count(4)}')
         self.errs, self.errs_raw = [], []
 
 

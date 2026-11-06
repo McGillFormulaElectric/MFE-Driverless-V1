@@ -19,6 +19,8 @@ def generate_launch_description():
         remappings=[("/imu/data", "/imu")],
     )
 
-    return LaunchDescription([
-        ekf_node,
-    ])
+    return LaunchDescription(
+        [
+            ekf_node,
+        ]
+    )

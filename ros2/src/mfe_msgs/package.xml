@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>mfe_msgs</name>
-  <version>0.0.0</version>
+  <version>1.1.0</version>
   <description>Message Definitions for Driverless Project @ McGill Formula-E </description>
   <maintainer email="root@todo.todo">McGill Formula Electric</maintainer>
   <license>Apache-2.0</license>

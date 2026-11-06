@@ -15,8 +15,11 @@ from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
 from geometry_msgs.msg import PoseStamped
 from mfe_msgs.msg import Track
-from mfe_path_planning.path_planner_node import _make_skidpad_path
-from mfe_validation.common import QOS, car_start, read_track, yaw_of
+from mfe_path_planning.core.skidpad import make_skidpad_path
+from mfe_common.geometry import wrap_angle, yaw_from_quaternion
+from mfe_common.qos import RELIABLE_QOS
+from mfe_validation.common import car_start, read_track
+from mfe_common.topics import PLANNING_CENTERLINE, SKIDPAD_CONES, SLAM_ODOM
 
 _EUFS_MASTER = os.environ.get('EUFS_MASTER', os.path.expanduser('~/Develop/MFE26-eufs-sim'))
 # Older upstream layout nests the tracks under eufs_sim/.
@@ -44,7 +47,7 @@ def check_registration(transformer, lib_offset, origin, yaw0, max_err, max_yaw):
     st = transformer(np.array([0.0, 0.0]) + lib_offset, 0.0)[0]
     ce = transformer(np.array([14.4, 0.0]) + lib_offset, 0.0)[0]
     err = float(np.linalg.norm(st - origin))
-    yaw_err = abs(math.degrees((math.atan2(ce[1] - st[1], ce[0] - st[0]) - yaw0 + math.pi) % (2 * math.pi) - math.pi))
+    yaw_err = abs(math.degrees(wrap_angle(math.atan2(ce[1] - st[1], ce[0] - st[0]) - yaw0)))
     return err <= max_err and yaw_err <= max_yaw, err, yaw_err
 
 
@@ -76,7 +79,7 @@ class SkidpadPlanner(Node):
         m = np.array([[float(r['x']) - x0, float(r['y']) - y0] for r in rows if r['tag'] in ('blue', 'yellow', 'orange', 'big_orange')])
         c, s = math.cos(-yaw), math.sin(-yaw)
         self.tpl_cones = np.c_[c * m[:, 0] - s * m[:, 1], s * m[:, 0] + c * m[:, 1]]   # start-relative, same as SLAM
-        self.tpl_path = _make_skidpad_path()
+        self.tpl_path = make_skidpad_path()
 
         # Library: fixed translation aligning the circle centres of the two frames.
         self.relocalizer = None
@@ -98,9 +101,9 @@ class SkidpadPlanner(Node):
         # Publish only a window ahead of the car: pure_pursuit snaps to the nearest point, and the 2 laps overlap.
         self.idx = 0
         self.window = 25       # ~24 m ahead, under one 57 m lap
-        self.create_subscription(Odometry, '/slam/odom', self.on_pose, QOS)
-        self.pub = self.create_publisher(Path, '/planning/centerline', QOS)
-        self.create_subscription(Track, '/skidpad/cones', self.on_cones, QOS)
+        self.create_subscription(Odometry, SLAM_ODOM, self.on_pose, RELIABLE_QOS)
+        self.pub = self.create_publisher(Path, PLANNING_CENTERLINE, RELIABLE_QOS)
+        self.create_subscription(Track, SKIDPAD_CONES, self.on_cones, RELIABLE_QOS)
         self.n = 0
         self.get_logger().info(f'skidpad_planner up ({self.registration_mode}): {len(self.tpl_cones)} template cones, {len(self.tpl_path)} path points')
 
@@ -129,7 +132,7 @@ class SkidpadPlanner(Node):
     def on_pose(self, msg):
         p = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y])
         if self.registration_mode == 'library':
-            yaw = yaw_of(msg.pose.pose.orientation)
+            yaw = yaw_from_quaternion(msg.pose.pose.orientation)
             if self.start_pos is None:
                 self.start_pos, self.start_yaw = p, yaw
             self.vehicle_position = p

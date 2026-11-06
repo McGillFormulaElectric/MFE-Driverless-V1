@@ -1,0 +1,21 @@
+# Pip-only Python dependencies for the MFE Driverless stack.
+# ROS packages come from rosdep (see each package.xml). Versions match the
+# mfe-sim-gpu-test container unless noted.
+#
+#   pip install -r requirements.txt
+#
+# Used by: mfe_path_planning (quadprog, scipy), mfe_control (numpy, scipy),
+# mfe_validation (gtsam), vision_cone_detector (ultralytics; pulls torch and opencv).
+
+numpy<2
+scipy>=1.13
+numba                 # path planner speed (pure-Python fallback is ~10x slower); unpinned as in the Docker image
+quadprog==0.1.13
+gtsam==4.2            # x86_64 wheel only; Jetson builds lib/gtsam from source
+ultralytics==8.4.164  # YOLO; installs torch (CPU or CUDA wheel) and opencv-python
+
+# Not listed:
+#   torch/torchvision: choose the PyTorch index that matches the hardware
+#                      (CPU, cu128 for Blackwell), then install ultralytics.
+#   ft-fsd-path-planning: git-only (PyPI name broken). Needed only by
+#                      mfe_validation when registration_mode=library.

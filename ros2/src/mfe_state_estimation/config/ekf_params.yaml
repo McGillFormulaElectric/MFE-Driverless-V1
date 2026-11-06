@@ -18,17 +18,19 @@ ekf_node:
     # On hardware: remap to a real wheel encoder / CAN speed topic.
     wheelspeed_topic: "/ground_truth/state_odom"
 
-    # Expected message rates (Hz) — used to set the EKF predict timestep
-    # and GPS update interval.  Match the URDF <update_rate> values.
-    imu_frequency: 100    # EKF predict runs at IMU rate; 1000 Hz is very fast — 100 is practical
-    gps_frequency: 5      # matches <update_rate>5</update_rate> in gps.urdf.xacro
+    # Expected IMU rate (Hz) — sets the EKF predict timestep until the first pair of
+    # IMU messages arrives.  1000 Hz is very fast — 100 is practical.
+    imu_frequency: 100
 
     # ------------------------------------------------------------------ #
     # Noise / covariance parameters                                       #
     #                                                                     #
-    # var_imu_acc: [x, y] process noise variance for linear acceleration #
-    #              (m/s²)²  — set from IMU linear_acceleration noise     #
-    #              stddev=0.08 → var ≈ 0.08² ≈ 0.0064; round up to 0.01 #
+    # var_imu_acc: [x, y] variance of IMU linear_acceleration noise       #
+    #              (m/s²)²  — stddev=0.08 → var ≈ 0.08² ≈ 0.0064;        #
+    #              round up to 0.01. [0] adds var·dt² to the speed       #
+    #              state each predict step (v += a·dt). [1] has no       #
+    #              state to drive in the unicycle model (lateral accel   #
+    #              is carried by ω).                                      #
     #                                                                     #
     # var_imu_w:   scalar process noise variance for angular velocity     #
     #              (rad/s)²  — stddev=0.08 → var ≈ 0.0064; use 0.01     #

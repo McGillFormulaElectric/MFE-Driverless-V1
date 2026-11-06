@@ -48,8 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# CUDA 12.8 is the first toolkit with sm_120 (RTX 50-series). cuda-pcl's aarch64 libs are not used;
-# the driver comes from the host (run with --gpus all). Without a GPU the node falls back to CPU PCL.
+# CUDA 12.8 is the first toolkit with sm_120 (RTX 50-series). The driver comes from the host
+# (run with --gpus all). Without a GPU the node falls back to CPU PCL.
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && \
     wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb && \
@@ -75,14 +75,14 @@ RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /o
 RUN pip3 install --retries 10 --timeout 120 "gtsam==4.2" && \
     python3 -c "import gtsam; print('gtsam OK')"
 
-# Without torch/ultralytics the node dies on import (perception then runs LiDAR-only).
+# Without torch/ultralytics the node dies on import (ultralytics pinned to match requirements.txt) (perception then runs LiDAR-only).
 # CPU torch wheels: ~250 MB vs ~4.5 GB for CUDA, and YOLO11n on CPU keeps up with the sim camera.
 # For GPU on RTX 50xx use the cu128 index (https://download.pytorch.org/whl/cu128), the first Blackwell CUDA build.
 # numpy<2 repeated in each command so pip's resolver never upgrades it.
 # sympy: the base image's distutils-installed 1.9 cannot be uninstalled; --ignore-installed overlays it.
 RUN pip3 install --retries 10 --timeout 120 --ignore-installed "sympy>=1.13" && \
     pip3 install --retries 10 --timeout 120 "numpy<2" torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip3 install --retries 10 --timeout 120 "numpy<2" ultralytics && \
+    pip3 install --retries 10 --timeout 120 "numpy<2" "ultralytics==8.4.164" && \
     python3 -c "import torch, ultralytics; print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
 
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc

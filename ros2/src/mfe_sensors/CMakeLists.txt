@@ -19,32 +19,15 @@ find_package(fmt REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 
-add_executable(sim_lidar_node src/sim_lidar_node.cpp)
-
 add_library(${PROJECT_NAME} SHARED
   src/camera_interface.cpp
   src/lidar_interface.cpp
-  src/sensor_node.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
   PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>" 
-)
-
-target_link_libraries(sim_lidar_node
-  PUBLIC
-    fmt::fmt
-    ${PROJECT_NAME}        # this propagates the include dirs from your library
-)
-
-ament_target_dependencies(sim_lidar_node
-  PUBLIC
-    rclcpp
-    fmt
-    rclcpp_lifecycle
-    sensor_msgs
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -62,8 +45,6 @@ install(
   LIBRARY     DESTINATION lib
   RUNTIME     DESTINATION bin  
 )
-
-install(TARGETS sim_lidar_node DESTINATION lib/${PROJECT_NAME})
 
 install(
   DIRECTORY launch/

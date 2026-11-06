@@ -29,9 +29,6 @@ ament_auto_add_executable(file_loader
   src/file_loader.cpp
 )
 
-ament_auto_add_executable(detected_cones
-  src/cone_detector.cpp
-)
 target_link_libraries(ground_plane_removal ${PCL_LIBRARIES})
 
 ament_auto_add_executable(lidar_perception_node
@@ -46,7 +43,7 @@ target_link_libraries(lidar_perception_node
   Eigen3::Eigen
 )
 
-# CUDA filters (src/gpu) are built for the local GPU. cuda-pcl is not used: its prebuilt libs are aarch64 only.
+# The GPU path uses the CUDA kernels in src/gpu, built for the local GPU; no external CUDA library is needed.
 # Without a CUDA compiler, lidar_perception_node is built CPU-only.
 include(CheckLanguage)
 check_language(CUDA)
@@ -98,6 +95,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(DIRECTORY
   launch
+  config
   dataset
   DESTINATION share/${PROJECT_NAME}
 )
@@ -106,7 +104,6 @@ install(TARGETS
   lidar_preprocessor
   ground_plane_removal
   file_loader
-  detected_cones
   lidar_perception_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -124,8 +121,3 @@ ament_export_dependencies(Eigen3)
 
 ament_auto_package()
 
-if(AMENT_ENABLE_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(foo_gtest test/my_test.cpp)
-  target_link_libraries(foo_gtest ${rclcpp_LIBRARIES} ${rmw_connext_cpp_LIBRARIES} ${std_interfaces})
-endif()

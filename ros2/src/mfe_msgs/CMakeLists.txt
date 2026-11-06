@@ -26,14 +26,7 @@ find_package(rosidl_default_generators REQUIRED)
 # add more interfaces as they are being added
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Cone.msg"
-  "msg/ConeStamped.msg"
   "msg/Track.msg"
-  "msg/ConeWithCovariance.msg"
-  "msg/TrackWithCovariance.msg"
-  "msg/StateInfo.msg"
-  "msg/ROSStateStamped.msg"
-  "msg/IPGState.msg"
-  "srv/Reset.srv"
   DEPENDENCIES geometry_msgs std_msgs
 )
 

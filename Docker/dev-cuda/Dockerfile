@@ -68,7 +68,7 @@ RUN pip3 install --upgrade pip && pip3 install uv
 RUN uv pip install --system -U \
     ros2-numpy \
     scikit-learn \
-    ultralytics
+    ultralytics==8.4.164
 
 # Source the ROS 2 setup file
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/ros/.bashrc

@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    min_observations: 3        # sightings before a cone enters the map
+    confidence_decay: 1        # confidence lost per frame without a sighting
+    min_hits: 3                # camera track hits needed before a colour is trusted
+    max_misses: 5              # frames without a hit before a colour track is dropped
+    match_radius: 1.0          # m, camera track to map cone association distance

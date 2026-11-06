@@ -23,7 +23,7 @@ which broke any consumer that integrates pose deltas over time (e.g. finish_dete
 min_travel_m gate and lap_validator's distance-traveled stat both summed near-random
 per-sample jumps and blew up to thousands of fake meters within seconds, on top of
 degrading pure_pursuit's tracking). The OU process keeps the same marginal sigma (still
-sized from the datasheet figures below) while being correlated over a ~2 s timescale,
+sized from the datasheet figures in sensor_emulation) while being correlated over a ~2 s timescale,
 so consecutive high-rate samples stay close together like a real sensor's output.
 
 This exists so sim runs stop relying on /ground_truth/state_odom (perfect pose) for
@@ -37,22 +37,14 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from scipy.spatial.transform import Rotation
 
-_QOS = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
-
-# --- MTi-670G datasheet-derived noise sigmas ---------------------------------------------
-_CEP_POSITION_M = 1.0
-_SIGMA_XY_M = _CEP_POSITION_M / 1.1774   # ~0.849 m, circular-normal CEP50 -> sigma
-_SIGMA_Z_M = 1.5 * _SIGMA_XY_M            # GNSS altitude error typically ~1.5x horizontal
-_SIGMA_ROLL_PITCH_RAD = math.radians(0.2)
-_SIGMA_YAW_RAD = math.radians(0.8)
-_SIGMA_VEL_MS = 0.05
-_GYRO_NOISE_DENSITY_RAD_S_SQRTHZ = math.radians(0.007)
-_ASSUMED_BANDWIDTH_HZ = 50.0
-_SIGMA_YAWRATE_RAD_S = _GYRO_NOISE_DENSITY_RAD_S_SQRTHZ * math.sqrt(_ASSUMED_BANDWIDTH_HZ)
+from mfe_common.qos import RELIABLE_QOS
+from mfe_eufs_sim.sensor_emulation import (
+    CORRELATION_TIME_S, OUState, SIGMA_ROLL_PITCH_RAD, SIGMA_VEL_MS, SIGMA_XY_M, SIGMA_YAW_RAD,
+    SIGMA_YAWRATE_RAD_S, SIGMA_Z_M,
+)
 
 # OU correlation time — how slowly the injected error wanders. Real GNSS/INS bias-like
 # error (multipath, residual filter transients) actually varies over tens of seconds,
@@ -61,25 +53,6 @@ _SIGMA_YAWRATE_RAD_S = _GYRO_NOISE_DENSITY_RAD_S_SQRTHZ * math.sqrt(_ASSUMED_BAN
 # tau inflated an ~100m real peanut run's finish-detector travel estimate to ~544m).
 # 10s trades a bit of noise "freshness" for consumers that integrate raw pose deltas.
 # Tune via the 'noise_correlation_time_s' parameter if it doesn't fit the track speed.
-_DEFAULT_TAU_S = 10.0
-
-
-class _OUState:
-    """One Ornstein-Uhlenbeck noise channel: mean-reverting, stationary variance = sigma^2."""
-
-    def __init__(self, rng: np.random.Generator, sigma: float, tau: float):
-        self._rng = rng
-        self._sigma = sigma
-        self._tau = tau
-        self.value = float(rng.normal(0.0, sigma))  # start already at steady-state variance
-
-    def step(self, dt: float) -> float:
-        if dt <= 0.0:
-            return self.value
-        decay = math.exp(-dt / self._tau)
-        drive_std = self._sigma * math.sqrt(max(0.0, 1.0 - decay * decay))
-        self.value = self.value * decay + self._rng.normal(0.0, drive_std)
-        return self.value
 
 
 class XsensNoiseNode(Node):
@@ -90,7 +63,7 @@ class XsensNoiseNode(Node):
         self.declare_parameter('input_topic', '/ground_truth/state_odom')
         self.declare_parameter('output_topic', '/sim/xsens/state_odom')
         self.declare_parameter('seed', 0)  # 0 -> unseeded (different noise every run)
-        self.declare_parameter('noise_correlation_time_s', _DEFAULT_TAU_S)
+        self.declare_parameter('noise_correlation_time_s', CORRELATION_TIME_S)
 
         input_topic = self.get_parameter('input_topic').value
         output_topic = self.get_parameter('output_topic').value
@@ -99,24 +72,24 @@ class XsensNoiseNode(Node):
         self._rng = np.random.default_rng(seed if seed else None)
 
         self._ou = {
-            name: _OUState(self._rng, sigma, tau)
+            name: OUState(self._rng, sigma, tau)
             for name, sigma in [
-                ('x', _SIGMA_XY_M), ('y', _SIGMA_XY_M), ('z', _SIGMA_Z_M),
-                ('roll', _SIGMA_ROLL_PITCH_RAD), ('pitch', _SIGMA_ROLL_PITCH_RAD),
-                ('yaw', _SIGMA_YAW_RAD),
-                ('vx', _SIGMA_VEL_MS), ('vy', _SIGMA_VEL_MS),
-                ('yawrate', _SIGMA_YAWRATE_RAD_S),
+                ('x', SIGMA_XY_M), ('y', SIGMA_XY_M), ('z', SIGMA_Z_M),
+                ('roll', SIGMA_ROLL_PITCH_RAD), ('pitch', SIGMA_ROLL_PITCH_RAD),
+                ('yaw', SIGMA_YAW_RAD),
+                ('vx', SIGMA_VEL_MS), ('vy', SIGMA_VEL_MS),
+                ('yawrate', SIGMA_YAWRATE_RAD_S),
             ]
         }
         self._last_t = None
 
-        self._pub = self.create_publisher(Odometry, output_topic, _QOS)
-        self.create_subscription(Odometry, input_topic, self._odom_cb, _QOS)
+        self._pub = self.create_publisher(Odometry, output_topic, RELIABLE_QOS)
+        self.create_subscription(Odometry, input_topic, self._odom_cb, RELIABLE_QOS)
 
         self.get_logger().info(
             f'Xsens MTi-670G noise model: {input_topic} -> {output_topic} '
-            f'(sigma_xy={_SIGMA_XY_M:.3f}m, sigma_yaw={math.degrees(_SIGMA_YAW_RAD):.2f}deg, '
-            f'sigma_vel={_SIGMA_VEL_MS:.3f}m/s, correlation_time={tau:.2f}s)')
+            f'(sigma_xy={SIGMA_XY_M:.3f}m, sigma_yaw={math.degrees(SIGMA_YAW_RAD):.2f}deg, '
+            f'sigma_vel={SIGMA_VEL_MS:.3f}m/s, correlation_time={tau:.2f}s)')
 
     def _odom_cb(self, msg: Odometry) -> None:
         t = self.get_clock().now()
@@ -148,12 +121,12 @@ class XsensNoiseNode(Node):
 
         # --- covariance: report the injected variance (diagonal only) ---
         cov = [0.0] * 36
-        cov[0]  = _SIGMA_XY_M ** 2          # x-x
-        cov[7]  = _SIGMA_XY_M ** 2          # y-y
-        cov[14] = _SIGMA_Z_M ** 2           # z-z
-        cov[21] = _SIGMA_ROLL_PITCH_RAD ** 2   # roll-roll
-        cov[28] = _SIGMA_ROLL_PITCH_RAD ** 2   # pitch-pitch
-        cov[35] = _SIGMA_YAW_RAD ** 2          # yaw-yaw
+        cov[0]  = SIGMA_XY_M ** 2          # x-x
+        cov[7]  = SIGMA_XY_M ** 2          # y-y
+        cov[14] = SIGMA_Z_M ** 2           # z-z
+        cov[21] = SIGMA_ROLL_PITCH_RAD ** 2   # roll-roll
+        cov[28] = SIGMA_ROLL_PITCH_RAD ** 2   # pitch-pitch
+        cov[35] = SIGMA_YAW_RAD ** 2          # yaw-yaw
         out.pose.covariance = cov
 
         # --- velocity ---
@@ -166,9 +139,9 @@ class XsensNoiseNode(Node):
             msg.twist.twist.angular.z + self._ou['yawrate'].value)
 
         twist_cov = [0.0] * 36
-        twist_cov[0]  = _SIGMA_VEL_MS ** 2
-        twist_cov[7]  = _SIGMA_VEL_MS ** 2
-        twist_cov[35] = _SIGMA_YAWRATE_RAD_S ** 2
+        twist_cov[0]  = SIGMA_VEL_MS ** 2
+        twist_cov[7]  = SIGMA_VEL_MS ** 2
+        twist_cov[35] = SIGMA_YAWRATE_RAD_S ** 2
         out.twist.covariance = twist_cov
 
         self._pub.publish(out)

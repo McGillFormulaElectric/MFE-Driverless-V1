@@ -43,14 +43,13 @@ public:
         this->declare_parameter("min_intensity", 0.0);
         this->declare_parameter("enable_motion_distortion", true);
         this->declare_parameter("motion_scan_duration_sec", 0.1);
-        this->declare_parameter("high_intensity_threshold", 150.0);
-        this->declare_parameter("low_intensity_threshold", 50.0);
         // Cone-body z band (sensor frame, after ground removal). Defaults fit the EUFS sim
         // VLP-16 (sensor ~1.0 m above track); set from the real mount height on hardware.
         this->declare_parameter("cone_z_min", -1.10f);
         this->declare_parameter("cone_z_max", -0.50f);
         // Ignored when built without CUDA.
         this->declare_parameter("use_gpu", true);
+        this->declare_parameter("odom_topic", "/ekf/output");
 
         leaf_size_ = this->get_parameter("leaf_size").as_double();
         ground_threshold_ = this->get_parameter("ground_threshold").as_double();
@@ -63,10 +62,6 @@ public:
         motion_scan_duration_sec_ = this->get_parameter("motion_scan_duration_sec").as_double();
 
         distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>();
-        intensity_classifier_ = std::make_shared<perception::IntensityClassifier>(
-            this->get_parameter("high_intensity_threshold").as_double(),
-            this->get_parameter("low_intensity_threshold").as_double()
-        );
         cone_z_min_ = this->get_parameter("cone_z_min").as_double();
         cone_z_max_ = this->get_parameter("cone_z_max").as_double();
         use_gpu_ = false;
@@ -89,7 +84,7 @@ public:
             std::bind(&LidarPerceptionNode::cloud_callback, this, std::placeholders::_1));
 
         sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/ekf/output", rclcpp::SensorDataQoS(),
+            this->get_parameter("odom_topic").as_string(), rclcpp::SensorDataQoS(),
             std::bind(&LidarPerceptionNode::odom_callback, this, std::placeholders::_1));
 
         pub_centroids_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -101,6 +96,20 @@ public:
         pub_debug_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/debug/gpu_objects", 10);
 
+        // One line that says which pipeline is active, and why the CPU one is used if it is.
+#if USE_GPU_PIPELINE
+        if (use_gpu_) {
+            cudaDeviceProp prop{};
+            cudaGetDeviceProperties(&prop, 0);
+            RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: GPU (CUDA device %s, sm %d%d)",
+                prop.name, prop.major, prop.minor);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: CPU PCL (%s)",
+                this->get_parameter("use_gpu").as_bool() ? "no device" : "use_gpu false");
+        }
+#else
+        RCLCPP_INFO(this->get_logger(), "LiDAR pipeline: CPU PCL (built without CUDA)");
+#endif
         RCLCPP_INFO(this->get_logger(), "LiDAR Perception Node Initialized. Mode: %s",
             use_gpu_ ? "GPU (CUDA: raw unpack, NaN strip, motion correction, ROI, voxel, RANSAC ground, band, clustering)" : "Standard PCL (CPU)");
     }
@@ -158,8 +167,6 @@ private:
             pcl::fromROSMsg(*msg, *host_cloud_i);
             std::vector<int> nan_i;
             pcl::removeNaNFromPointCloud(*host_cloud_i, *host_cloud_i, nan_i);
-
-            auto classified = intensity_classifier_->classify(host_cloud_i);
         }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr centroids_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -385,7 +392,6 @@ private:
     double motion_scan_duration_sec_;
     double last_vx_ = 0.0, last_vy_ = 0.0, last_omega_ = 0.0;
     std::shared_ptr<perception::MotionDistortionCorrector> distortion_corrector_;
-    std::shared_ptr<perception::IntensityClassifier> intensity_classifier_;
 };
 
 int main(int argc, char * argv[]) {

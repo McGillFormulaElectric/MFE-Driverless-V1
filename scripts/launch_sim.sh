@@ -8,9 +8,10 @@
 #   laps    — laps before stopping at the orange-cone finish gate (default 1).
 #             On closed-loop tracks each return to start = 1 lap. 0 = endless.
 
-GAZEBO_ROS_WS=~/Develop/gazebo_ros_pkgs
-EUFS_WS=~/Develop/MFE26-eufs-sim
-MFE_WS=~/Develop/MFE-Driverless-V1/ros2
+# Workspace locations. Each can be overridden from the environment.
+GAZEBO_ROS_WS=${GAZEBO_ROS_WS:-$HOME/Develop/gazebo_ros_pkgs}
+EUFS_WS=${EUFS_WS:-$HOME/Develop/MFE26-eufs-sim}
+MFE_WS=${MFE_WS:-$HOME/Develop/MFE-Driverless-V1/ros2}
 LOG_DIR=~/mfe_logs
 
 EVENT=${1:-accel}
@@ -34,7 +35,7 @@ case "$EVENT" in
         AMI_STATE=13
         BRIDGE_MAX_SPEED=6.0
         ;;
-    autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|rand|its_a_mess)
+    autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|its_a_mess)
         case "$EVENT" in
             autocross)    TRACK=small_track ;;
             hairpins)     TRACK=hairpins_increasing_difficulty ;;
@@ -45,7 +46,7 @@ case "$EVENT" in
         BRIDGE_MAX_SPEED=8.0
         ;;
     *)
-        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, rand"
+        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins"
         exit 1
         ;;
 esac
@@ -151,8 +152,9 @@ if ! timeout 3 ros2 topic echo /ros_can/state_str --once 2>/dev/null | grep -q A
 fi
 echo "==> Gazebo ready."
 
+# MFE_SIM_ARGS (optional, set by run_sim.sh): platform:=sim sensors:=... for both launches.
 tmux send-keys -t mfe:0.1 \
-    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0" Enter
+    "$SOURCE_ALL && ros2 launch mfe_eufs_sim mfe_eufs_sim.launch.py use_sim_cones_directly:=$USE_SIM_CONES max_speed_ms:=$BRIDGE_MAX_SPEED max_steering_deg:=28.0${MFE_SIM_ARGS:+ $MFE_SIM_ARGS}" Enter
 
 # pose_topic: noisy Xsens-like odom, not ground truth. Do not point it back at /ground_truth/state_odom.
 # no_perception: use_perception:=false skips boundary_extractor (bridge owns /planning/cones).
@@ -163,6 +165,7 @@ else
     # SLAM/EKF off: EUFS GT TF owns map->odom.
     BRINGUP_EXTRAS="pose_topic:=/sim/xsens/state_odom use_slam:=false use_ekf:=false"
 fi
+BRINGUP_EXTRAS="$BRINGUP_EXTRAS sim_cones_direct:=$USE_SIM_CONES"
 
 if [ "$LAPS" = "0" ]; then
     BRINGUP_EXTRAS="$BRINGUP_EXTRAS endless:=true"
@@ -170,7 +173,7 @@ else
     BRINGUP_EXTRAS="$BRINGUP_EXTRAS num_laps:=$LAPS"
 fi
 tmux send-keys -t mfe:0.2 \
-    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS" Enter
+    "$SOURCE_ALL && ros2 launch mfe_bringup bringup.launch.py mission:=$MISSION $BRINGUP_EXTRAS${MFE_SIM_ARGS:+ $MFE_SIM_ARGS}" Enter
 
 tmux send-keys -t mfe:0.3 \
     "$SOURCE_ALL && ros2 launch foxglove_bridge foxglove_bridge_launch.xml" Enter

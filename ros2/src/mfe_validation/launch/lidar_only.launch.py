@@ -1,13 +1,39 @@
 """LiDAR-only chain replacing perception: LiDAR -> detector -> GTSAM SLAM -> /planning/cones and /slam/odom.
 
 Use via launch_sim_local.sh <track> lidar_only (bringup pose_topic=/slam/odom). Ground truth is only used by slam_node logging.
+A camera colour mode adds cone_colour_fusion_node after slam_node, which writes the coloured map to cones_topic.
 """
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration as LC
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+from mfe_common.topics import SLAM_CONES
+from mfe_validation.cam_fusion import CAMERA_COLOUR_MODES
+
+
+def _slam_nodes(context):
+    mode = LC('color_mode').perform(context)
+    camera = mode in CAMERA_COLOUR_MODES
+    cones_topic = LC('cones_topic').perform(context)
+    nodes = [Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
+                  parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool),
+                               'cones_topic': SLAM_CONES if camera else cones_topic, 'color_mode': mode,
+                               'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
+                               'max_range': ParameterValue(LC('max_range'), value_type=float),
+                               'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),
+                               'freeze': ParameterValue(LC('freeze'), value_type=bool)}])]
+    if camera:
+        nodes.append(Node(package='mfe_validation', executable='cone_colour_fusion_node', name='cone_colour_fusion_node',
+                          output='screen',
+                          parameters=[{'color_mode': mode, 'cones_topic': cones_topic,
+                                       'orange_cones_topic': LC('orange_cones_topic')}]))
+    return nodes
 
 
 def generate_launch_description():
@@ -20,18 +46,15 @@ def generate_launch_description():
         DeclareLaunchArgument('registration_mode', default_value='library'),   # skidpad only: library (SkidpadRelocalizer) | custom (Kabsch/ICP)
         DeclareLaunchArgument('cones_topic', default_value='/planning/cones'),
         DeclareLaunchArgument('freeze', default_value='true'),   # publish each landmark once, at a fixed position
-        DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | unknown (no colour; planner infers sides)
+        DeclareLaunchArgument('color_mode', default_value='geometric'),   # geometric | yolo | orange_only (cones stay UNKNOWN; orange landmarks on orange_cones_topic) | yolo_lidar (camera colours or UNKNOWN; orange also on orange_cones_topic) | unknown (no colour; planner infers sides)
+        DeclareLaunchArgument('orange_cones_topic', default_value='/planning/orange_cones'),   # orange_only: finish detector timing-line input
         DeclareLaunchArgument('use_gpu', default_value='true'),   # false: CPU (PCL) pipeline, for load comparisons
         DeclareLaunchArgument('slam_lateral_vel', default_value='false'),   # true: SLAM odometry integrates INS lateral velocity (corner sideslip)
         Node(package='lidar_cone_detector', executable='lidar_perception_node', name='lidar_perception_node', output='log',
-             parameters=[{'gpu_voxel': False, 'leaf_size': 0.05, 'ground_threshold': 0.04, 'cluster_tolerance': 0.3,
-                          'min_cluster_size': 1, 'far_min_cluster_size': 1, 'max_cluster_size': 50, 'cluster_2d': True,
-                          'height_min': 0.02, 'enable_motion_distortion': False,
-                          'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
-        Node(package='mfe_validation', executable='slam_node', name='slam_node', output='screen',
-             parameters=[{'use_lateral_vel': ParameterValue(LC('slam_lateral_vel'), value_type=bool), 'cones_topic': LC('cones_topic'), 'color_mode': LC('color_mode'), 'min_obs_publish': ParameterValue(LC('min_obs'), value_type=int),
-                          'max_range': ParameterValue(LC('max_range'), value_type=float), 'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),
-                          'freeze': ParameterValue(LC('freeze'), value_type=bool)}]),
+             parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
+                                      'lidar_perception_node_params.yaml'),
+                         {'use_gpu': ParameterValue(LC('use_gpu'), value_type=bool)}]),
+        OpaqueFunction(function=_slam_nodes),
         Node(package='mfe_validation', executable='skidpad_planner', name='skidpad_planner', output='screen', condition=IfCondition(LC('skidpad')),
              parameters=[{'registration_mode': LC('registration_mode')}]),
     ])
