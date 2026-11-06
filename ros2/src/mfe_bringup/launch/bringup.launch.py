@@ -185,7 +185,8 @@ def generate_launch_description():
         description=(
             'SLAM implementation, started from its package launch/slam.launch.py. '
             'toolbox: slam_toolbox (map→odom, gated by use_slam). '
-            'gtsam: mfe_validation slam_node. It publishes the cone map on /planning/cones, so '
+            'gtsam: mfe_validation slam_node, and cone_colour_fusion_node for a camera colour mode. '
+            'It publishes the cone map on /planning/cones, so '
             'the boundary extractor is off, and the planner, pure pursuit and finish detector use '
             '/slam/odom. '
             'none: no SLAM node.'
@@ -364,7 +365,7 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     # SLAM — chosen by the slam argument; each implementation has launch/slam.launch.py
     #   toolbox: mfe_mapping (LaserScan from the LiDAR cloud, then slam_toolbox), needs use_slam
-    #   gtsam:   mfe_validation (landmark SLAM, publishes /slam/odom and the cone map)
+    #   gtsam:   mfe_validation (landmark SLAM, publishes /slam/odom and the cone map; camera colours on top)
     #   none:    nothing
     # --------------------------------------------------------------------------
     def _make_slam(context):
