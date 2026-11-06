@@ -9,6 +9,7 @@ McGill Formula Electric autonomous racecar stack. ROS 2 Humble + Gazebo 11 + YOL
 | File | What it covers |
 |------|----------------|
 | [architecture.md](architecture.md) | System overview, full data-flow diagrams, TF frame chain, topic map |
+| [interfaces.md](interfaces.md) | Stack diagram, SLAM contract, how to select or add SLAM, topic table |
 | [simulation.md](simulation.md) | How to start the sim, track list, modes, Foxglove, multi-lap, mission control |
 | [fleet.md](fleet.md) | Multi-machine deployment: fleet.launch.py, local_role options, SSH bootstrap |
 | [jetson_setup.md](jetson_setup.md) | Jetson setup script, packages built, SSH key auth, env vars |

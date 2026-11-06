@@ -96,6 +96,7 @@ class SupervisorNode(Node):
         self.declare_parameter('control_latency_threshold_ms', 100)
         self.declare_parameter('car_half_length',              1.5)   # half of ~3m wheelbase+bumpers
         self.declare_parameter('car_half_width',               0.8)   # half of ~1.6m track width
+        self.declare_parameter('odom_topic', EKF_OUTPUT)
 
         self._lidar_timeout_s    = self.get_parameter('lidar_timeout_ms').value / 1000.0
         self._gps_jump_thr_m    = float(self.get_parameter('gps_jump_threshold_m').value)
@@ -150,7 +151,7 @@ class SupervisorNode(Node):
         self.create_subscription(
             Track, PLANNING_CONES, self._cones_callback, reliable_qos)
         self.create_subscription(
-            Odometry, EKF_OUTPUT, self._odom_callback, reliable_qos)
+            Odometry, self.get_parameter('odom_topic').value, self._odom_callback, reliable_qos)
 
         # Control command heartbeat — topic confirmed in pure_pursuit_node.py
         if _HAS_FS_MSGS:

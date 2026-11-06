@@ -32,6 +32,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
+from mfe_common.topics import SLAM_ODOM
+
+# Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
+GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
+              'odom_topic')
+
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
     'autocross':    100.0,
@@ -70,6 +76,13 @@ def _make_vision_node(model_path_str: str) -> list:
             ('image/input', '/camera/image_raw'),
         ],
     )]
+
+
+def _pose_topic(context) -> str:
+    """Odometry topic for planner, pure pursuit and finish detector (slam:=gtsam: /slam/odom)."""
+    if context.launch_configurations.get('slam', 'toolbox') == 'gtsam':
+        return SLAM_ODOM
+    return context.launch_configurations.get('pose_topic', '/ekf/output')
 
 
 def generate_launch_description():
@@ -124,7 +137,8 @@ def generate_launch_description():
         'pose_topic',
         default_value='/ekf/output',
         description=(
-            'Odometry topic used by path planner and pure pursuit for vehicle pose. '
+            'Odometry topic used by path planner, pure pursuit and finish detector for vehicle '
+            'pose. Ignored when slam:=gtsam, which uses /slam/odom. '
             'In simulation pass pose_topic:=/sim/xsens/state_odom (same map-frame header as '
             'ground truth, but noise-corrupted to be representative of the real Xsens '
             'MTi-670G — see mfe_eufs_sim/xsens_noise_node.py). Do not use raw '
@@ -155,9 +169,53 @@ def generate_launch_description():
         'use_slam',
         default_value='true',
         description=(
-            'Launch SLAM toolbox (publishes map→odom TF + /map). '
+            'Launch SLAM toolbox (publishes map→odom TF + /map). Only used with slam:=toolbox. '
             'Set false in sim — EUFS GT TF already provides map→odom; two publishers conflict.'
         ),
+    )
+
+    slam_arg = DeclareLaunchArgument(
+        'slam',
+        default_value='toolbox',
+        choices=['toolbox', 'gtsam', 'none'],
+        description=(
+            'SLAM implementation, started from its package launch/slam.launch.py. '
+            'toolbox: slam_toolbox (map→odom, gated by use_slam). '
+            'gtsam: mfe_validation slam_node. It publishes the cone map on /planning/cones, so '
+            'the boundary extractor is off, and the planner, pure pursuit and finish detector use '
+            '/slam/odom. '
+            'none: no SLAM node.'
+        ),
+    )
+
+    # Arguments of the gtsam SLAM node (slam:=gtsam only). Names and defaults are lidar_only's.
+    slam_lateral_vel_arg = DeclareLaunchArgument(
+        'slam_lateral_vel', default_value='false',
+        description='slam:=gtsam: integrate INS lateral velocity (lidar_only default false).',
+    )
+    color_mode_arg = DeclareLaunchArgument(
+        'color_mode', default_value='geometric',
+        description='slam:=gtsam: cone colour mode (lidar_only default geometric).',
+    )
+    min_obs_arg = DeclareLaunchArgument(
+        'min_obs', default_value='2',
+        description='slam:=gtsam: observations before a landmark is published (default 2).',
+    )
+    max_range_arg = DeclareLaunchArgument(
+        'max_range', default_value='20.0',
+        description='slam:=gtsam: landmark look-ahead range, m (lidar_only default 20.0).',
+    )
+    publish_hz_arg = DeclareLaunchArgument(
+        'publish_hz', default_value='5.0',
+        description='slam:=gtsam: cone map publish rate, Hz (lidar_only default 5.0).',
+    )
+    freeze_arg = DeclareLaunchArgument(
+        'freeze', default_value='true',
+        description='slam:=gtsam: publish each landmark once, at a fixed position (default true).',
+    )
+    odom_topic_arg = DeclareLaunchArgument(
+        'odom_topic', default_value='/sim/xsens/state_odom',
+        description='slam:=gtsam: odometry for yaw and speed (default /sim/xsens/state_odom).',
     )
 
     use_ekf_arg = DeclareLaunchArgument(
@@ -252,7 +310,6 @@ def generate_launch_description():
     mission = LaunchConfiguration('mission')
     skidpad_mode = LaunchConfiguration('skidpad_mode')
     planner_backend = LaunchConfiguration('planner_backend')
-    pose_topic = LaunchConfiguration('pose_topic')
     use_perception = LaunchConfiguration('use_perception')
     use_slam = LaunchConfiguration('use_slam')
     use_ekf = LaunchConfiguration('use_ekf')
@@ -301,38 +358,38 @@ def generate_launch_description():
     )
 
     # --------------------------------------------------------------------------
-    # Perception — PointCloud2 → LaserScan conversion (feeds SLAM toolbox)
-    # Input:  /lidar/points_raw (PointCloud2)
-    # Output: /lidar/pcl/laserscan (LaserScan consumed by slam_toolbox)
-    # Only launched when use_slam:=true.
+    # SLAM — chosen by the slam argument; each implementation has launch/slam.launch.py
+    #   toolbox: mfe_mapping (LaserScan from the LiDAR cloud, then slam_toolbox), needs use_slam
+    #   gtsam:   mfe_validation (landmark SLAM, publishes /slam/odom and the cone map)
+    #   none:    nothing
     # --------------------------------------------------------------------------
-    pc2scan_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lidar_cone_detector'),
-                'launch',
-                'pointcloud_to_laserscan.launch.py',
-            )
-        ),
-        condition=IfCondition(use_slam),
-    )
+    def _make_slam(context):
+        if context.launch_configurations.get('slam', 'toolbox') == 'toolbox':
+            return [IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(get_package_share_directory('mfe_mapping'), 'launch',
+                                 'slam.launch.py')
+                ),
+                condition=IfCondition(use_slam),
+            )]
+        return []
 
-    # --------------------------------------------------------------------------
-    # Mapping — SLAM Toolbox (async, lifecycle-managed)
-    # Subscribes: /lidar/pcl/laserscan (LaserScan)
-    # Publishes:  /map (OccupancyGrid), TF map → odom
-    # Disabled in sim (use_slam:=false) — EUFS GT TF already publishes map→odom.
-    # --------------------------------------------------------------------------
-    slam_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('mfe_mapping'),
-                'launch',
-                'slam_toolbox.launch.py',
-            )
-        ),
-        condition=IfCondition(use_slam),
-    )
+    slam_action = OpaqueFunction(function=_make_slam)
+
+    # slam:=gtsam is outside the perception group: like the harness, the SLAM node runs
+    # with run_perception:=false, where the LiDAR detector is started elsewhere.
+    def _make_gtsam(context):
+        if context.launch_configurations.get('slam') != 'gtsam':
+            return []
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(get_package_share_directory('mfe_validation'), 'launch',
+                             'slam.launch.py')
+            ),
+            launch_arguments={name: LaunchConfiguration(name) for name in GTSAM_ARGS}.items(),
+        )]
+
+    gtsam_action = OpaqueFunction(function=_make_gtsam)
 
     # --------------------------------------------------------------------------
     # Sensors — Xsens MTi-670G GNSS/INS (real hardware only)
@@ -374,13 +431,19 @@ def generate_launch_description():
     # --------------------------------------------------------------------------
     # Path planning — Boundary extractor (LiDAR + camera fusion)
     # --------------------------------------------------------------------------
-    boundary_extractor_node = Node(
-        package='mfe_path_planning',
-        executable='boundary_extractor',
-        name='boundary_extractor',
-        output='screen',
-        condition=IfCondition(use_perception),
-    )
+    def _make_boundary_extractor(context):
+        # slam:=gtsam publishes the cone map on /planning/cones; two publishers would conflict.
+        if context.launch_configurations.get('slam', 'toolbox') == 'gtsam':
+            return []
+        return [Node(
+            package='mfe_path_planning',
+            executable='boundary_extractor',
+            name='boundary_extractor',
+            output='screen',
+            condition=IfCondition(use_perception),
+        )]
+
+    boundary_extractor_node = OpaqueFunction(function=_make_boundary_extractor)
 
     # --------------------------------------------------------------------------
     # Path planning — Path planner
@@ -401,7 +464,7 @@ def generate_launch_description():
             name='path_planner_node',
             output='screen',
             parameters=params,
-            remappings=[('/ekf/output', pose_topic)],
+            remappings=[('/ekf/output', _pose_topic(context))],
         )]
 
     # --------------------------------------------------------------------------
@@ -411,7 +474,7 @@ def generate_launch_description():
     # for the tight 9.1m radius circles; other missions use the full 10 m/s.
     def _make_pure_pursuit(context):
         mission_str = context.launch_configurations.get('mission', 'autocross')
-        pt = context.launch_configurations.get('pose_topic', '/ekf/output')
+        pt = _pose_topic(context)
         # Vehicle constants come from vehicle.yaml; MAX_STEER_DEG overrides its max_steering_deg.
         params = {
             # The pose (SLAM/EKF) is the CG, 0.69 m ahead of the rear axle (cg_x 0.44 x wheelbase 1.56), but tracking
@@ -465,7 +528,7 @@ def generate_launch_description():
         num_laps = int(num_laps_str) if num_laps_str else (10 if mission_str == 'trackdrive' else 1)
         fx = _FINISH_X.get(mission_str, 100.0)
         ax = max(0.0, fx - 20.0)   # start LiDAR watch 20 m before finish gate
-        pt = context.launch_configurations.get('pose_topic', '/ekf/output')
+        pt = _pose_topic(context)
         # Closed-loop tracks use return-to-start lap counting.
         # Linear tracks keep x-position logic as a fallback only — num_laps ignored.
         # Closed loops: laps are signed crossings of the orange timing line (virtual line 6.79 m past the start
@@ -600,8 +663,7 @@ def generate_launch_description():
         actions=[
             lidar_perception_node,
             vision_node_action,         # skipped unless vision_model_path is set
-            pc2scan_launch,             # PointCloud2 → LaserScan for SLAM
-            slam_launch,
+            slam_action,                # slam:=toolbox
             xsens_mti_launch,           # Xsens MTi-670G GNSS/INS -> /imu, /gps
             ekf_node,
             boundary_extractor_node,
@@ -641,6 +703,14 @@ def generate_launch_description():
         num_laps_arg,
         orange_topic_arg,
         use_slam_arg,
+        slam_arg,
+        slam_lateral_vel_arg,
+        color_mode_arg,
+        min_obs_arg,
+        max_range_arg,
+        publish_hz_arg,
+        freeze_arg,
+        odom_topic_arg,
         use_ekf_arg,
         run_perception_arg,
         run_compute_arg,
@@ -653,6 +723,7 @@ def generate_launch_description():
         # node groups — each independently enable/disable-able
         perception_group,
         compute_group,
+        gtsam_action,               # slam:=gtsam
 
         # always-on safety supervisor
         supervisor_node,

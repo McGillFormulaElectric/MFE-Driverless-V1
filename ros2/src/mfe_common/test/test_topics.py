@@ -27,6 +27,7 @@ EXPECTED = {
     'ROS_CAN_MISSION_COMPLETED': '/ros_can/mission_completed',
     'SIM_XSENS_STATE_ODOM': '/sim/xsens/state_odom',
     'SKIDPAD_CONES': '/skidpad/cones',
+    'SLAM_CONE_MAP': '/planning/cones',
     'SLAM_ODOM': '/slam/odom',
     'VALIDATION_CENTERLINE': '/validation/centerline',
     'VALIDATION_CONES': '/validation/cones',
