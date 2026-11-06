@@ -191,9 +191,8 @@ under `use_ekf`, not lifecycle-managed)
 
 Alternative simulation interfaces (not the primary EUFS path):
 - `carmaker_node` / `carmaker_interface` — CarMaker co-simulation bridge
-- `fsds_node` (C++) — FS Driverless Sim interface
 
-**Launch files**: `launch/sim.launch.py`, `launch/fs_driverless_sim.launch.py`
+**Launch files**: `launch/sim.launch.py`
 
 ---
 
