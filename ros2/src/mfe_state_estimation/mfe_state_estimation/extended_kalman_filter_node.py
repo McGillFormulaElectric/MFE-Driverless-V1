@@ -3,19 +3,13 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
+from mfe_common.qos import SENSOR_QOS
 from mfe_state_estimation.filters.extended_kalman_filter import ExtendedKalmanFilter
 
 from sensor_msgs.msg import Imu, NavSatFix
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
-
-
-def SensorDataQoS():
-    return QoSProfile(
-        reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10
-    )
 
 
 R_EARTH = 6_371_000.0  # metres
@@ -202,14 +196,14 @@ class ExtendedKalmanFilterNode(Node):
         self._H_gyro = _H_gyro()
 
         # ---- subscriptions ----
-        self.create_subscription(Imu, self.imu_topic_name, self.imu_callback, SensorDataQoS())
+        self.create_subscription(Imu, self.imu_topic_name, self.imu_callback, SENSOR_QOS)
         self.create_subscription(
-            NavSatFix, self.gps_topic_name, self.gps_callback, SensorDataQoS()
+            NavSatFix, self.gps_topic_name, self.gps_callback, SENSOR_QOS
         )
         # Wheelspeed proxy: read twist.linear.x from ground truth or sim odom.
         # On hardware, remap wheelspeed_topic to a real encoder topic.
         self.create_subscription(
-            Odometry, self.wheelspeed_topic_name, self.wheelspeed_callback, SensorDataQoS()
+            Odometry, self.wheelspeed_topic_name, self.wheelspeed_callback, SENSOR_QOS
         )
 
         self.odom_pub_ = self.create_publisher(Odometry, self.output_topic_name.value, 10)
