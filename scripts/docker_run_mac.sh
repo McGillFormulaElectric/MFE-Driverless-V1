@@ -57,14 +57,14 @@ else
   echo "==> Headless mode (nogui) — no display needed"
 fi
 
-# Build image for amd64 via Rosetta if not already built
-# (ros-humble-gazebo-* has no prebuilt arm64 apt packages)
+# Build image for arm64 if not already built
 if ! docker image inspect mfe-driverless-sim &>/dev/null; then
-  echo "==> Building Docker image for amd64 via Rosetta..."
+  echo "==> Building Docker image for arm64 (this takes ~10 min on first run)..."
   docker build \
-    --platform linux/amd64 \
+    --platform linux/arm64 \
     -t mfe-driverless-sim \
-    "$MFE_DIR/Docker/fs-driverless-sim"
+    -f "$MFE_DIR/Docker/mac/Dockerfile" \
+    "$MFE_DIR/Docker/mac"
 fi
 
 echo "==> Starting mfe-driverless-sim container..."
@@ -74,7 +74,7 @@ TTY_FLAGS=""
 [ -t 0 ] && TTY_FLAGS="-it"
 
 docker run --rm $TTY_FLAGS \
-  --platform linux/amd64 \
+  --platform linux/arm64 \
   $DISPLAY_FLAGS \
   --volume "$DEVELOP_DIR":/root/Develop \
   --publish 8765:8765 \
