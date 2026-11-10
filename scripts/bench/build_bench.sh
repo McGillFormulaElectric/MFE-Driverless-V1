@@ -5,7 +5,7 @@
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO/ros2"
-source /opt/ros/humble/setup.bash
+set +u; source /opt/ros/humble/setup.bash; set -u   # ROS setup reads unset variables
 MAKEFLAGS=${MAKEFLAGS:--j3} colcon build --symlink-install \
     --build-base build_bench --install-base install_bench \
     --parallel-workers 2 --event-handlers console_direct- \
