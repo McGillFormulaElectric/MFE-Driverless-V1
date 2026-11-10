@@ -28,9 +28,9 @@ from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, GroupAction, IncludeLaunchDescription, LogInfo,
     OpaqueFunction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from ament_index_python.packages import (
     get_package_prefix, get_package_share_directory, PackageNotFoundError,
@@ -943,6 +943,8 @@ def generate_launch_description():
         executable='lap_validator_node',
         name='lap_validator',
         output='screen',
+        # Sim only: reads eufs_msgs/CarState ground truth, which the car does not have.
+        condition=UnlessCondition(PythonExpression(["'", LaunchConfiguration('platform'), "' == 'car'"])),
     )
 
     compute_group = GroupAction(
