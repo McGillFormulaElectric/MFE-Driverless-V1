@@ -27,6 +27,29 @@ if [ -f "$RUNS/latest/pids" ] && [ ! -f "$RUNS/latest/stopped" ]; then
     echo "a bench run is already up ($RUNS/latest); run scripts/bench/stop_bench.sh first"; exit 1
 fi
 flock -n "$LOCK" true || { echo "busy lock $LOCK held; another run is using this computer"; exit 1; }
+# LiDAR preflight: packets from LIDAR_IP must arrive on UDP 2368 before the driver binds the port.
+case ",$DRIVERS," in *,lidar,*)
+    lidar=$(timeout 4 python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('', 2368)); s.settimeout(0.5)
+n = other = 0; t = time.time()
+while time.time() - t < 2:
+    try:
+        d, a = s.recvfrom(2048)
+        if a[0] == '$LIDAR_IP': n += 1
+        else: other += 1
+    except socket.timeout: pass
+print(n, other)" 2>/dev/null)
+    read -r lidar_n lidar_other <<< "${lidar:-0 0}"
+    if [ "${lidar_n:-0}" -lt 1000 ]; then
+        echo "LiDAR preflight FAILED: ${lidar_n:-0} packets in 2 s from $LIDAR_IP on UDP 2368 (expected ~1500;" \
+             "${lidar_other:-0} from other addresses). Check power, cable, and the LiDAR IP (http://$LIDAR_IP/)."
+        exit 1
+    fi
+    echo "LiDAR preflight ok: $lidar_n packets in 2 s from $LIDAR_IP" ;;
+esac
 if [ -f "$ENGINE" ]; then
     VISION="vision_model_path:=$ENGINE"
 else
