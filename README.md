@@ -199,42 +199,18 @@ starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 
 Python dependencies are pinned in `requirements.txt`. Docker images are defined in `Docker/`.
 
-## Bench testing on Jetson 2 (live LiDAR + camera)
+## Bench testing (Jetson 2, live LiDAR + camera)
 
-Runs the full stack (LiDAR and YOLO perception, gtsam SLAM, planner, pure pursuit) on Jetson 2 with the VLP-16 and D435i attached. The car stays still: CAN is not started, so nothing actuates, and `bench_odom.py` stands in for the EKF with a stationary pose. Never run `bench_odom.py` on a moving car.
+Runs the full stack on Jetson 2 with the VLP-16 and D435i attached. The car stays still: no CAN, and `bench_odom.py` fakes a stationary pose (never use it on a moving car).
 
-**Prerequisites (once per Jetson)**
-- VLP-16 at `10.37.1.194`, sending UDP 2368 to `10.37.1.193` (see `docs/lidar-network-setup.md`).
-- UDP receive buffers raised, or point clouds get dropped:
-  ```bash
-  echo -e "net.core.rmem_max=33554432\nnet.core.rmem_default=33554432" | sudo tee /etc/sysctl.d/60-mfe-udp.conf
-  sudo sysctl --system
-  ```
-- YOLO TensorRT engine at `~/mfe_models/yolo/cone_detector_best_24a2d1ce.engine` (or pass `ENGINE=`).
-
-**Run**
+Once per Jetson, raise the UDP receive buffers or point clouds get dropped:
 ```bash
-ssh mfe@100.119.35.6
-cd ~/Develop/MFE-Driverless-V1
-git pull
-scripts/bench/build_bench.sh      # builds into ros2/build_bench and ros2/install_bench
-scripts/bench/start_bench.sh      # LiDAR preflight, drivers, stack, Foxglove bridge; logs in ~/mfe_bench_runs/latest
-scripts/bench/stop_bench.sh       # stops only the processes start_bench.sh started
+echo -e "net.core.rmem_max=33554432\nnet.core.rmem_default=33554432" | sudo tee /etc/sysctl.d/60-mfe-udp.conf && sudo sysctl --system
 ```
-Options go before `start_bench.sh`: `MISSION=skidpad` (autocross, trackdrive, acceleration, skidpad, peanut), `DRIVERS=lidar` (no camera), `FOXGLOVE=0`, `ENGINE=<path>`, `LIDAR_IP=<ip>`.
 
-**Watch**
-- Foxglove: connect to `ws://100.119.35.6:8765` and import `scripts/bench/foxglove_bench_layout.json`. In the 3D panel use display frame `map`: raw LiDAR points, LiDAR cones (`/perception/cones_uncolored`), the cone map, the track edges and the centreline (`/planning/centerline`).
-- Terminal: `source scripts/bench/bench_env.sh` (same DDS settings as the stack), then `ros2 topic hz /lidar/points_raw` (about 9.9 Hz) or `tail -f ~/mfe_bench_runs/latest/stack.log`.
-- Recording: `ros_record` (all topics) or `ros_record /lidar/points_raw /camera/image_raw`, from any terminal on either Jetson; Ctrl+C stops it; bags go to `~/mfe_bags/`. `ros_record` is a shell function in `~/.bashrc` on each Jetson.
-
-**Troubleshooting**
-| Message | Cause |
-|---|---|
-| `LiDAR preflight FAILED` | LiDAR off or unplugged, or not at 10.37.1.194 (check `http://10.37.1.194/`) |
-| `a bench run is already up` | run `scripts/bench/stop_bench.sh` first |
-| `busy lock ... held` | another run or CI job is using the Jetson |
-| `no ros2/install_bench` | run `scripts/bench/build_bench.sh` |
-| supervisor logs `LiDAR LOST` | UDP buffers not raised (`sysctl net.core.rmem_max` must be 33554432) |
-
-Known limits: the D435i IMU is not available yet (librealsense on the Jetson reports "No HID info provided"); the camera needs a USB 3 port for full-rate depth; `sensor_mounts.yaml` still holds sim values; the LiDAR cone detector's height band and cluster size are tuned for the sim.
+```bash
+scripts/bench/build_bench.sh
+scripts/bench/start_bench.sh   # options: MISSION=, DRIVERS=lidar, FOXGLOVE=0, ENGINE=, LIDAR_IP=
+scripts/bench/stop_bench.sh
+```
+Logs go to `~/mfe_bench_runs/latest`. Foxglove: `ws://<jetson-ip>:8765` with the layout `scripts/bench/foxglove_bench_layout.json`.
