@@ -9,6 +9,9 @@ Run standalone for bench testing:
   ros2 launch mfe_sensors velodyne.launch.py
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -49,6 +52,11 @@ def generate_launch_description():
             parameters=[{
                 'model': LaunchConfiguration('model'),
                 'frame_id': 'velodyne',
+                # Required: without it the node throws std::runtime_error at startup.
+                'calibration': os.path.join(get_package_share_directory('velodyne_pointcloud'),
+                                            'params', 'VLP16db.yaml'),
+                'min_range': 0.9,
+                'max_range': 130.0,
             }],
             remappings=[('velodyne_points', '/lidar/points_raw')],
         ),
