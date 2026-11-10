@@ -7,7 +7,8 @@
   Addresses (static, set on the switch-side ports of each machine):
     mfe-driverless-1 (Jetson 1, sensors attached)  192.168.10.1
     mfe-driverless-2 (Jetson 2, serves time)       192.168.10.2
-    Velodyne VLP-16                                192.168.10.201 (sends UDP 2368 to 192.168.10.1)
+    Velodyne VLP-16: NOT on this network. It is 10.37.1.194 on its own /26 link and sends
+      UDP 2368 to 10.37.1.193 (see docs/lidar-network-setup.md); not a DDS peer.
     Desktop (monitoring)                           192.168.10.50
 
   Unicast peers on the car network only, no multicast. Each Jetson discovers itself, so

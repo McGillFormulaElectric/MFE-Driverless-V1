@@ -25,8 +25,10 @@ def generate_launch_description():
             description='Velodyne model (VLP16 for the car).',
         ),
         DeclareLaunchArgument(
-            'device_ip', default_value='192.168.1.201',
-            description='Sensor IP address (default factory address).',
+            'device_ip', default_value='10.37.1.194',
+            description='Sensor IP address. The driver drops packets from any other address. '
+                        'The car VLP-16 is 10.37.1.194 and sends to 10.37.1.193 (Jetson 2 '
+                        'enP8p1s0); see docs/lidar-network-setup.md.',
         ),
         DeclareLaunchArgument(
             'port', default_value='2368',
