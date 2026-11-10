@@ -61,7 +61,11 @@
     "Image!colour": {
       "imageMode": { "imageTopic": "/camera/image_raw", "calibrationTopic": "/camera/color/camera_info" },
       "cameraState": {},
-      "topics": {}
+      "topics": {
+        "/planning/centerline": { "visible": true, "lineWidth": 0.1, "gradient": ["#00e676ff", "#00e676ff"] },
+        "/planning/path_horizon": { "visible": true, "lineWidth": 0.15, "gradient": ["#ff6d00ff", "#ff6d00ff"] },
+        "/perception/cones_markers": { "visible": true }
+      }
     },
     "Image!depth": {
       "imageMode": { "imageTopic": "/camera/depth/image_rect_raw", "colorMode": "colormap", "colorMap": "turbo", "minValue": 0, "maxValue": 10000 },

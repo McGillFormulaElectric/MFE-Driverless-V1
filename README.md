@@ -210,7 +210,7 @@ echo -e "net.core.rmem_max=33554432\nnet.core.rmem_default=33554432" | sudo tee 
 
 ```bash
 scripts/bench/build_bench.sh
-scripts/bench/start_bench.sh   # options: MISSION=, DRIVERS=lidar, FOXGLOVE=0, ENGINE=, LIDAR_IP=, STACK_ARGS= (e.g. "color_mode:=none" for colourless cones)
+scripts/bench/start_bench.sh   # options: MISSION=, DRIVERS=lidar, FOXGLOVE=0, ENGINE=, LIDAR_IP=, STACK_ARGS= (e.g. "color_mode:=none roi_x_min:=1.0 roi_x_max:=10.0 roi_half_width:=2.5": colourless cones in a box ahead)
 scripts/bench/stop_bench.sh
 ```
 Logs go to `~/mfe_bench_runs/latest`. Foxglove: `ws://<jetson-ip>:8765` with the layout `scripts/bench/foxglove_bench_layout.json`.

@@ -28,6 +28,9 @@ def _slam_nodes(context):
                       'max_range': ParameterValue(LC('max_range'), value_type=float),
                       'publish_hz': ParameterValue(LC('publish_hz'), value_type=float),
                       'freeze': ParameterValue(LC('freeze'), value_type=bool),
+                      'roi_x_min': ParameterValue(LC('roi_x_min'), value_type=float),
+                      'roi_x_max': ParameterValue(LC('roi_x_max'), value_type=float),
+                      'roi_half_width': ParameterValue(LC('roi_half_width'), value_type=float),
                   }])]
     if camera:
         nodes.append(Node(package='mfe_validation', executable='cone_colour_fusion_node', name='cone_colour_fusion_node',
@@ -45,6 +48,9 @@ def generate_launch_description():
         DeclareLaunchArgument('max_range', default_value='20.0'),
         DeclareLaunchArgument('publish_hz', default_value='5.0'),
         DeclareLaunchArgument('freeze', default_value='true'),
+        DeclareLaunchArgument('roi_x_min', default_value='0.0'),
+        DeclareLaunchArgument('roi_x_max', default_value='100.0'),
+        DeclareLaunchArgument('roi_half_width', default_value='0.0'),
         DeclareLaunchArgument('odom_topic', default_value='/sim/xsens/state_odom'),
         OpaqueFunction(function=_slam_nodes),
     ])

@@ -40,7 +40,7 @@ from mfe_common.topics import CAN_WHEEL_SPEED, SLAM_ODOM
 
 # Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
 GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
-              'odom_topic')
+              'odom_topic', 'roi_x_min', 'roi_x_max', 'roi_half_width')
 
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
@@ -617,6 +617,11 @@ def generate_launch_description():
             context.launch_configurations.get('slam', 'toolbox') == 'toolbox'
             and context.launch_configurations.get('use_slam', 'true').lower() == 'true'
         )
+        if 'camera' in sensors:
+            # Joins the RealSense TF tree (camera_link -> colour/depth optical frames) to the car tree.
+            actions.append(_static_tf_node('camera_base', 'camera_link', {
+                'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
+            }))
         if not slam_toolbox_publishes_map_odom:
             actions.append(_static_tf_node('map', 'odom', {
                 'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
@@ -983,6 +988,13 @@ def generate_launch_description():
         max_range_arg,
         publish_hz_arg,
         freeze_arg,
+        DeclareLaunchArgument('roi_x_min', default_value='0.0',
+                              description='slam:=gtsam: keep LiDAR cones with x >= this, m (LiDAR frame). '
+                                          'Used only when roi_half_width > 0.'),
+        DeclareLaunchArgument('roi_x_max', default_value='100.0',
+                              description='slam:=gtsam: keep LiDAR cones with x <= this, m.'),
+        DeclareLaunchArgument('roi_half_width', default_value='0.0',
+                              description='slam:=gtsam: keep LiDAR cones with |y| <= this, m. 0: no region box.'),
         odom_topic_arg,
         use_ekf_arg,
         run_perception_arg,
