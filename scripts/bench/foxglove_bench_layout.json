@@ -1,0 +1,140 @@
+{
+  "configById": {
+    "3D!bench": {
+      "cameraState": {
+        "distance": 25,
+        "perspective": true,
+        "phi": 55,
+        "target": [0, 0, 0],
+        "targetOffset": [8, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 180,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 500
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_footprint",
+      "scene": { "enableStats": false, "transforms": { "showLabel": true } },
+      "transforms": {},
+      "layers": {
+        "grid": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid 1 m",
+          "instanceId": "grid",
+          "layerId": "foxglove.Grid",
+          "size": 60,
+          "divisions": 60,
+          "lineWidth": 1,
+          "color": "#248eff40",
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "order": 1
+        }
+      },
+      "topics": {
+        "/lidar/points_raw": {
+          "visible": true,
+          "pointSize": 2,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/perception/cones_uncolored": {
+          "visible": true,
+          "pointSize": 10,
+          "colorMode": "flat",
+          "flatColor": "#ff00ffff"
+        },
+        "/perception/cones_markers": { "visible": true },
+        "/planning/cones": { "visible": true, "pointSize": 12 },
+        "/planning/track_left": { "visible": true, "lineWidth": 0.08, "gradient": ["#2b6cffff", "#2b6cffff"] },
+        "/planning/track_right": { "visible": true, "lineWidth": 0.08, "gradient": ["#ffd400ff", "#ffd400ff"] },
+        "/planning/centerline": { "visible": true, "lineWidth": 0.1, "gradient": ["#00e676ff", "#00e676ff"] },
+        "/planning/path_horizon": { "visible": true, "lineWidth": 0.15, "gradient": ["#ff6d00ff", "#ff6d00ff"] },
+        "/slam/odom": { "visible": true }
+      },
+      "publish": { "type": "point", "poseTopic": "/move_base_simple/goal", "pointTopic": "/clicked_point", "poseEstimateTopic": "/initialpose" },
+      "imageMode": {}
+    },
+    "Image!colour": {
+      "imageMode": { "imageTopic": "/camera/image_raw", "calibrationTopic": "/camera/color/camera_info" },
+      "cameraState": {},
+      "topics": {}
+    },
+    "Image!depth": {
+      "imageMode": { "imageTopic": "/camera/depth/image_rect_raw", "colorMode": "colormap", "colorMap": "turbo", "minValue": 0, "maxValue": 10000 },
+      "cameraState": {},
+      "topics": {}
+    },
+    "RawMessages!yolo": {
+      "topicPath": "/image/cones",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "expansion": "all"
+    },
+    "Plot!control": {
+      "paths": [
+        { "value": "/control/command.steering", "enabled": true, "timestampMethod": "receiveTime", "label": "steering (-1..1)" },
+        { "value": "/control/command.throttle", "enabled": true, "timestampMethod": "receiveTime", "label": "throttle (0..1)" },
+        { "value": "/control/command.brake", "enabled": true, "timestampMethod": "receiveTime", "label": "brake (0..1)" }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "sidebarDimension": 240
+    },
+    "TopicGraph!rates": {},
+    "Plot!imu": {
+      "paths": [
+        { "value": "/camera/imu.linear_acceleration.x", "enabled": true, "timestampMethod": "receiveTime", "label": "cam accel x" },
+        { "value": "/camera/imu.linear_acceleration.z", "enabled": true, "timestampMethod": "receiveTime", "label": "cam accel z" },
+        { "value": "/camera/imu.angular_velocity.z", "enabled": true, "timestampMethod": "receiveTime", "label": "cam gyro z" }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 10,
+      "sidebarDimension": 240
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "first": "3D!bench",
+    "second": {
+      "first": {
+        "first": "Image!colour",
+        "second": "Image!depth",
+        "direction": "column",
+        "splitPercentage": 50
+      },
+      "second": {
+        "first": "Plot!control",
+        "second": {
+          "first": "RawMessages!yolo",
+          "second": "Plot!imu",
+          "direction": "row",
+          "splitPercentage": 50
+        },
+        "direction": "column",
+        "splitPercentage": 45
+      },
+      "direction": "column",
+      "splitPercentage": 55
+    },
+    "direction": "row",
+    "splitPercentage": 60
+  }
+}
