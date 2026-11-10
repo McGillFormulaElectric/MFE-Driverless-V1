@@ -34,7 +34,7 @@ def _include_bringup(context):
         'platform': 'car',
         'part': part,
         'run_perception': 'true',
-        'run_compute': 'true' if part == 'estimation' else 'false',
+        'run_compute': 'true' if part in ('all', 'estimation') else 'false',
         'slam': LaunchConfiguration('slam').perform(context),
         'mission': LaunchConfiguration('mission').perform(context),
         'sensors': LaunchConfiguration('sensors').perform(context),
