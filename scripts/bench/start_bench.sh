@@ -11,6 +11,7 @@
 #   LIDAR_IP=10.37.1.194     VLP-16 address (the driver drops packets from other addresses)
 #   ENGINE=<.engine|.pt>     YOLO weights; missing file: YOLO is skipped with a warning
 #   FOXGLOVE=1               0: no Foxglove bridge
+#   STACK_ARGS="..."         extra bringup launch args, e.g. "color_mode:=none max_range:=8.0" (colourless)
 # Build first: scripts/bench/build_bench.sh
 set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,6 +22,7 @@ DRIVERS=${DRIVERS-lidar,camera}
 LIDAR_IP=${LIDAR_IP:-10.37.1.194}
 ENGINE=${ENGINE:-$HOME/mfe_models/yolo/cone_detector_best_24a2d1ce.engine}
 FOXGLOVE=${FOXGLOVE:-1}
+STACK_ARGS=${STACK_ARGS:-}
 
 [ -f "$REPO/ros2/install_bench/setup.bash" ] || { echo "no ros2/install_bench: run scripts/bench/build_bench.sh"; exit 1; }
 if [ -f "$RUNS/latest/pids" ] && [ ! -f "$RUNS/latest/stopped" ]; then
@@ -73,6 +75,6 @@ case ",$DRIVERS," in *,camera,*) start realsense "ros2 launch mfe_sensors realse
 start bench_odom "python3 $REPO/scripts/bench/bench_odom.py"
 start stack "flock -n $LOCK ros2 launch mfe_bringup bringup.launch.py platform:=car part:=all \
     run_perception:=true run_compute:=true slam:=gtsam sensors:=lidar,camera start_drivers:=false \
-    mission:=$MISSION endless:=true $VISION"
+    mission:=$MISSION endless:=true $VISION $STACK_ARGS"
 [ "$FOXGLOVE" = 1 ] && start foxglove "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
-echo "run dir: $RUN   (commit $(cut -c1-7 "$RUN/commit.txt"), mission $MISSION, drivers '${DRIVERS}', ${VISION:-no YOLO})"
+echo "run dir: $RUN   (commit $(cut -c1-7 "$RUN/commit.txt"), mission $MISSION, drivers '${DRIVERS}', ${VISION:-no YOLO}${STACK_ARGS:+, $STACK_ARGS})"
