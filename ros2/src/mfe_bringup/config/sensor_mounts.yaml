@@ -16,7 +16,7 @@ frames:
   velodyne:
     x: 0.0
     y: 0.0
-    z: 0.3
+    z: 0.508   # measured on the car, 20 in (2026-11-10)
     roll: 0.0
     pitch: 0.0
     yaw: 0.0

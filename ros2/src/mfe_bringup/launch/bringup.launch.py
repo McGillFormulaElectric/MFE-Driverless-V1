@@ -491,7 +491,9 @@ def generate_launch_description():
             name='lidar_perception_node',
             output='screen',
             parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
-                                     'lidar_perception_node_params.yaml')],
+                                     'lidar_perception_node_params.yaml')]
+            + ([context.launch_configurations['lidar_params_file']]
+               if context.launch_configurations.get('lidar_params_file') else []),
         )]
 
     lidar_perception_node = OpaqueFunction(function=_make_lidar_perception)
@@ -980,6 +982,9 @@ def generate_launch_description():
         endless_arg,
         num_laps_arg,
         orange_topic_arg,
+        DeclareLaunchArgument('lidar_params_file', default_value='',
+                              description='Extra lidar_perception_node params file layered over the default '
+                                          '(e.g. scripts/bench/lidar_bench_params.yaml for the real mount height).'),
         use_slam_arg,
         slam_arg,
         slam_lateral_vel_arg,

@@ -75,6 +75,6 @@ case ",$DRIVERS," in *,camera,*) start realsense "ros2 launch mfe_sensors realse
 start bench_odom "python3 $REPO/scripts/bench/bench_odom.py"
 start stack "flock -n $LOCK ros2 launch mfe_bringup bringup.launch.py platform:=car part:=all \
     run_perception:=true run_compute:=true slam:=gtsam sensors:=lidar,camera start_drivers:=false \
-    mission:=$MISSION endless:=true $VISION $STACK_ARGS"
+    mission:=$MISSION endless:=true lidar_params_file:=$REPO/scripts/bench/lidar_bench_params.yaml $VISION $STACK_ARGS"
 [ "$FOXGLOVE" = 1 ] && start foxglove "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
 echo "run dir: $RUN   (commit $(cut -c1-7 "$RUN/commit.txt"), mission $MISSION, drivers '${DRIVERS}', ${VISION:-no YOLO}${STACK_ARGS:+, $STACK_ARGS})"
