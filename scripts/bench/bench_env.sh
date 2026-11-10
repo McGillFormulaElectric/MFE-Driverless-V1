@@ -1,5 +1,5 @@
-# Shared ROS environment for the bench scripts and ros_record. Source it, do not run it.
-# Every bench process and every recorder must use the same DDS settings, or they do not see
+# Shared ROS environment for the bench scripts. Source it, do not run it.
+# Every bench process (and ros_record in ~/.bashrc on the Jetsons) must use the same DDS settings, or they do not see
 # each other's topics.
 BENCH_REPO=${BENCH_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 source /opt/ros/humble/setup.bash
