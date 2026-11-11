@@ -1,0 +1,5 @@
+# Bench overrides for path_planner_node. Bench cones sit < 1 m apart; the default 0.5 m cone map grid merges and
+# shifts them enough to break the boundary tracer's gates (diagonal bag: 0.5 m -> no path 2.14 m, 0.1 m -> 4.58 m).
+path_planner_node:
+  ros__parameters:
+    cone_grid: 0.1
