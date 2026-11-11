@@ -58,6 +58,7 @@ class PlannerParams:
     cone_expiry: bool = False
     expiry_min_obs: int = 3                  # cells seen at least this often never expire
     expiry_cycles: int = 30                  # unseen for this many merge cycles (inside sensing range)
+    cone_grid: float = 0.5                   # cone map cell size (m); cones are snapped to it. Bench layouts with cones < 1 m apart need ~0.1
     # Lap-return map reset (local missions, boundary tracer input). On the return to the start after a lap, the cone
     # cells mapped within lap_return_radius_m of the START POSE are excluded from the tracer's map for the rest of the
     # run. Centred on the start pose, not the car: the trigger fires ~start_r away.

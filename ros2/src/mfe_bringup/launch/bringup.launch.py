@@ -28,9 +28,9 @@ from launch.actions import (
     DeclareLaunchArgument, ExecuteProcess, GroupAction, IncludeLaunchDescription, LogInfo,
     OpaqueFunction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from ament_index_python.packages import (
     get_package_prefix, get_package_share_directory, PackageNotFoundError,
@@ -40,7 +40,7 @@ from mfe_common.topics import CAN_WHEEL_SPEED, SLAM_ODOM
 
 # Arguments passed from bringup to mfe_validation/launch/slam.launch.py for slam:=gtsam.
 GTSAM_ARGS = ('slam_lateral_vel', 'color_mode', 'min_obs', 'max_range', 'publish_hz', 'freeze',
-              'odom_topic')
+              'odom_topic', 'roi_x_min', 'roi_x_max', 'roi_half_width')
 
 # finish_x per mission: position (from odometry) at which finish_detector triggers stop
 _FINISH_X = {
@@ -491,7 +491,9 @@ def generate_launch_description():
             name='lidar_perception_node',
             output='screen',
             parameters=[os.path.join(get_package_share_directory('lidar_cone_detector'), 'config',
-                                     'lidar_perception_node_params.yaml')],
+                                     'lidar_perception_node_params.yaml')]
+            + ([context.launch_configurations['lidar_params_file']]
+               if context.launch_configurations.get('lidar_params_file') else []),
         )]
 
     lidar_perception_node = OpaqueFunction(function=_make_lidar_perception)
@@ -617,6 +619,11 @@ def generate_launch_description():
             context.launch_configurations.get('slam', 'toolbox') == 'toolbox'
             and context.launch_configurations.get('use_slam', 'true').lower() == 'true'
         )
+        if 'camera' in sensors:
+            # Joins the RealSense TF tree (camera_link -> colour/depth optical frames) to the car tree.
+            actions.append(_static_tf_node('camera_base', 'camera_link', {
+                'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
+            }))
         if not slam_toolbox_publishes_map_odom:
             actions.append(_static_tf_node('map', 'odom', {
                 'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
@@ -943,6 +950,8 @@ def generate_launch_description():
         executable='lap_validator_node',
         name='lap_validator',
         output='screen',
+        # Sim only: reads eufs_msgs/CarState ground truth, which the car does not have.
+        condition=UnlessCondition(PythonExpression(["'", LaunchConfiguration('platform'), "' == 'car'"])),
     )
 
     compute_group = GroupAction(
@@ -973,6 +982,9 @@ def generate_launch_description():
         endless_arg,
         num_laps_arg,
         orange_topic_arg,
+        DeclareLaunchArgument('lidar_params_file', default_value='',
+                              description='Extra lidar_perception_node params file layered over the default '
+                                          '(e.g. scripts/bench/lidar_bench_params.yaml for the real mount height).'),
         use_slam_arg,
         slam_arg,
         slam_lateral_vel_arg,
@@ -981,6 +993,13 @@ def generate_launch_description():
         max_range_arg,
         publish_hz_arg,
         freeze_arg,
+        DeclareLaunchArgument('roi_x_min', default_value='0.0',
+                              description='slam:=gtsam: keep LiDAR cones with x >= this, m (LiDAR frame). '
+                                          'Used only when roi_half_width > 0.'),
+        DeclareLaunchArgument('roi_x_max', default_value='100.0',
+                              description='slam:=gtsam: keep LiDAR cones with x <= this, m.'),
+        DeclareLaunchArgument('roi_half_width', default_value='0.0',
+                              description='slam:=gtsam: keep LiDAR cones with |y| <= this, m. 0: no region box.'),
         odom_topic_arg,
         use_ekf_arg,
         run_perception_arg,

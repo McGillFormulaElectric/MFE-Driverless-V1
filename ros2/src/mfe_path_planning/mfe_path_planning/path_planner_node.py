@@ -133,7 +133,7 @@ class PathPlannerNode(Node):
         self._cones = ConeMap(FSD_TYPES, _MFE_TO_FSD, skip_colours=(Cone.ORANGE_BIG, Cone.ORANGE_SMALL),
                               recolour=_RECOLOUR, colour_vote=cfg.colour_vote, vote_min=cfg.vote_min,
                               vote_margin=cfg.vote_margin, cone_expiry=cfg.cone_expiry,
-                              expiry_min_obs=cfg.expiry_min_obs, expiry_cycles=cfg.expiry_cycles)
+                              expiry_min_obs=cfg.expiry_min_obs, expiry_cycles=cfg.expiry_cycles, grid=cfg.cone_grid)
         self._cone_hygiene_log = cfg.colour_vote or cfg.cone_expiry
         if _LIB_AVAILABLE and (int(ConeTypes.UNKNOWN), int(ConeTypes.RIGHT), int(ConeTypes.LEFT), len(ConeTypes)) \
                 != (FSD_TYPES.unknown, FSD_TYPES.right, FSD_TYPES.left, FSD_TYPES.n):

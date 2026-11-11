@@ -47,6 +47,10 @@ public:
         // VLP-16 (sensor ~1.0 m above track); set from the real mount height on hardware.
         this->declare_parameter("cone_z_min", -1.10f);
         this->declare_parameter("cone_z_max", -0.50f);
+        // Cone shape limits (FSAE small 228x228x325 mm, large 285x285x505 mm): clusters wider than
+        // max_cone_footprint or flatter than min_cone_height are not cones (walls, frames, single rings).
+        this->declare_parameter("max_cone_footprint", 0.4);
+        this->declare_parameter("min_cone_height", 0.0);
         // Ignored when built without CUDA.
         this->declare_parameter("use_gpu", true);
         this->declare_parameter("odom_topic", "/ekf/output");
@@ -64,6 +68,8 @@ public:
         distortion_corrector_ = std::make_shared<perception::MotionDistortionCorrector>();
         cone_z_min_ = this->get_parameter("cone_z_min").as_double();
         cone_z_max_ = this->get_parameter("cone_z_max").as_double();
+        max_cone_footprint_ = this->get_parameter("max_cone_footprint").as_double();
+        min_cone_height_ = this->get_parameter("min_cone_height").as_double();
         use_gpu_ = false;
 #if USE_GPU_PIPELINE
         if (this->get_parameter("use_gpu").as_bool()) {
@@ -256,7 +262,8 @@ private:
                     mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
                     mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                 }
-                if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
+                if ((mx_x - mn_x) > max_cone_footprint_ || (mx_y - mn_y) > max_cone_footprint_ || (mx_z - mn_z) > 0.6f
+                    || (mx_z - mn_z) < min_cone_height_)
                     continue;
 
                 Eigen::Vector4f c;
@@ -346,7 +353,8 @@ private:
                         mn_y = std::min(mn_y, p.y); mx_y = std::max(mx_y, p.y);
                         mn_z = std::min(mn_z, p.z); mx_z = std::max(mx_z, p.z);
                     }
-                    if ((mx_x - mn_x) > 0.4f || (mx_y - mn_y) > 0.4f || (mx_z - mn_z) > 0.6f)
+                    if ((mx_x - mn_x) > max_cone_footprint_ || (mx_y - mn_y) > max_cone_footprint_ || (mx_z - mn_z) > 0.6f
+                        || (mx_z - mn_z) < min_cone_height_)
                         continue;
 
                     Eigen::Vector4f centroid_vec;
@@ -384,7 +392,7 @@ private:
     std::unique_ptr<GpuConePipeline> gpu_pipe_;
 #endif
     double leaf_size_, ground_threshold_, cluster_tolerance_, min_intensity_;
-    double cone_z_min_, cone_z_max_;
+    double cone_z_min_, cone_z_max_, max_cone_footprint_, min_cone_height_;
     int min_cluster_size_, max_cluster_size_;
     std::string lidar_frame_id_;
 

@@ -198,3 +198,19 @@ starts the Jetsons over SSH. See [docs/fleet.md](docs/fleet.md) and
 | `ros2/src/mfe_sensors/config/` | Sensor configs: `xsens_mti.yaml` |
 
 Python dependencies are pinned in `requirements.txt`. Docker images are defined in `Docker/`.
+
+## Bench testing (Jetson 2, live LiDAR + camera)
+
+Runs the full stack on Jetson 2 with the VLP-16 and D435i attached. The car stays still: no CAN, and `bench_odom.py` fakes a stationary pose (never use it on a moving car).
+
+Once per Jetson, raise the UDP receive buffers or point clouds get dropped:
+```bash
+echo -e "net.core.rmem_max=33554432\nnet.core.rmem_default=33554432" | sudo tee /etc/sysctl.d/60-mfe-udp.conf && sudo sysctl --system
+```
+
+```bash
+scripts/bench/build_bench.sh
+scripts/bench/start_bench.sh   # options: MISSION=, DRIVERS=lidar, FOXGLOVE=0, ENGINE=, LIDAR_IP=, STACK_ARGS= (e.g. "color_mode:=none roi_x_min:=1.0 roi_x_max:=10.0 roi_half_width:=2.5": colourless cones in a box ahead)
+scripts/bench/stop_bench.sh
+```
+Logs go to `~/mfe_bench_runs/latest`. Foxglove: `ws://<jetson-ip>:8765` with the layout `scripts/bench/foxglove_bench_layout.json`.

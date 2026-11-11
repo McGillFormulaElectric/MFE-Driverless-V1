@@ -30,7 +30,8 @@ from mfe_common.topics import (
     VALIDATION_CONES,
 )
 
-PARAMS = dict(track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
+PARAMS = dict(roi_x_min=0.0, roi_x_max=100.0, roi_half_width=0.0,
+              track_csv='', keyframe_m=1.5, gate=0.5, rng_sigma=0.15, brg_sigma=0.03, max_range=15.0,
               min_obs_publish=3, publish_radius=25.0, publish_hz=2.0, color_radius=2.0,
               cones_topic=VALIDATION_CONES, color_mode='gt', keyframe_dt=0.5, freeze=True, dup_radius=0.6,
               use_lateral_vel=False, backend='gtsam', odom_topic=SIM_XSENS_STATE_ODOM,
@@ -45,6 +46,8 @@ class SlamNode(Node):
             self.declare_parameter(k, v)
         p = lambda k: self.get_parameter(k).value
         self.keyframe_m, self.gate, self.max_range = p('keyframe_m'), p('gate'), p('max_range')
+        # Bench region box in the LiDAR frame (x forward, y left): off while roi_half_width is 0.
+        self.roi_x_min, self.roi_x_max, self.roi_half_width = p('roi_x_min'), p('roi_x_max'), p('roi_half_width')
         self.color_mode, self.keyframe_dt = p('color_mode'), p('keyframe_dt')
         self.p_freeze, self.p_dup = p('freeze'), p('dup_radius')
         # Integrating lateral velocity too: forward-speed-only odometry drifts sideways through corners (the car slides)
@@ -143,6 +146,9 @@ class SlamNode(Node):
         for p in pts:
             rr = float(np.hypot(*p))
             if rr > self.max_range or rr < 1.0:
+                continue
+            if self.roi_half_width > 0 and not (self.roi_x_min <= p[0] <= self.roi_x_max
+                                                and abs(p[1]) <= self.roi_half_width):
                 continue
             bearing = math.atan2(p[1], p[0])
             wxy = np.array(transform_from(est, (float(p[0]), float(p[1]))))

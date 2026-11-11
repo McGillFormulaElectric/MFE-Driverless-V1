@@ -74,7 +74,7 @@ class ConeMap:
     """
 
     def __init__(self, types, colour_to_type, skip_colours=(), recolour=False, colour_vote=False,
-                 vote_min=3, vote_margin=2, cone_expiry=False, expiry_min_obs=3, expiry_cycles=30):
+                 vote_min=3, vote_margin=2, cone_expiry=False, expiry_min_obs=3, expiry_cycles=30, grid=GRID):
         self.types = types
         self._colour_to_type = colour_to_type
         self._skip = tuple(skip_colours)
@@ -85,6 +85,7 @@ class ConeMap:
         self._cone_expiry = cone_expiry
         self._expiry_min_obs = expiry_min_obs
         self._expiry_cycles = expiry_cycles
+        self._grid = float(grid)
         self._cells: dict = {}          # (x, y) -> type code
         self._votes: dict = {}          # colour_vote: (x, y) -> [left, right, unknown] observation counts
         self._obs: dict = {}            # cone_expiry: (x, y) -> [cycles observed, last cycle seen]
@@ -123,8 +124,8 @@ class ConeMap:
             # one non-finite cone (bad depth pixel upstream) must not kill the planner: round(NaN) raises
             if not (math.isfinite(x) and math.isfinite(y)):
                 continue
-            rx = round(x / GRID) * GRID
-            ry = round(y / GRID) * GRID
+            rx = round(x / self._grid) * self._grid
+            ry = round(y / self._grid) * self._grid
             key = (rx, ry)
             new_type = self._colour_to_type.get(color, self.types.unknown)
             if self._colour_vote:

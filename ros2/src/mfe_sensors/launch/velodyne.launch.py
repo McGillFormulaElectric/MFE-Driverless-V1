@@ -9,6 +9,9 @@ Run standalone for bench testing:
   ros2 launch mfe_sensors velodyne.launch.py
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -22,8 +25,10 @@ def generate_launch_description():
             description='Velodyne model (VLP16 for the car).',
         ),
         DeclareLaunchArgument(
-            'device_ip', default_value='192.168.1.201',
-            description='Sensor IP address (default factory address).',
+            'device_ip', default_value='10.37.1.194',
+            description='Sensor IP address. The driver drops packets from any other address. '
+                        'The car VLP-16 is 10.37.1.194 and sends to 10.37.1.193 (Jetson 2 '
+                        'enP8p1s0); see docs/lidar-network-setup.md.',
         ),
         DeclareLaunchArgument(
             'port', default_value='2368',
@@ -49,6 +54,11 @@ def generate_launch_description():
             parameters=[{
                 'model': LaunchConfiguration('model'),
                 'frame_id': 'velodyne',
+                # Required: without it the node throws std::runtime_error at startup.
+                'calibration': os.path.join(get_package_share_directory('velodyne_pointcloud'),
+                                            'params', 'VLP16db.yaml'),
+                'min_range': 0.9,
+                'max_range': 130.0,
             }],
             remappings=[('velodyne_points', '/lidar/points_raw')],
         ),
