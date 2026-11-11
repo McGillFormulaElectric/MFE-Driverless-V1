@@ -5,3 +5,6 @@ lidar_perception_node:
     cone_z_min: -0.46      # floor at about -0.51 m in the LiDAR frame; keep from ~5 cm above it
     cone_z_max: -0.05      # up to the top of a large cone (0.505 m)
     max_cluster_size: 400  # near cones return far more points than in the sim
+    max_cone_footprint: 0.25  # bench cones measured 0.11-0.15 m; glass wall and frames up to 0.57 m
+    min_cone_height: 0.08     # bench cones 0.11-0.26 m tall; far walls show as one ring (~0 m)
+    min_cluster_size: 4       # after the 5 cm voxel grid; drops single-point noise
