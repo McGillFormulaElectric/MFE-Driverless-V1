@@ -146,8 +146,9 @@ tmux split-window -v -t mfe:0.1
 tmux split-window -v -t mfe:0.3
 
 # x/y/yaw put eufs_launcher at this track's start pose.
+# commandMode:=acceleration matches mfe_eufs_sim bridge_node (which sets drive.acceleration, not drive.speed).
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=acceleration track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW" Enter
 
 echo "==> Waiting 25 s for Gazebo to initialize..."
 sleep 25
