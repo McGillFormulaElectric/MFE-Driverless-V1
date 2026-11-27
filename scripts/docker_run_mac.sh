@@ -57,9 +57,9 @@ else
   echo "==> Headless mode (nogui) — no display needed"
 fi
 
-# Build image for arm64 if not already built
-if ! docker image inspect mfe-driverless-sim &>/dev/null; then
-  echo "==> Building Docker image for arm64 (this takes ~10 min on first run)..."
+# Build image for arm64 if not already built for arm64
+if [ "$(docker image inspect -f '{{.Architecture}}' mfe-driverless-sim 2>/dev/null)" != "arm64" ]; then
+  echo "==> Building Docker image for arm64 (includes Gazebo 11 source build on first run)..."
   docker build \
     --platform linux/arm64 \
     -t mfe-driverless-sim \

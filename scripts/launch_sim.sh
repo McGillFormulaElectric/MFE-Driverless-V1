@@ -15,6 +15,7 @@ MFE_WS=${MFE_WS:-$HOME/Develop/MFE-Driverless-V1/ros2}
 LOG_DIR=~/mfe_logs
 
 EVENT=${1:-accel}
+GENERATE_RANDOM=false
 # BRIDGE_MAX_SPEED must match the bringup pure_pursuit max_speed for each track.
 case "$EVENT" in
     accel|acceleration)
@@ -35,6 +36,13 @@ case "$EVENT" in
         AMI_STATE=13
         BRIDGE_MAX_SPEED=6.0
         ;;
+    random|rand)
+        TRACK=rand
+        MISSION=autocross
+        AMI_STATE=13
+        BRIDGE_MAX_SPEED=8.0
+        GENERATE_RANDOM=true
+        ;;
     autocross|small_track|rectangle|garden_light|boa_constrictor|comp_2021|hairpins|its_a_mess)
         case "$EVENT" in
             autocross)    TRACK=small_track ;;
@@ -46,10 +54,21 @@ case "$EVENT" in
         BRIDGE_MAX_SPEED=8.0
         ;;
     *)
-        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins"
+        echo "Unknown event '$EVENT'. Use: accel, skidpad, peanut, autocross, small_track, rectangle, garden_light, boa_constrictor, comp_2021, hairpins, random, rand"
         exit 1
         ;;
 esac
+
+if [ "$GENERATE_RANDOM" = "true" ]; then
+    echo "==> [TrackGen] Generating fresh random track..."
+    export EUFS_MASTER=$EUFS_WS
+    source /opt/ros/humble/setup.bash
+    source "$EUFS_WS/install/setup.bash"
+    python3 "$EUFS_WS/eufs_tracks/scripts/generate_random_track.py" \
+        --name "$TRACK" \
+        --preset "${PRESET:-Small Straights}" \
+        ${SEED:+--seed "$SEED"} || exit 1
+fi
 
 # car_start row of the track CSV: tag,x,y,yaw,...
 CSV_FILE="$EUFS_WS/eufs_tracks/csv/${TRACK}.csv"
@@ -127,8 +146,9 @@ tmux split-window -v -t mfe:0.1
 tmux split-window -v -t mfe:0.3
 
 # x/y/yaw put eufs_launcher at this track's start pose.
+# commandMode:=acceleration matches mfe_eufs_sim bridge_node (which sets drive.acceleration, not drive.speed).
 tmux send-keys -t mfe:0.0 \
-    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=velocity track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW" Enter
+    "$SOURCE_ALL && ros2 launch eufs_launcher simulation.launch.py commandMode:=acceleration track:=$TRACK gazebo_gui:=$GAZEBO_GUI rviz:=false launch_group:=$LAUNCH_GROUP publish_gt_tf:=$PUBLISH_GT_TF x:=$SPAWN_X y:=$SPAWN_Y yaw:=$SPAWN_YAW" Enter
 
 echo "==> Waiting 25 s for Gazebo to initialize..."
 sleep 25
